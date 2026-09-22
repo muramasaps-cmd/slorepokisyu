@@ -1,0 +1,6 @@
+{
+  "name": "スロレポ店舗利益推移分析システム",
+  "description": "スロレポの店舗HTMLファイルを取り込んで、月別ホール利益・差枚推移・換金ギャップ・旧イベント日の収支傾向を自動集計・分析",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

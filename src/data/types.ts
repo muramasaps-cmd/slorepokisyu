@@ -30,6 +30,28 @@ export interface StoreProfile extends StoreInfo {
   updatedAt?: string;
 }
 
+export interface DailyModelRecord {
+  modelName: string;
+  avgDiffCoins: number;
+  totalDiffCoins: number;
+  avgGames: number;
+  winRate: number | null;
+  winMachines: number;
+  totalMachines: number;
+  isSmallCount?: boolean;
+}
+
+export interface DailyTailRecord {
+  tailName: string;
+  tailNum?: number | null; // 0..9, or null for ゾロ目
+  avgDiffCoins: number;
+  totalDiffCoins: number;
+  avgGames: number;
+  winRate: number | null;
+  winMachines: number;
+  totalMachines: number;
+}
+
 export interface DailyRecord {
   date: string; // YYYY-MM-DD
   yearMonth: string; // YYYY-MM
@@ -63,6 +85,54 @@ export interface DailyRecord {
   isOldEventDay: boolean;
   is7Day: boolean;
   notable: string;
+
+  // Daily detailed breakdown (機種別・末尾別)
+  models?: DailyModelRecord[];
+  tails?: DailyTailRecord[];
+}
+
+export interface AggregatedModelStat {
+  modelName: string;
+  daysCount: number;
+  totalMachineDays: number;
+  avgMachinesPerDay: number;
+  totalDiffCoins: number;
+  avgDiffCoinsPerMachine: number;
+  totalHallCoinProfit: number;
+  totalHallYenProfit: number;
+  avgGames: number;
+  winMachines: number;
+  totalMachines: number;
+  winRate: number;
+  isSmallCount: boolean;
+  eventDaysCount: number;
+  eventAvgDiffCoins: number;
+  normalDaysCount: number;
+  normalAvgDiffCoins: number;
+  dailyHistory: {
+    date: string;
+    avgDiffCoins: number;
+    totalDiffCoins: number;
+    avgGames: number;
+    winRate: number | null;
+    totalMachines: number;
+    isOldEventDay: boolean;
+  }[];
+}
+
+export interface AggregatedTailStat {
+  tailName: string;
+  tailNum: number | null;
+  daysCount: number;
+  totalMachineDays: number;
+  totalDiffCoins: number;
+  avgDiffCoins: number;
+  avgGames: number;
+  winMachines: number;
+  totalMachines: number;
+  winRate: number;
+  eventAvgDiff: number;
+  normalAvgDiff: number;
 }
 
 export interface MonthlyStat {

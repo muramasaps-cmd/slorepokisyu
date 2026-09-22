@@ -1,4 +1,11 @@
-import { DailyRecord, MonthlyStat, SpecialDayRules, StoreProfile } from '../data/types';
+import {
+  DailyRecord,
+  MonthlyStat,
+  SpecialDayRules,
+  StoreProfile,
+  AggregatedModelStat,
+  AggregatedTailStat,
+} from '../data/types';
 
 export const JAPANESE_DAYS = ['日', '月', '火', '水', '木', '金', '土'];
 
@@ -634,4 +641,255 @@ export function generateSyntheticStoreData(
   }
 
   return records;
+}
+
+/**
+ * Aggregates machine models across all daily records in the store.
+ */
+export function aggregateStoreModels(
+  records: DailyRecord[],
+  rateLend: number = 46,
+  rateExchange: number = 52
+): AggregatedModelStat[] {
+  const modelMap = new Map<
+    string,
+    {
+      daysCount: number;
+      totalMachineDays: number;
+      totalDiffCoins: number;
+      totalGamesWeighted: number;
+      winMachines: number;
+      isSmallCountVotes: number;
+      eventDaysCount: number;
+      eventTotalDiff: number;
+      eventMachineDays: number;
+      normalDaysCount: number;
+      normalTotalDiff: number;
+      normalMachineDays: number;
+      dailyHistory: {
+        date: string;
+        avgDiffCoins: number;
+        totalDiffCoins: number;
+        avgGames: number;
+        winRate: number | null;
+        totalMachines: number;
+        isOldEventDay: boolean;
+      }[];
+    }
+  >();
+
+  records.forEach((rec) => {
+    if (!rec.models || rec.models.length === 0) return;
+    rec.models.forEach((m) => {
+      const name = m.modelName.trim();
+      if (!name) return;
+
+      if (!modelMap.has(name)) {
+        modelMap.set(name, {
+          daysCount: 0,
+          totalMachineDays: 0,
+          totalDiffCoins: 0,
+          totalGamesWeighted: 0,
+          winMachines: 0,
+          isSmallCountVotes: 0,
+          eventDaysCount: 0,
+          eventTotalDiff: 0,
+          eventMachineDays: 0,
+          normalDaysCount: 0,
+          normalTotalDiff: 0,
+          normalMachineDays: 0,
+          dailyHistory: [],
+        });
+      }
+
+      const entry = modelMap.get(name)!;
+      entry.daysCount += 1;
+      const mCount = m.totalMachines > 0 ? m.totalMachines : 1;
+      entry.totalMachineDays += mCount;
+      entry.totalDiffCoins += m.totalDiffCoins;
+      entry.totalGamesWeighted += m.avgGames * mCount;
+      entry.winMachines += m.winMachines;
+      if (m.isSmallCount) entry.isSmallCountVotes += 1;
+
+      if (rec.isOldEventDay) {
+        entry.eventDaysCount += 1;
+        entry.eventTotalDiff += m.totalDiffCoins;
+        entry.eventMachineDays += mCount;
+      } else {
+        entry.normalDaysCount += 1;
+        entry.normalTotalDiff += m.totalDiffCoins;
+        entry.normalMachineDays += mCount;
+      }
+
+      entry.dailyHistory.push({
+        date: rec.date,
+        avgDiffCoins: m.avgDiffCoins,
+        totalDiffCoins: m.totalDiffCoins,
+        avgGames: m.avgGames,
+        winRate: m.winRate,
+        totalMachines: mCount,
+        isOldEventDay: rec.isOldEventDay,
+      });
+    });
+  });
+
+  const lendYen = 1000 / (rateLend || 46);
+  const exchYen = 1000 / (rateExchange || 52);
+
+  const stats: AggregatedModelStat[] = [];
+  for (const [name, val] of modelMap.entries()) {
+    const avgMachinesPerDay = Math.round((val.totalMachineDays / val.daysCount) * 10) / 10;
+    const avgDiffCoinsPerMachine = val.totalMachineDays > 0 ? Math.round(val.totalDiffCoins / val.totalMachineDays) : 0;
+    const totalHallCoinProfit = -val.totalDiffCoins;
+    const totalHallYenProfit = totalHallCoinProfit >= 0
+      ? Math.round(totalHallCoinProfit * lendYen)
+      : Math.round(totalHallCoinProfit * exchYen);
+    const avgGames = val.totalMachineDays > 0 ? Math.round(val.totalGamesWeighted / val.totalMachineDays) : 0;
+    const winRate = val.totalMachineDays > 0 ? Math.round((val.winMachines / val.totalMachineDays) * 1000) / 10 : 0;
+    const isSmallCount = (val.isSmallCountVotes / val.daysCount) >= 0.5 || avgMachinesPerDay <= 2;
+
+    const eventAvgDiffCoins = val.eventMachineDays > 0 ? Math.round(val.eventTotalDiff / val.eventMachineDays) : 0;
+    const normalAvgDiffCoins = val.normalMachineDays > 0 ? Math.round(val.normalTotalDiff / val.normalMachineDays) : 0;
+
+    stats.push({
+      modelName: name,
+      daysCount: val.daysCount,
+      totalMachineDays: val.totalMachineDays,
+      avgMachinesPerDay,
+      totalDiffCoins: val.totalDiffCoins,
+      avgDiffCoinsPerMachine,
+      totalHallCoinProfit,
+      totalHallYenProfit,
+      avgGames,
+      winMachines: val.winMachines,
+      totalMachines: val.totalMachineDays,
+      winRate,
+      isSmallCount,
+      eventDaysCount: val.eventDaysCount,
+      eventAvgDiffCoins,
+      normalDaysCount: val.normalDaysCount,
+      normalAvgDiffCoins,
+      dailyHistory: val.dailyHistory.sort((a, b) => b.date.localeCompare(a.date)),
+    });
+  }
+
+  // Sort default: totalDiffCoins descending
+  return stats.sort((a, b) => b.totalDiffCoins - a.totalDiffCoins);
+}
+
+/**
+ * Aggregates machine tail numbers (0..9 and ゾロ目) from daily records.
+ */
+export function aggregateStoreTails(records: DailyRecord[]): AggregatedTailStat[] {
+  const tailMap = new Map<
+    string,
+    {
+      tailName: string;
+      tailNum: number | null;
+      daysCount: number;
+      totalMachineDays: number;
+      totalDiffCoins: number;
+      totalGamesWeighted: number;
+      winMachines: number;
+      eventDiff: number;
+      eventMachines: number;
+      normalDiff: number;
+      normalMachines: number;
+    }
+  >();
+
+  // Pre-seed standard 0..9 and ゾロ目
+  for (let i = 0; i <= 9; i++) {
+    tailMap.set(`末尾${i}`, {
+      tailName: `末尾${i}`,
+      tailNum: i,
+      daysCount: 0,
+      totalMachineDays: 0,
+      totalDiffCoins: 0,
+      totalGamesWeighted: 0,
+      winMachines: 0,
+      eventDiff: 0,
+      eventMachines: 0,
+      normalDiff: 0,
+      normalMachines: 0,
+    });
+  }
+  tailMap.set('末尾ゾロ目', {
+    tailName: '末尾ゾロ目',
+    tailNum: null,
+    daysCount: 0,
+    totalMachineDays: 0,
+    totalDiffCoins: 0,
+    totalGamesWeighted: 0,
+    winMachines: 0,
+    eventDiff: 0,
+    eventMachines: 0,
+    normalDiff: 0,
+    normalMachines: 0,
+  });
+
+  records.forEach((rec) => {
+    if (!rec.tails || rec.tails.length === 0) return;
+    rec.tails.forEach((t) => {
+      const name = t.tailName.trim();
+      if (!tailMap.has(name)) {
+        tailMap.set(name, {
+          tailName: name,
+          tailNum: t.tailNum ?? null,
+          daysCount: 0,
+          totalMachineDays: 0,
+          totalDiffCoins: 0,
+          totalGamesWeighted: 0,
+          winMachines: 0,
+          eventDiff: 0,
+          eventMachines: 0,
+          normalDiff: 0,
+          normalMachines: 0,
+        });
+      }
+
+      const entry = tailMap.get(name)!;
+      entry.daysCount += 1;
+      const count = t.totalMachines > 0 ? t.totalMachines : 1;
+      entry.totalMachineDays += count;
+      entry.totalDiffCoins += t.totalDiffCoins;
+      entry.totalGamesWeighted += t.avgGames * count;
+      entry.winMachines += t.winMachines;
+
+      if (rec.isOldEventDay) {
+        entry.eventDiff += t.totalDiffCoins;
+        entry.eventMachines += count;
+      } else {
+        entry.normalDiff += t.totalDiffCoins;
+        entry.normalMachines += count;
+      }
+    });
+  });
+
+  const result: AggregatedTailStat[] = [];
+  for (const [, val] of tailMap.entries()) {
+    if (val.totalMachineDays === 0) continue;
+    const avgDiff = val.totalMachineDays > 0 ? Math.round(val.totalDiffCoins / val.totalMachineDays) : 0;
+    const avgGames = val.totalMachineDays > 0 ? Math.round(val.totalGamesWeighted / val.totalMachineDays) : 0;
+    const winRate = val.totalMachineDays > 0 ? Math.round((val.winMachines / val.totalMachineDays) * 1000) / 10 : 0;
+    const eventAvgDiff = val.eventMachines > 0 ? Math.round(val.eventDiff / val.eventMachines) : 0;
+    const normalAvgDiff = val.normalMachines > 0 ? Math.round(val.normalDiff / val.normalMachines) : 0;
+
+    result.push({
+      tailName: val.tailName,
+      tailNum: val.tailNum,
+      daysCount: val.daysCount,
+      totalMachineDays: val.totalMachineDays,
+      totalDiffCoins: val.totalDiffCoins,
+      avgDiffCoins: avgDiff,
+      avgGames,
+      winMachines: val.winMachines,
+      totalMachines: val.totalMachineDays,
+      winRate,
+      eventAvgDiff,
+      normalAvgDiff,
+    });
+  }
+
+  return result;
 }

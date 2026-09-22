@@ -4,6 +4,8 @@ import { Header, ProfitModelType, UnitMode } from './components/Header';
 import { KpiCards } from './components/KpiCards';
 import { ModelComparisonBanner } from './components/ModelComparisonBanner';
 import { ProfitChart } from './components/ProfitChart';
+import { ModelDeepAnalysis } from './components/ModelDeepAnalysis';
+import { HighPayoutAnalysis } from './components/HighPayoutAnalysis';
 import { TailNumberAnalysis } from './components/TailNumberAnalysis';
 import { DayOfWeekAnalysis } from './components/DayOfWeekAnalysis';
 import { SpecialDayPatterns } from './components/SpecialDayPatterns';
@@ -11,9 +13,17 @@ import { MonthlyTable } from './components/MonthlyTable';
 import { DailyModal } from './components/DailyModal';
 import { StoreManagerModal } from './components/StoreManagerModal';
 import { ConfirmModal } from './components/ConfirmModal';
-import { processStoreData } from './utils/dataEngine';
+import { ModelMultiSelectModal } from './components/ModelMultiSelectModal';
+import { processStoreData, aggregateStoreModels } from './utils/dataEngine';
 import { parseSlorepoHtml, parseRatesFromExchangeRate } from './utils/htmlParser';
 import { parseSpecialDayRulesFromText } from './utils/specialDayRules';
+import {
+  ModelPresetMode,
+  filterDailyRecordsByModels,
+  isSmartSlot,
+  isAType,
+  isJuggler,
+} from './utils/modelFilterUtils';
 import {
   getSavedStores,
   getActiveStoreId,
@@ -22,6 +32,9 @@ import {
   upsertStores,
   deleteStore,
   resetAllStores,
+  areStoresSame,
+  saveStoresToStorage,
+  mergeDailyRecords,
 } from './utils/storeStorage';
 import {
   parseMultipleSlorepoHtml,
@@ -41,6 +54,9 @@ import {
   AlertCircle,
   Check,
   Loader2,
+  Cpu,
+  Zap,
+  Target,
 } from 'lucide-react';
 
 export default function App() {
@@ -49,12 +65,49 @@ export default function App() {
   const [isStoreModalOpen, setIsStoreModalOpen] = useState<boolean>(false);
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState<boolean>(false);
 
+  // Guarantee that stores are always strictly deduplicated without duplicates appearing
+  const uniqueStores = useMemo(() => {
+    if (stores.length <= 1) return stores;
+    const deduped: StoreProfile[] = [];
+    for (const s of stores) {
+      const existingIdx = deduped.findIndex(
+        (d) => d.id === s.id || areStoresSame(d.name, s.name)
+      );
+      if (existingIdx === -1) {
+        deduped.push(s);
+      } else {
+        const existing = deduped[existingIdx];
+        const mergedDaily = mergeDailyRecords(existing.dailyRecords || [], s.dailyRecords || []);
+        deduped[existingIdx] = {
+          ...existing,
+          dailyRecords: mergedDaily,
+          totalMachinesApprox: Math.max(existing.totalMachinesApprox || 0, s.totalMachinesApprox || 0),
+          updatedAt: new Date().toISOString(),
+        };
+      }
+    }
+    return deduped;
+  }, [stores]);
+
+  // Synchronize state and persistent storage if any duplicate stores were detected
+  useEffect(() => {
+    if (uniqueStores.length !== stores.length) {
+      setStores(uniqueStores);
+      saveStoresToStorage(uniqueStores);
+      if (!uniqueStores.some((s) => s.id === activeStoreIdState)) {
+        const newActive = uniqueStores.length > 0 ? uniqueStores[0].id : '';
+        setActiveStoreIdState(newActive);
+        setActiveStoreId(newActive);
+      }
+    }
+  }, [uniqueStores, stores.length, activeStoreIdState]);
+
   // Active store object
   const currentStore = useMemo(() => {
-    if (stores.length === 0) return null;
-    const found = stores.find((s) => s.id === activeStoreIdState);
-    return found || stores[0];
-  }, [stores, activeStoreIdState]);
+    if (uniqueStores.length === 0) return null;
+    const found = uniqueStores.find((s) => s.id === activeStoreIdState);
+    return found || uniqueStores[0];
+  }, [uniqueStores, activeStoreIdState]);
 
   const [perspective, setPerspective] = useState<'hall' | 'player'>('hall');
   const [unit, setUnit] = useState<UnitMode>('yen');
@@ -74,6 +127,11 @@ export default function App() {
   const [cashRatio, setCashRatio] = useState<number>(currentStore?.cashRatio || 35);
   const [showSettings, setShowSettings] = useState<boolean>(false);
 
+  // Global Machine Filter States
+  const [modelPreset, setModelPreset] = useState<ModelPresetMode>('all');
+  const [selectedModelNames, setSelectedModelNames] = useState<string[]>([]);
+  const [isMultiSelectModalOpen, setIsMultiSelectModalOpen] = useState<boolean>(false);
+
   // Drag-and-drop state on empty screen
   const [emptyScreenDragging, setEmptyScreenDragging] = useState<boolean>(false);
   const [emptyIsLoading, setEmptyIsLoading] = useState<boolean>(false);
@@ -92,17 +150,102 @@ export default function App() {
       setRateExchange(parsedExch || currentStore.rateExchange || 52);
       setCashRatio(currentStore.cashRatio || 35);
       setSelectedYear('all');
+      // Reset machine filters when switching stores
+      setModelPreset('all');
+      setSelectedModelNames([]);
     }
   }, [currentStore?.id, currentStore?.exchangeRate]);
+
+  // All models in current store across raw daily records (used for counts and modal selection)
+  const allAvailableModels = useMemo(() => {
+    if (!currentStore || !currentStore.dailyRecords) return [];
+    return aggregateStoreModels(currentStore.dailyRecords, rateLend, rateExchange);
+  }, [currentStore?.dailyRecords, rateLend, rateExchange]);
+
+  const allAvailableModelNames = useMemo(
+    () => allAvailableModels.map((m) => m.modelName),
+    [allAvailableModels]
+  );
+
+  const modelPresetCounts = useMemo(() => {
+    const smartSlots = allAvailableModelNames.filter(isSmartSlot);
+    const aTypes = allAvailableModelNames.filter(isAType);
+    const jugglers = allAvailableModelNames.filter(isJuggler);
+    return {
+      all: allAvailableModelNames.length,
+      smart_slot: smartSlots.length,
+      a_type: aTypes.length,
+      juggler: jugglers.length,
+    };
+  }, [allAvailableModelNames]);
+
+  // Filter raw daily records by the selected machine criteria
+  // If filtered, all machine metrics (diff coins, machine counts, games, win rates)
+  // are calculated purely from the filtered machines!
+  const rawRecordsFilteredByModel = useMemo(() => {
+    if (!currentStore || !currentStore.dailyRecords) return [];
+    if (modelPreset === 'all' && selectedModelNames.length === 0) {
+      return currentStore.dailyRecords;
+    }
+    return filterDailyRecordsByModels(currentStore.dailyRecords, modelPreset, selectedModelNames);
+  }, [currentStore?.dailyRecords, modelPreset, selectedModelNames]);
 
   // Recalculate daily records and monthly stats with both Model A and Model B via dataEngine
   const processedData = useMemo(() => {
     if (!currentStore) {
       return { dailyRecords: [], monthlyStats: [] };
     }
-    const records = currentStore.dailyRecords || [];
-    return processStoreData(records, rateLend, rateExchange, cashRatio, currentStore.specialDayRules);
-  }, [currentStore?.dailyRecords, currentStore?.specialDayRules, rateLend, rateExchange, cashRatio]);
+    return processStoreData(rawRecordsFilteredByModel, rateLend, rateExchange, cashRatio, currentStore.specialDayRules);
+  }, [rawRecordsFilteredByModel, currentStore?.specialDayRules, rateLend, rateExchange, cashRatio]);
+
+  const handleSelectModelPreset = (preset: ModelPresetMode) => {
+    setModelPreset(preset);
+    if (preset === 'all') {
+      setSelectedModelNames([]);
+    } else if (preset === 'smart_slot') {
+      setSelectedModelNames(allAvailableModelNames.filter(isSmartSlot));
+    } else if (preset === 'a_type') {
+      setSelectedModelNames(allAvailableModelNames.filter(isAType));
+    } else if (preset === 'juggler') {
+      setSelectedModelNames(allAvailableModelNames.filter(isJuggler));
+    }
+  };
+
+  const handleToggleModelInSelection = (name: string) => {
+    if (modelPreset === 'all' && selectedModelNames.length === 0) {
+      setSelectedModelNames([name]);
+      setModelPreset('custom');
+      return;
+    }
+
+    if (selectedModelNames.includes(name)) {
+      const next = selectedModelNames.filter((n) => n !== name);
+      setSelectedModelNames(next);
+      if (next.length === 0) {
+        setModelPreset('all');
+      } else {
+        setModelPreset('custom');
+      }
+    } else {
+      const next = [...selectedModelNames, name];
+      setSelectedModelNames(next);
+      if (next.length === allAvailableModelNames.length) {
+        setModelPreset('all');
+        setSelectedModelNames([]);
+      } else {
+        setModelPreset('custom');
+      }
+    }
+  };
+
+  const activeFilterLabel = useMemo(() => {
+    if (modelPreset === 'all' && selectedModelNames.length === 0) return '全機種';
+    if (modelPreset === 'smart_slot') return 'スマスロ';
+    if (modelPreset === 'a_type') return 'Aタイプ';
+    if (modelPreset === 'juggler') return 'ジャグラーシリーズ';
+    if (selectedModelNames.length === 1) return selectedModelNames[0];
+    return `選択 ${selectedModelNames.length}機種`;
+  }, [modelPreset, selectedModelNames]);
 
   // Available years from active store's data
   const years = useMemo(() => {
@@ -452,10 +595,11 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6 flex-1">
-        {/* Top Controls Bar with Store Switcher & HTML Import button (Single-line 1-row layout) */}
-        <div className="flex items-center justify-between gap-2.5 bg-white px-3 py-2 rounded-xl border border-slate-200/80 shadow-2xs overflow-x-auto whitespace-nowrap">
-          {/* Store Switcher Quick Dropdown & Period */}
-          <div className="flex items-center gap-2.5 shrink-0">
+        {/* Top Controls Bar with Store Switcher & Machine Filters right beside it */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
+          {/* Store Switcher + Machine Filter Presets (Moved right beside store selector) */}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Store Switcher */}
             <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-300 px-2.5 py-1 rounded-lg shrink-0">
               <Building2 className="w-4 h-4 text-amber-500 shrink-0" />
               <span className="text-xs text-slate-500 font-medium whitespace-nowrap">分析店舗:</span>
@@ -472,6 +616,106 @@ export default function App() {
               </select>
             </div>
 
+            {/* 機種絞り込み (分析店舗の横) */}
+            <div className="flex items-center gap-1 bg-slate-50 border border-slate-300 p-0.5 rounded-lg shrink-0 flex-wrap">
+              <div className="flex items-center gap-1 px-1.5 text-xs text-slate-600 font-bold whitespace-nowrap">
+                <Cpu className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                <span>機種絞込:</span>
+              </div>
+
+              {/* 全機種 */}
+              <button
+                type="button"
+                onClick={() => handleSelectModelPreset('all')}
+                className={`px-2 py-0.5 rounded text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                  modelPreset === 'all' && selectedModelNames.length === 0
+                    ? 'bg-slate-900 text-white shadow-2xs'
+                    : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
+                }`}
+                title="全機種で集計"
+              >
+                全機種 ({modelPresetCounts.all})
+              </button>
+
+              {/* スマスロ */}
+              <button
+                type="button"
+                onClick={() => handleSelectModelPreset('smart_slot')}
+                className={`px-2 py-0.5 rounded text-xs font-bold transition-all cursor-pointer flex items-center gap-1 whitespace-nowrap ${
+                  modelPreset === 'smart_slot'
+                    ? 'bg-purple-600 text-white shadow-2xs'
+                    : 'bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200'
+                }`}
+                title="スマスロのみで全データを集計"
+              >
+                <Zap className="w-3 h-3 text-purple-400 shrink-0" />
+                スマスロ ({modelPresetCounts.smart_slot})
+              </button>
+
+              {/* Aタイプ */}
+              <button
+                type="button"
+                onClick={() => handleSelectModelPreset('a_type')}
+                className={`px-2 py-0.5 rounded text-xs font-bold transition-all cursor-pointer flex items-center gap-1 whitespace-nowrap ${
+                  modelPreset === 'a_type'
+                    ? 'bg-emerald-600 text-white shadow-2xs'
+                    : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200'
+                }`}
+                title="Aタイプのみで全データを集計"
+              >
+                <Target className="w-3 h-3 text-emerald-400 shrink-0" />
+                Aタイプ ({modelPresetCounts.a_type})
+              </button>
+
+              {/* ジャグラー */}
+              <button
+                type="button"
+                onClick={() => handleSelectModelPreset('juggler')}
+                className={`px-2 py-0.5 rounded text-xs font-bold transition-all cursor-pointer flex items-center gap-1 whitespace-nowrap ${
+                  modelPreset === 'juggler'
+                    ? 'bg-amber-500 text-slate-950 font-black shadow-2xs'
+                    : 'bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-200'
+                }`}
+                title="ジャグラーシリーズのみで全データを集計"
+              >
+                <Sparkles className="w-3 h-3 text-amber-600 shrink-0" />
+                ジャグラー ({modelPresetCounts.juggler})
+              </button>
+
+              {/* 個別機種選択ボタン */}
+              <button
+                type="button"
+                onClick={() => setIsMultiSelectModalOpen(true)}
+                className={`px-2 py-0.5 rounded text-xs font-bold transition-all cursor-pointer flex items-center gap-1 whitespace-nowrap ${
+                  modelPreset === 'custom' || selectedModelNames.length > 0
+                    ? 'bg-amber-400 text-slate-950 font-black ring-1 ring-amber-500'
+                    : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
+                }`}
+                title="機種を個別に指定して絞り込み（複数選択可）"
+              >
+                <SlidersHorizontal className="w-3 h-3 text-slate-600 shrink-0" />
+                <span>機種選択...</span>
+                {modelPreset === 'custom' && selectedModelNames.length > 0 && (
+                  <span className="bg-slate-950 text-amber-300 px-1 py-0.2 rounded-full text-[10px] font-black">
+                    {selectedModelNames.length}
+                  </span>
+                )}
+              </button>
+
+              {/* リセットボタン (絞り込み中のみ表示) */}
+              {(modelPreset !== 'all' || selectedModelNames.length > 0) && (
+                <button
+                  type="button"
+                  onClick={() => handleSelectModelPreset('all')}
+                  className="px-1.5 py-0.5 rounded text-[11px] font-bold text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors flex items-center gap-0.5 cursor-pointer whitespace-nowrap"
+                  title="全機種に戻す"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  解除
+                </button>
+              )}
+            </div>
+
             <button
               type="button"
               onClick={() => setIsStoreModalOpen(true)}
@@ -480,7 +724,10 @@ export default function App() {
               <UploadCloud className="w-3.5 h-3.5" />
               HTML取込 / 他店舗追加
             </button>
+          </div>
 
+          {/* Right side: Period & Condition Settings */}
+          <div className="flex flex-wrap items-center gap-2">
             <div className="flex items-center gap-2 text-xs text-slate-700 shrink-0 whitespace-nowrap">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
               <span>
@@ -492,10 +739,7 @@ export default function App() {
                 {filteredMonthlyStats.length}ヶ月 ({filteredDailyRecords.length}営業日)
               </span>
             </div>
-          </div>
 
-          {/* Rate & Parameter Toggle Button & Reset Button */}
-          <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
               onClick={() => setShowSettings(!showSettings)}
@@ -518,10 +762,35 @@ export default function App() {
               title="初期状態にリセット（全店舗削除）"
             >
               <RotateCcw className="w-3.5 h-3.5" />
-              <span>リセット (全店舗削除)</span>
+              <span>リセット</span>
             </button>
           </div>
         </div>
+
+        {/* Active Machine Filter Notification Banner */}
+        {(modelPreset !== 'all' || selectedModelNames.length > 0) && (
+          <div className="bg-amber-50 border border-amber-300 px-3.5 py-2 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 text-slate-800">
+              <span className="bg-amber-400 text-slate-950 font-black px-2 py-0.5 rounded text-[11px] shrink-0">
+                全画面 機種絞り込み中
+              </span>
+              <span className="font-extrabold text-slate-900">
+                「{activeFilterLabel}」
+              </span>
+              <span className="text-slate-600">
+                のデータのみで全画面（月別収支・粗利推移・KPI・カレンダー・グラフ・末尾/曜日/特日分析）を再集計しています。
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleSelectModelPreset('all')}
+              className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 font-bold rounded-lg border border-slate-300 text-xs cursor-pointer flex items-center gap-1 shrink-0"
+            >
+              <RotateCcw className="w-3 h-3" />
+              全機種表示に戻す
+            </button>
+          </div>
+        )}
 
         {/* Optional Rate Settings Drawer */}
         {showSettings && (
@@ -688,6 +957,32 @@ export default function App() {
           </div>
         </div>
 
+        {/* 店舗分析深堀り: 機種別・台番号末尾詳細分析 */}
+        <ModelDeepAnalysis
+          dailyRecords={filteredDailyRecords}
+          perspective={perspective}
+          unit={unit}
+          rateLend={currentStore.rateLend}
+          rateExchange={currentStore.rateExchange}
+          globalModelPreset={modelPreset}
+          globalSelectedModelNames={selectedModelNames}
+          activeFilterLabel={activeFilterLabel}
+          onSelectPreset={handleSelectModelPreset}
+          onOpenModelModal={() => setIsMultiSelectModalOpen(true)}
+          onToggleModel={handleToggleModelInSelection}
+        />
+
+        {/* 出率が高い台の特徴・投入傾向分析 */}
+        <HighPayoutAnalysis
+          dailyRecords={filteredDailyRecords}
+          perspective={perspective}
+          unit={unit}
+          rateLend={rateLend}
+          rateExchange={rateExchange}
+          oldEventDays={currentStore.oldEventDays}
+          specialDayRules={currentStore.specialDayRules}
+        />
+
         {/* 〇のつく日別の利益・出玉傾向分析 */}
         <TailNumberAnalysis
           dailyRecords={filteredDailyRecords}
@@ -787,6 +1082,35 @@ export default function App() {
         }}
         onCancel={() => setIsResetConfirmOpen(false)}
       />
+
+      {/* Model Multi-Select Modal */}
+      {isMultiSelectModalOpen && (
+        <ModelMultiSelectModal
+          isOpen={isMultiSelectModalOpen}
+          onClose={() => setIsMultiSelectModalOpen(false)}
+          allModels={allAvailableModels}
+          selectedModelNames={
+            modelPreset === 'all'
+              ? []
+              : modelPreset === 'smart_slot'
+              ? allAvailableModels.filter((m) => isSmartSlot(m.modelName)).map((m) => m.modelName)
+              : modelPreset === 'a_type'
+              ? allAvailableModels.filter((m) => isAType(m.modelName)).map((m) => m.modelName)
+              : modelPreset === 'juggler'
+              ? allAvailableModels.filter((m) => isJuggler(m.modelName)).map((m) => m.modelName)
+              : selectedModelNames
+          }
+          onApplySelection={(selected) => {
+            if (selected.length === 0 || selected.length === allAvailableModels.length) {
+              handleSelectModelPreset('all');
+            } else {
+              setSelectedModelNames(selected);
+              setModelPreset('custom');
+            }
+            setIsMultiSelectModalOpen(false);
+          }}
+        />
+      )}
 
       {/* Footer */}
       <footer className="border-t border-slate-200 bg-white py-4 mt-8">

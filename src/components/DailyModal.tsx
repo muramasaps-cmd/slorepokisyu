@@ -3,7 +3,26 @@ import { DailyRecord, MonthlyStat } from '../data/types';
 import { ProfitModelType } from './Header';
 import { formatYen, formatYenExact, formatCoinsExact, formatNumber } from '../utils/formatters';
 import { analyzeSpecialDayPatterns } from '../utils/specialDayPatterns';
-import { X, Calendar, Flame, Sparkles, Filter, CheckCircle2, Zap, Target } from 'lucide-react';
+import {
+  getModelTagInfo,
+  isSmartSlot,
+  isAType,
+  isJuggler,
+} from '../utils/modelFilterUtils';
+import {
+  X,
+  Calendar,
+  Flame,
+  Sparkles,
+  Filter,
+  CheckCircle2,
+  Zap,
+  Target,
+  ChevronDown,
+  ChevronUp,
+  Cpu,
+  Hash,
+} from 'lucide-react';
 
 interface DailyModalProps {
   yearMonth: string | null;
@@ -25,6 +44,9 @@ export const DailyModal: React.FC<DailyModalProps> = ({
   onClose,
 }) => {
   const [filterType, setFilterType] = useState<'all' | 'eventOnly' | 'winOnly' | 'lossOnly'>('all');
+  const [expandedDate, setExpandedDate] = useState<string | null>(null);
+  const [detailTab, setDetailTab] = useState<'models' | 'tails'>('models');
+  const [dailyModelFilter, setDailyModelFilter] = useState<'all' | 'smart_slot' | 'a_type' | 'juggler'>('all');
 
   const monthSummary = useMemo(() => {
     return monthlyStats.find((m) => m.yearMonth === yearMonth);
@@ -236,88 +258,328 @@ export const DailyModal: React.FC<DailyModalProps> = ({
                 const isSat = d.dayOfWeek === '土';
                 const diffVal = perspective === 'hall' ? d.hallYenProfit : d.playerYenProfit;
                 const gVal = perspective === 'hall' ? d.gModelHallProfit : d.gModelPlayerProfit;
+                const hasDetailedData = Boolean(
+                  (d.models && d.models.length > 0) || (d.tails && d.tails.length > 0)
+                );
+                const isExpanded = expandedDate === d.date;
 
                 return (
-                  <tr key={d.date} className="hover:bg-slate-50 transition-colors">
-                    <td className="py-2.5 px-3 font-semibold whitespace-nowrap">
-                      <span>{d.date.slice(5)}</span>{' '}
-                      <span
-                        className={`text-xs ${
-                          isSun ? 'text-rose-600 font-bold' : isSat ? 'text-blue-600 font-bold' : 'text-slate-400'
+                  <React.Fragment key={d.date}>
+                    <tr
+                      onClick={() => {
+                        if (hasDetailedData) {
+                          setExpandedDate(isExpanded ? null : d.date);
+                        }
+                      }}
+                      className={`hover:bg-slate-50 transition-colors ${
+                        hasDetailedData ? 'cursor-pointer' : ''
+                      } ${isExpanded ? 'bg-amber-50/50' : ''}`}
+                    >
+                      <td className="py-2.5 px-3 font-semibold whitespace-nowrap">
+                        <div className="flex items-center gap-1.5">
+                          {hasDetailedData && (
+                            <span className="text-slate-400">
+                              {isExpanded ? (
+                                <ChevronUp className="w-3.5 h-3.5 text-amber-600" />
+                              ) : (
+                                <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                              )}
+                            </span>
+                          )}
+                          <span>{d.date.slice(5)}</span>{' '}
+                          <span
+                            className={`text-xs ${
+                              isSun ? 'text-rose-600 font-bold' : isSat ? 'text-blue-600 font-bold' : 'text-slate-400'
+                            }`}
+                          >
+                            ({d.dayOfWeek})
+                          </span>
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 whitespace-nowrap">
+                        <div className="flex items-center gap-1">
+                          {d.isOldEventDay ? (
+                            <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-800 text-[11px] font-bold px-1.5 py-0.5 rounded">
+                              <Flame className="w-3 h-3 text-amber-600" />
+                              旧イベ
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 text-xs">通常</span>
+                          )}
+                          {hasDetailedData && (
+                            <span className="bg-indigo-50 text-indigo-700 text-[10px] font-bold px-1.5 py-0.5 rounded border border-indigo-200">
+                              詳細あり
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                        <span className="font-semibold text-slate-700">{d.totalMachines}台</span>
+                        {d.isReusedMachines && (
+                          <span
+                            className="ml-1 text-[10px] text-amber-700 bg-amber-50 px-1 py-0.5 rounded border border-amber-200 font-medium"
+                            title="元データで台数がブランクのため他日の台数を流用"
+                          >
+                            流用
+                          </span>
+                        )}
+                      </td>
+                      <td
+                        className={`py-2.5 px-3 text-right font-bold whitespace-nowrap ${
+                          d.avgDiffCoins > 0 ? 'text-blue-600' : 'text-slate-700'
                         }`}
                       >
-                        ({d.dayOfWeek})
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-3 whitespace-nowrap">
-                      {d.isOldEventDay ? (
-                        <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-800 text-[11px] font-bold px-1.5 py-0.5 rounded">
-                          <Flame className="w-3 h-3 text-amber-600" />
-                          旧イベ
-                        </span>
-                      ) : (
-                        <span className="text-slate-400 text-xs">通常</span>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-3 text-right whitespace-nowrap">
-                      <span className="font-semibold text-slate-700">{d.totalMachines}台</span>
-                      {d.isReusedMachines && (
-                        <span
-                          className="ml-1 text-[10px] text-amber-700 bg-amber-50 px-1 py-0.5 rounded border border-amber-200 font-medium"
-                          title="元データで台数がブランクのため他日の台数を流用"
-                        >
-                          流用
-                        </span>
-                      )}
-                    </td>
-                    <td
-                      className={`py-2.5 px-3 text-right font-bold whitespace-nowrap ${
-                        d.avgDiffCoins > 0 ? 'text-blue-600' : 'text-slate-700'
-                      }`}
-                    >
-                      {d.avgDiffCoins > 0 ? `+${d.avgDiffCoins}` : d.avgDiffCoins}枚
-                    </td>
-                    {/* G-Model */}
-                    <td
-                      className={`py-2.5 px-3 text-right font-extrabold whitespace-nowrap ${
-                        gVal >= 0 ? 'text-indigo-600' : 'text-rose-600'
-                      }`}
-                    >
-                      <div>{formatYenExact(gVal)}</div>
-                      <div className="text-[10px] text-slate-400 font-normal">
-                        {formatYen(Math.round(gVal / (d.totalMachines || 587)))}/台
-                      </div>
-                    </td>
-                    <td className="py-2.5 px-3 text-right text-slate-600 whitespace-nowrap">
-                      {formatNumber(d.avgGames)}G
-                    </td>
-                    <td className="py-2.5 px-3 text-right text-slate-700 whitespace-nowrap font-medium">
-                      {d.payoutRate.toFixed(2)}%
-                    </td>
-                    <td className="py-2.5 px-3 text-right whitespace-nowrap">
-                      {d.winRate !== null ? (
-                        <span>
-                          <span className="font-semibold text-slate-800">{d.winRate}%</span>{' '}
-                          <span className="text-[11px] text-slate-500">
-                            ({d.winMachines ?? '-'} / {d.totalMachines}台)
+                        {d.avgDiffCoins > 0 ? `+${d.avgDiffCoins}` : d.avgDiffCoins}枚
+                      </td>
+                      {/* G-Model */}
+                      <td
+                        className={`py-2.5 px-3 text-right font-extrabold whitespace-nowrap ${
+                          gVal >= 0 ? 'text-indigo-600' : 'text-rose-600'
+                        }`}
+                      >
+                        <div>{formatYenExact(gVal)}</div>
+                        <div className="text-[10px] text-slate-400 font-normal">
+                          {formatYen(Math.round(gVal / (d.totalMachines || 587)))}/台
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 text-right text-slate-600 whitespace-nowrap">
+                        {formatNumber(d.avgGames)}G
+                      </td>
+                      <td className="py-2.5 px-3 text-right text-slate-700 whitespace-nowrap font-medium">
+                        {d.payoutRate.toFixed(2)}%
+                      </td>
+                      <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                        {d.winRate !== null ? (
+                          <span>
+                            <span className="font-semibold text-slate-800">{d.winRate}%</span>{' '}
+                            <span className="text-[11px] text-slate-500">
+                              ({d.winMachines ?? '-'} / {d.totalMachines}台)
+                            </span>
                           </span>
-                        </span>
-                      ) : (
-                        <span className="text-slate-400 text-xs">
-                          - ({d.totalMachines}台)
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-3 text-slate-600 max-w-xs text-xs truncate">
-                      {d.notable ? (
-                        <span title={d.notable} className="text-slate-800 font-medium">
-                          {d.notable}
-                        </span>
-                      ) : (
-                        <span className="text-slate-300">-</span>
-                      )}
-                    </td>
-                  </tr>
+                        ) : (
+                          <span className="text-slate-400 text-xs">
+                            - ({d.totalMachines}台)
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-600 max-w-xs text-xs truncate">
+                        {d.notable ? (
+                          <span title={d.notable} className="text-slate-800 font-medium">
+                            {d.notable}
+                          </span>
+                        ) : (
+                          <span className="text-slate-300">-</span>
+                        )}
+                      </td>
+                    </tr>
+
+                    {/* Expandable Model / Tail drilldown for this date */}
+                    {isExpanded && hasDetailedData && (
+                      <tr className="bg-slate-50">
+                        <td colSpan={9} className="p-4">
+                          <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3 shadow-inner">
+                            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-slate-900">
+                                  {d.date} 出玉データ詳細 ({d.models?.length || 0}機種・{d.tails?.length || 0}末尾)
+                                </span>
+                              </div>
+                              <div className="flex items-center bg-slate-100 p-1 rounded-lg text-xs">
+                                <button
+                                  type="button"
+                                  onClick={() => setDetailTab('models')}
+                                  className={`px-3 py-1 font-bold rounded cursor-pointer ${
+                                    detailTab === 'models'
+                                      ? 'bg-white text-slate-900 shadow-2xs'
+                                      : 'text-slate-500 hover:text-slate-900'
+                                  }`}
+                                >
+                                  機種別 ({d.models?.length || 0})
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDetailTab('tails')}
+                                  className={`px-3 py-1 font-bold rounded cursor-pointer ${
+                                    detailTab === 'tails'
+                                      ? 'bg-white text-slate-900 shadow-2xs'
+                                      : 'text-slate-500 hover:text-slate-900'
+                                  }`}
+                                >
+                                  台番号末尾 ({d.tails?.length || 0})
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Daily Models Tab */}
+                            {detailTab === 'models' && d.models && (
+                              <div className="space-y-2">
+                                {/* Model Category Filter Bar */}
+                                <div className="flex flex-wrap items-center gap-1.5 text-xs bg-slate-50 p-2 rounded-lg border border-slate-200">
+                                  <span className="text-[11px] text-slate-500 font-bold mr-1">機種絞り込み:</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setDailyModelFilter('all')}
+                                    className={`px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer ${
+                                      dailyModelFilter === 'all'
+                                        ? 'bg-slate-900 text-white'
+                                        : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                                    }`}
+                                  >
+                                    すべて ({d.models.length})
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setDailyModelFilter('smart_slot')}
+                                    className={`px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                                      dailyModelFilter === 'smart_slot'
+                                        ? 'bg-purple-600 text-white'
+                                        : 'bg-white text-purple-900 hover:bg-purple-50 border border-purple-200'
+                                    }`}
+                                  >
+                                    <Zap className="w-3 h-3 text-purple-400" />
+                                    <span>スマスロ ({d.models.filter((m) => isSmartSlot(m.modelName)).length})</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setDailyModelFilter('a_type')}
+                                    className={`px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                                      dailyModelFilter === 'a_type'
+                                        ? 'bg-emerald-600 text-white'
+                                        : 'bg-white text-emerald-900 hover:bg-emerald-50 border border-emerald-200'
+                                    }`}
+                                  >
+                                    <Target className="w-3 h-3 text-emerald-400" />
+                                    <span>Aタイプ ({d.models.filter((m) => isAType(m.modelName)).length})</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setDailyModelFilter('juggler')}
+                                    className={`px-2.5 py-1 rounded-md font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                                      dailyModelFilter === 'juggler'
+                                        ? 'bg-amber-500 text-slate-950 font-black'
+                                        : 'bg-white text-amber-950 hover:bg-amber-50 border border-amber-200'
+                                    }`}
+                                  >
+                                    <Sparkles className="w-3 h-3 text-amber-600" />
+                                    <span>ジャグラー ({d.models.filter((m) => isJuggler(m.modelName)).length})</span>
+                                  </button>
+                                </div>
+
+                                <div className="max-h-72 overflow-y-auto border border-slate-200 rounded-lg">
+                                  <table className="w-full text-left text-xs">
+                                    <thead className="bg-slate-50 text-slate-600 font-bold sticky top-0 border-b border-slate-200">
+                                      <tr>
+                                        <th className="py-2 px-2.5">機種名</th>
+                                        <th className="py-2 px-2.5 text-right">台数</th>
+                                        <th className="py-2 px-2.5 text-right">1台平均差枚</th>
+                                        <th className="py-2 px-2.5 text-right">総差枚</th>
+                                        <th className="py-2 px-2.5 text-right">平均G数</th>
+                                        <th className="py-2 px-2.5 text-right">勝率</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                      {d.models
+                                        .filter((m) => {
+                                          if (dailyModelFilter === 'smart_slot') return isSmartSlot(m.modelName);
+                                          if (dailyModelFilter === 'a_type') return isAType(m.modelName);
+                                          if (dailyModelFilter === 'juggler') return isJuggler(m.modelName);
+                                          return true;
+                                        })
+                                        .map((m) => {
+                                          const tagInfo = getModelTagInfo(m.modelName);
+                                          return (
+                                            <tr key={m.modelName} className="hover:bg-slate-50">
+                                              <td className="py-1.5 px-2.5 font-medium text-slate-800">
+                                                <div className="flex items-center gap-1.5">
+                                                  {tagInfo.isSmart && (
+                                                    <span className="text-[10px] bg-purple-100 text-purple-800 px-1 py-0.2 rounded font-bold border border-purple-200 shrink-0">
+                                                      スマスロ
+                                                    </span>
+                                                  )}
+                                                  {tagInfo.isJuggler && (
+                                                    <span className="text-[10px] bg-amber-100 text-amber-900 px-1 py-0.2 rounded font-bold border border-amber-300 shrink-0">
+                                                      ジャグラー
+                                                    </span>
+                                                  )}
+                                                  {!tagInfo.isJuggler && tagInfo.isAType && (
+                                                    <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1 py-0.2 rounded font-bold border border-emerald-200 shrink-0">
+                                                      Aタイプ
+                                                    </span>
+                                                  )}
+                                                  <span className="truncate max-w-xs">{m.modelName}</span>
+                                                  {m.isSmallCount && (
+                                                    <span className="text-[10px] bg-slate-100 text-slate-500 px-1 py-0.5 rounded shrink-0">
+                                                      少台数
+                                                    </span>
+                                                  )}
+                                                </div>
+                                              </td>
+                                              <td className="py-1.5 px-2.5 text-right font-bold text-slate-700">
+                                                {m.totalMachines}台
+                                              </td>
+                                              <td
+                                                className={`py-1.5 px-2.5 text-right font-bold ${
+                                                  m.avgDiffCoins > 0 ? 'text-blue-600' : 'text-slate-700'
+                                                }`}
+                                              >
+                                                {m.avgDiffCoins > 0 ? `+${formatNumber(m.avgDiffCoins)}` : formatNumber(m.avgDiffCoins)}枚
+                                              </td>
+                                              <td
+                                                className={`py-1.5 px-2.5 text-right font-bold ${
+                                                  m.totalDiffCoins > 0 ? 'text-blue-600' : 'text-slate-700'
+                                                }`}
+                                              >
+                                                {m.totalDiffCoins > 0 ? `+${formatNumber(m.totalDiffCoins)}` : formatNumber(m.totalDiffCoins)}枚
+                                              </td>
+                                              <td className="py-1.5 px-2.5 text-right text-slate-600">
+                                                {formatNumber(m.avgGames)}G
+                                              </td>
+                                              <td className="py-1.5 px-2.5 text-right font-semibold text-slate-800">
+                                                {m.winRate !== null ? `${m.winRate}%` : '-'}
+                                                <span className="text-[10px] text-slate-400 ml-1">
+                                                  ({m.winMachines}/{m.totalMachines})
+                                                </span>
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Daily Tails Tab */}
+                            {detailTab === 'tails' && d.tails && (
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                {d.tails.map((t) => (
+                                  <div
+                                    key={t.tailName}
+                                    className="p-2.5 rounded-lg border border-slate-200 bg-slate-50/50 text-xs"
+                                  >
+                                    <div className="flex items-center justify-between font-bold">
+                                      <span>{t.tailName}</span>
+                                      <span
+                                        className={
+                                          t.avgDiffCoins > 0 ? 'text-blue-600 font-extrabold' : 'text-slate-700'
+                                        }
+                                      >
+                                        {t.avgDiffCoins > 0 ? `+${t.avgDiffCoins}` : t.avgDiffCoins}枚
+                                      </span>
+                                    </div>
+                                    <div className="mt-1 flex justify-between text-[11px] text-slate-500">
+                                      <span>勝率 {t.winRate}%</span>
+                                      <span>{formatNumber(t.avgGames)}G</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 );
               })}
             </tbody>

@@ -75,7 +75,7 @@ export function parseRatesFromExchangeRate(exchangeRateStr: string): { rateLend:
  * Extracts store name, date, overall results (全体結果: 総差枚, 平均差枚, 平均G数, 勝率),
  * model breakdown (機種別データ & 少台数機種), tail results (末尾別結果), and top pickup models.
  */
-export function parseSlorepoDailyHtml(doc: Document, rawHtml: string): ParseHtmlResult {
+export function parseSlorepoDailyHtml(doc: Document, rawHtml: string, fileName: string = ''): ParseHtmlResult {
   const errors: string[] = [];
 
   // 1. Extract Store Name
@@ -103,7 +103,7 @@ export function parseSlorepoDailyHtml(doc: Document, rawHtml: string): ParseHtml
 
   // h4.title check: e.g. 2026/9/20(日)<br>マルハンメガシティ2000蒲田7
   if (!storeName) {
-    const h4 = doc.querySelector('h4.title');
+    const h4 = doc.querySelector('h4.title, h1, h2, .shop-name, .store-name');
     if (h4) {
       const parts = h4.innerHTML.split(/<br\s*\/?>/i);
       if (parts.length >= 2) {
@@ -111,20 +111,40 @@ export function parseSlorepoDailyHtml(doc: Document, rawHtml: string): ParseHtml
       } else {
         const text = h4.textContent?.trim() || '';
         const match = text.match(/(?:202\d[^\s]+)\s+(.+)$/);
-        if (match) storeName = match[1].trim();
+        if (match) {
+          storeName = match[1].trim();
+        } else if (!text.match(/^202\d/)) {
+          storeName = text;
+        }
       }
     }
   }
 
   if (!storeName && doc.title) {
-    const cleanedTitle = doc.title.replace(/\s*[-–|]\s*スロレポ.*$/i, '').trim();
-    if (!cleanedTitle.match(/202\d/)) {
+    const cleanedTitle = doc.title
+      .replace(/\s*[-–|]\s*(?:スロレポ|みんレポ|アナスロ).*$/i, '')
+      .replace(/202\d[年/-]\d{1,2}[月/-]\d{1,2}[日]?/g, '')
+      .replace(/[\(（][日月火水木金土][\)）]/g, '')
+      .trim();
+    if (cleanedTitle.length > 1) {
       storeName = cleanedTitle;
     }
   }
 
+  // Check file name if storeName is still empty
+  if (!storeName && fileName) {
+    const cleanFileName = fileName
+      .replace(/\.[^/.]+$/, '')
+      .replace(/202\d[-_.]?\d{1,2}[-_.]?\d{1,2}/g, '')
+      .replace(/[_\-\s]+/g, ' ')
+      .trim();
+    if (cleanFileName.length > 2) {
+      storeName = cleanFileName;
+    }
+  }
+
   if (!storeName) {
-    storeName = 'マルハンメガシティ2000蒲田';
+    storeName = 'スロレポ登録店舗';
   }
 
   // 2. Extract Date and Day of Week
@@ -136,15 +156,46 @@ export function parseSlorepoDailyHtml(doc: Document, rawHtml: string): ParseHtml
     ' ' +
     (doc.title || '') +
     ' ' +
-    rawHtml.slice(0, 1000);
+    (fileName || '') +
+    ' ' +
+    rawHtml.slice(0, 20000);
 
-  const dateMatch = textForDate.match(/(202\d)[年/-](\d{1,2})[月/-](\d{1,2})/);
-  if (dateMatch) {
-    const y = parseInt(dateMatch[1], 10);
-    const m = parseInt(dateMatch[2], 10);
-    const d = parseInt(dateMatch[3], 10);
+  // Pattern 1: YYYY年MM月DD日 or YYYY/MM/DD or YYYY-MM-DD
+  const dateMatch1 = textForDate.match(/(202\d)[年/-](\d{1,2})[月/-](\d{1,2})/);
+  // Pattern 2: YYYY.MM.DD
+  const dateMatch2 = textForDate.match(/(202\d)\.(\d{1,2})\.(\d{1,2})/);
+  // Pattern 3: YYYYMMDD in filename or text
+  const dateMatch3 = (fileName + ' ' + textForDate).match(/(202\d)(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])/);
+
+  if (dateMatch1) {
+    const y = parseInt(dateMatch1[1], 10);
+    const m = parseInt(dateMatch1[2], 10);
+    const d = parseInt(dateMatch1[3], 10);
     dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     dayOfWeek = calculateDayOfWeek(dateStr);
+  } else if (dateMatch2) {
+    const y = parseInt(dateMatch2[1], 10);
+    const m = parseInt(dateMatch2[2], 10);
+    const d = parseInt(dateMatch2[3], 10);
+    dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    dayOfWeek = calculateDayOfWeek(dateStr);
+  } else if (dateMatch3) {
+    const y = parseInt(dateMatch3[1], 10);
+    const m = parseInt(dateMatch3[2], 10);
+    const d = parseInt(dateMatch3[3], 10);
+    dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    dayOfWeek = calculateDayOfWeek(dateStr);
+  }
+
+  // Also check <meta> time or <time> tag
+  if (!dateStr) {
+    const timeEl = doc.querySelector('time[datetime], meta[property="article:published_time"]');
+    const attr = timeEl?.getAttribute('datetime') || timeEl?.getAttribute('content') || '';
+    const m = attr.match(/(202\d)[-_.]?(\d{2})[-_.]?(\d{2})/);
+    if (m) {
+      dateStr = `${m[1]}-${m[2]}-${m[3]}`;
+      dayOfWeek = calculateDayOfWeek(dateStr);
+    }
   }
 
   const dowMatch = textForDate.match(/[\(（]([日月火水木金土])[\)）]/);
@@ -153,7 +204,7 @@ export function parseSlorepoDailyHtml(doc: Document, rawHtml: string): ParseHtml
   }
 
   if (!dateStr) {
-    errors.push('日別HTMLから日付を抽出できませんでした。');
+    errors.push(`HTML (${fileName || 'ファイル'}) から日付を抽出できませんでした。`);
     return {
       success: false,
       errors,
@@ -172,7 +223,7 @@ export function parseSlorepoDailyHtml(doc: Document, rawHtml: string): ParseHtml
   const allTables = Array.from(doc.querySelectorAll('table'));
   for (const table of allTables) {
     const text = table.textContent || '';
-    if (text.includes('総差枚') && text.includes('平均差枚')) {
+    if (text.includes('差枚') && (text.includes('平均') || text.includes('勝率') || text.includes('G数'))) {
       const rows = Array.from(table.querySelectorAll('tr'));
       for (const row of rows) {
         const tds = Array.from(row.querySelectorAll('td'));
@@ -188,6 +239,11 @@ export function parseSlorepoDailyHtml(doc: Document, rawHtml: string): ParseHtml
               winMachines = parseInt(slashMatch[1], 10);
               totalMachines = parseInt(slashMatch[2], 10);
               winRate = totalMachines > 0 ? Math.round((winMachines / totalMachines) * 1000) / 10 : null;
+            } else {
+              const pctMatch = wrText.match(/(\d+(?:\.\d+)?)\s*%/);
+              if (pctMatch) {
+                winRate = parseFloat(pctMatch[1]);
+              }
             }
           }
           break;
@@ -302,7 +358,7 @@ export function parseSlorepoDailyHtml(doc: Document, rawHtml: string): ParseHtml
     if (parsedModels.length > 0) {
       totalMachines = parsedModels.reduce((acc, m) => acc + m.totalMachines, 0);
     } else {
-      totalMachines = 715;
+      totalMachines = 160;
     }
   }
 
@@ -319,7 +375,7 @@ export function parseSlorepoDailyHtml(doc: Document, rawHtml: string): ParseHtml
 
   // 7. Store Profile Setup
   const specialDayRules: SpecialDayRules = parseSpecialDayRulesFromText(
-    storeName.includes('7') || storeName.includes('マルハン') ? '7のつく日' : '5のつく日'
+    storeName.includes('7') ? '7のつく日' : storeName.includes('5') ? '5のつく日' : '7のつく日'
   );
 
   const isOldEventDay = isDateSpecialDay(dateStr, specialDayRules);
@@ -369,7 +425,7 @@ export function parseSlorepoDailyHtml(doc: Document, rawHtml: string): ParseHtml
   const storeProfile: StoreProfile = {
     id: `store-${storeName.replace(/[\s\u3000]+/g, '-').toLowerCase()}`,
     name: storeName,
-    address: '東京都大田区蒲田',
+    address: '住所未登録',
     oldEventDays: '7のつく日',
     exchangeRate: '46枚貸/52枚交換',
     rateLend,
@@ -393,21 +449,23 @@ export function parseSlorepoDailyHtml(doc: Document, rawHtml: string): ParseHtml
  * Parses Slorepo (スロレポ) HTML store pages.
  * Supports both Daily Report files (日別ファイル) and Store Monthly/Summary pages (店舗別月次一覧).
  */
-export function parseSlorepoHtml(htmlContent: string): ParseHtmlResult {
+export function parseSlorepoHtml(htmlContent: string, fileName: string = ''): ParseHtmlResult {
   const errors: string[] = [];
 
   try {
     const parser = new DOMParser();
     const doc = parser.parseFromString(htmlContent, 'text/html');
 
-    // Check if this is a Daily Report file (contains 全体結果 or 機種別データ or 末尾別結果)
+    // Check if this is a Daily Report file (contains 全体結果 or 機種別データ or 末尾別結果 or 総差枚)
     const bodyText = doc.body?.textContent || '';
     const isDailyReport =
       bodyText.includes('全体結果') ||
+      (bodyText.includes('機種別') && (bodyText.includes('末尾') || bodyText.includes('差枚'))) ||
+      (bodyText.includes('総差枚') && bodyText.includes('平均差枚')) ||
       (bodyText.includes('機種別データ') && bodyText.includes('末尾別結果'));
 
     if (isDailyReport) {
-      return parseSlorepoDailyHtml(doc, htmlContent);
+      return parseSlorepoDailyHtml(doc, htmlContent, fileName);
     }
 
     // Otherwise, parse as Store Monthly Summary page with table.date

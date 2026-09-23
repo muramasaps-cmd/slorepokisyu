@@ -35,9 +35,11 @@ import {
   areStoresSame,
   saveStoresToStorage,
   mergeDailyRecords,
+  loadStoresFromStorageAsync,
 } from './utils/storeStorage';
 import {
   parseMultipleSlorepoHtml,
+  parseMultipleSlorepoHtmlAsync,
   readFilesAsText,
 } from './utils/multiHtmlParser';
 import {
@@ -135,10 +137,24 @@ export default function App() {
   // Drag-and-drop state on empty screen
   const [emptyScreenDragging, setEmptyScreenDragging] = useState<boolean>(false);
   const [emptyIsLoading, setEmptyIsLoading] = useState<boolean>(false);
+  const [emptyStatusText, setEmptyStatusText] = useState<string>('');
+  const [emptyProgressPercent, setEmptyProgressPercent] = useState<number>(0);
   const [emptyInputMode, setEmptyInputMode] = useState<'file' | 'paste'>('file');
   const [emptyPastedHtml, setEmptyPastedHtml] = useState<string>('');
   const [emptyError, setEmptyError] = useState<string>('');
   const emptyFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Hydrate from IndexedDB on startup (handles large 100+ file datasets)
+  useEffect(() => {
+    loadStoresFromStorageAsync().then((loaded) => {
+      if (loaded && loaded.length > 0) {
+        setStores((prev) => {
+          if (prev.length === 0) return loaded;
+          return prev;
+        });
+      }
+    });
+  }, []);
 
   // Automatically sync lend and exchange coin rates to match header exchange rate whenever active store changes
   useEffect(() => {
@@ -367,20 +383,35 @@ export default function App() {
     setEmptyError('');
     if (!files || files.length === 0) return;
     setEmptyIsLoading(true);
+    setEmptyStatusText(`ファイルを読み込み中... (0/${files.length}件)`);
+    setEmptyProgressPercent(5);
 
     try {
-      const readResults = await readFilesAsText(files);
+      const readResults = await readFilesAsText(files, (done, total) => {
+        setEmptyStatusText(`HTMLファイルを読込中... (${done}/${total}件)`);
+        setEmptyProgressPercent(Math.round((done / total) * 45));
+      });
+
       if (readResults.length === 0) {
         setEmptyError('選択されたファイルからテキストを読み込めませんでした。');
         setEmptyIsLoading(false);
+        setEmptyStatusText('');
         return;
       }
 
-      const res = parseMultipleSlorepoHtml(readResults, stores);
+      setEmptyStatusText(`出玉データを解析・統合中... (0/${readResults.length}件)`);
+      setEmptyProgressPercent(50);
+
+      const res = await parseMultipleSlorepoHtmlAsync(readResults, stores, (done, total) => {
+        setEmptyStatusText(`出玉データを解析・統合中... (${done}/${total}件)`);
+        setEmptyProgressPercent(50 + Math.round((done / total) * 48));
+      });
+
       if (!res.success || res.stores.length === 0) {
-        const errs = res.errors.map((e) => `${e.fileName}: ${e.error}`).join(' / ');
+        const errs = res.errors.slice(0, 5).map((e) => `${e.fileName}: ${e.error}`).join(' / ');
         setEmptyError(errs || '有効なスロレポHTMLが見つかりませんでした。');
         setEmptyIsLoading(false);
+        setEmptyStatusText('');
         return;
       }
 
@@ -390,6 +421,8 @@ export default function App() {
       setEmptyError(`ファイル処理エラー: ${err?.message || err}`);
     } finally {
       setEmptyIsLoading(false);
+      setEmptyStatusText('');
+      setEmptyProgressPercent(100);
     }
   };
 
@@ -514,9 +547,20 @@ export default function App() {
                 </div>
                 <div>
                   {emptyIsLoading ? (
-                    <p className="text-sm font-bold text-amber-700 animate-pulse">
-                      ファイルを解析中... しばらくお待ちください
-                    </p>
+                    <div className="space-y-2 max-w-md mx-auto">
+                      <p className="text-sm font-bold text-amber-700 animate-pulse">
+                        {emptyStatusText || 'ファイルを解析中... しばらくお待ちください'}
+                      </p>
+                      <div className="w-64 mx-auto bg-amber-100 rounded-full h-2 overflow-hidden border border-amber-200">
+                        <div
+                          className="bg-amber-600 h-full transition-all duration-200 rounded-full"
+                          style={{ width: `${emptyProgressPercent}%` }}
+                        />
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        大量のHTMLファイル（100件以上）もブラウザ内で安全に順次解析・統合しています
+                      </p>
+                    </div>
                   ) : (
                     <>
                       <p className="text-sm font-bold text-slate-800">

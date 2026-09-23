@@ -3,6 +3,7 @@ import { StoreProfile } from '../data/types';
 import { ConfirmModal } from './ConfirmModal';
 import {
   parseMultipleSlorepoHtml,
+  parseMultipleSlorepoHtmlAsync,
   readFilesAsText,
   ParsedStoreGroup,
 } from '../utils/multiHtmlParser';
@@ -55,6 +56,8 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
   const [pastedHtml, setPastedHtml] = useState<string>('');
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [processStatus, setProcessStatus] = useState<string>('');
+  const [progressPercent, setProgressPercent] = useState<number>(0);
   const [loadedFilesCount, setLoadedFilesCount] = useState<number>(0);
 
   // Staged multi-store groups
@@ -73,27 +76,41 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
   const handleFiles = async (files: FileList | File[]) => {
     if (!files || files.length === 0) return;
     setIsProcessing(true);
+    setProcessStatus(`ファイルを読込中... (0/${files.length}件)`);
+    setProgressPercent(5);
     setParseErrors([]);
     setParseSuccessMsg('');
     setStagedGroups([]);
 
     try {
-      const readResults = await readFilesAsText(files);
+      const readResults = await readFilesAsText(files, (done, total) => {
+        setProcessStatus(`HTMLファイルを読み込み中... (${done}/${total}件)`);
+        setProgressPercent(Math.round((done / total) * 45));
+      });
+
       if (readResults.length === 0) {
         setParseErrors(['選択されたファイルからデータを読み込めませんでした。']);
         setIsProcessing(false);
+        setProcessStatus('');
         return;
       }
 
       setLoadedFilesCount(readResults.length);
-      const parseResult = parseMultipleSlorepoHtml(readResults, stores);
+      setProcessStatus(`出玉データを解析・統合中... (0/${readResults.length}件)`);
+      setProgressPercent(50);
+
+      const parseResult = await parseMultipleSlorepoHtmlAsync(readResults, stores, (done, total) => {
+        setProcessStatus(`出玉データを解析・統合中... (${done}/${total}件)`);
+        setProgressPercent(50 + Math.round((done / total) * 48));
+      });
 
       if (!parseResult.success || parseResult.stores.length === 0) {
-        const errList = parseResult.errors.map((e) => `${e.fileName}: ${e.error}`);
+        const errList = parseResult.errors.slice(0, 10).map((e) => `${e.fileName}: ${e.error}`);
         setParseErrors(
           errList.length > 0 ? errList : ['有効な出玉データを含むスロレポHTMLが見つかりませんでした。']
         );
         setIsProcessing(false);
+        setProcessStatus('');
         return;
       }
 
@@ -101,7 +118,7 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
 
       if (parseResult.errors.length > 0) {
         setParseErrors(
-          parseResult.errors.map((e) => `スキップ: ${e.fileName} (${e.error})`)
+          parseResult.errors.slice(0, 5).map((e) => `スキップ: ${e.fileName} (${e.error})`)
         );
       }
 
@@ -121,6 +138,8 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
       setParseErrors([`ファイル処理中にエラーが発生しました: ${err?.message || err}`]);
     } finally {
       setIsProcessing(false);
+      setProcessStatus('');
+      setProgressPercent(100);
     }
   };
 
@@ -366,9 +385,20 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
 
                   <div>
                     {isProcessing ? (
-                      <p className="text-sm font-bold text-amber-700 animate-pulse">
-                        ファイルを解析中... しばらくお待ちください
-                      </p>
+                      <div className="space-y-2 max-w-md mx-auto">
+                        <p className="text-sm font-bold text-amber-700 animate-pulse">
+                          {processStatus || 'ファイルを解析中... しばらくお待ちください'}
+                        </p>
+                        <div className="w-64 mx-auto bg-amber-100 rounded-full h-2 overflow-hidden border border-amber-200">
+                          <div
+                            className="bg-amber-600 h-full transition-all duration-200 rounded-full"
+                            style={{ width: `${progressPercent}%` }}
+                          />
+                        </div>
+                        <p className="text-[11px] text-slate-500">
+                          大量のHTMLファイル（100件以上）もブラウザ内で安全に順次解析・統合しています
+                        </p>
+                      </div>
                     ) : (
                       <>
                         <p className="text-sm font-bold text-slate-800">

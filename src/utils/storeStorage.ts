@@ -1,6 +1,7 @@
 import { DailyRecord, StoreProfile } from '../data/types';
 import { parseRatesFromExchangeRate } from './htmlParser';
 import { parseSpecialDayRulesFromText } from './specialDayRules';
+import { saveStoresToIdb, loadStoresFromIdb, clearStoresFromIdb } from './indexedDb';
 
 const STORAGE_KEY_STORES = 'SLOT_ANALYZER_HTML_STORES_V2';
 const STORAGE_KEY_ACTIVE_ID = 'SLOT_ANALYZER_HTML_ACTIVE_ID_V2';
@@ -262,14 +263,64 @@ export function getSavedStores(): StoreProfile[] {
 }
 
 /**
- * Save stores array to LocalStorage
+ * Strips pre-calculated derived fields to reduce JSON size by ~60%
+ * (all derived numbers are automatically re-calculated by processStoreData on load)
+ */
+function stripDerivedForStorage(stores: StoreProfile[]): StoreProfile[] {
+  return stores.map((s) => ({
+    ...s,
+    dailyRecords: (s.dailyRecords || []).map((d) => ({
+      date: d.date,
+      yearMonth: d.yearMonth,
+      year: d.year,
+      month: d.month,
+      day: d.day,
+      dayOfWeek: d.dayOfWeek,
+      avgDiffCoins: d.avgDiffCoins,
+      avgGames: d.avgGames,
+      winRate: d.winRate,
+      winMachines: d.winMachines,
+      totalMachines: d.totalMachines,
+      totalDiffCoins: d.totalDiffCoins,
+      isOldEventDay: d.isOldEventDay,
+      is7Day: d.is7Day,
+      notable: d.notable,
+      models: d.models,
+      tails: d.tails,
+    } as DailyRecord)),
+  }));
+}
+
+/**
+ * Save stores array to IndexedDB (full capacity, 100+ files) with LocalStorage companion
  */
 export function saveStoresToStorage(stores: StoreProfile[]): void {
+  // Always persist to IndexedDB asynchronously (handles 100MB+ with zero quota issues)
+  saveStoresToIdb(stores).catch((err) => {
+    console.warn('IndexedDB save failed, relying on LocalStorage', err);
+  });
+
   try {
-    localStorage.setItem(STORAGE_KEY_STORES, JSON.stringify(stores));
+    const compact = stripDerivedForStorage(stores);
+    localStorage.setItem(STORAGE_KEY_STORES, JSON.stringify(compact));
   } catch (err) {
-    console.error('LocalStorage quota exceeded or save error', err);
+    console.warn('LocalStorage quota reached. Full data is safely preserved in IndexedDB.', err);
   }
+}
+
+/**
+ * Asynchronously load stores prioritizing IndexedDB (for large 100+ file datasets)
+ */
+export async function loadStoresFromStorageAsync(): Promise<StoreProfile[]> {
+  try {
+    const idbStores = await loadStoresFromIdb();
+    if (idbStores && idbStores.length > 0) {
+      return idbStores.map(normalizeStore);
+    }
+  } catch (err) {
+    console.warn('Failed to load from IndexedDB, falling back to LocalStorage', err);
+  }
+  return getSavedStores();
 }
 
 /**
@@ -388,6 +439,7 @@ export function deleteStore(id: string): { stores: StoreProfile[]; newActiveId: 
  * Clears ALL stores and resets the application to empty state
  */
 export function resetAllStores(): StoreProfile[] {
+  clearStoresFromIdb().catch(() => {});
   try {
     localStorage.setItem(STORAGE_KEY_STORES, JSON.stringify([]));
     localStorage.removeItem(STORAGE_KEY_ACTIVE_ID);

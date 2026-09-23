@@ -410,7 +410,7 @@ export default function App() {
   };
 
   // Empty state view when no stores exist
-  if (!currentStore || stores.length === 0) {
+  if (!currentStore || uniqueStores.length === 0) {
     return (
       <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col antialiased">
         {/* Simple Header */}

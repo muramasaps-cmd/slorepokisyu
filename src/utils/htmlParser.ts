@@ -70,12 +70,604 @@ export function parseRatesFromExchangeRate(exchangeRateStr: string): { rateLend:
   return { rateLend, rateExchange };
 }
 
+interface ParsedMachineRecord {
+  machineNum: number;
+  modelName: string;
+  games: number;
+  diff: number;
+  bb: number;
+  rb: number;
+  isZoro: boolean;
+  tailDigit: number;
+}
+
+/**
+ * Parses Ana-slo (アナスロ: ana-slo.com) daily data HTML pages.
+ * Supports:
+ *  - Store Name extraction from tag links, entry-title, title, or SingleFile URL.
+ *  - Date and Day of Week extraction.
+ *  - Detailed per-machine data from <h2 id="machine_list">詳細データ</h2> and variety sections.
+ *  - Model statistics (average diff, total diff, games, win rates, machine count).
+ *  - Tail number analytics from machine data and <table id="last_digit_data_table">.
+ *  - Complete hall-wide overall summary.
+ */
+export function parseAnaSloDailyHtml(
+  doc: Document,
+  rawHtml: string,
+  fileName: string = ''
+): ParseHtmlResult {
+  const errors: string[] = [];
+
+  // 1. Extract Store Name
+  let storeName = '';
+
+  // 1A. Tag link: e.g. <a href="https://ana-slo.com/tag/みとや大森町店/" rel="tag">みとや大森町店</a>
+  const tagLink = doc.querySelector('a[rel="tag"][href*="/tag/"]');
+  if (tagLink) {
+    const text = tagLink.textContent?.trim() || '';
+    if (text) {
+      storeName = text;
+    }
+  }
+
+  // 1B. Breadcrumb tag link
+  if (!storeName) {
+    const bTag = doc.querySelector('.tagst a[href*="/tag/"]');
+    if (bTag) {
+      const text = bTag.textContent?.trim() || '';
+      if (text) {
+        storeName = text;
+      }
+    }
+  }
+
+  // 1C. h1.entry-title or .entry-title
+  // Format: "2026/09/22 みとや大森町店 データまとめ"
+  if (!storeName) {
+    const h1 = doc.querySelector('h1.entry-title, .entry-title, h1');
+    if (h1) {
+      const h1Text = h1.textContent?.trim() || '';
+      const match = h1Text.match(/(?:202\d[年/-]\d{1,2}[月/-]\d{1,2}[日]?)\s+(.+?)\s*(?:データまとめ|データ|\-|$)/);
+      if (match) {
+        storeName = match[1].trim();
+      }
+    }
+  }
+
+  // 1D. <title> or <meta property="og:title">
+  // Format: "2026/09/22 みとや大森町店 データまとめ - アナスロ"
+  if (!storeName) {
+    const titleText = doc.querySelector('meta[property="og:title"]')?.getAttribute('content') || doc.title || '';
+    if (titleText) {
+      const match = titleText.match(/(?:202\d[年/-]\d{1,2}[月/-]\d{1,2}[日]?)\s+(.+?)\s*(?:データまとめ|データ|\-|$)/);
+      if (match) {
+        storeName = match[1].trim();
+      } else {
+        const cleaned = titleText
+          .replace(/\s*[-–|]\s*(?:アナスロ|スロレポ).*$/i, '')
+          .replace(/202\d[年/-]\d{1,2}[月/-]\d{1,2}[日]?/g, '')
+          .replace(/データまとめ/g, '')
+          .trim();
+        if (cleaned.length > 1) {
+          storeName = cleaned;
+        }
+      }
+    }
+  }
+
+  // 1E. Canonical or SingleFile URL: e.g. https://ana-slo.com/2026-09-22-%e3%81%bf%e3%81%a8%e3%82%84%e5%a4%a7%e6%a3%ae%e7%94%ba%e5%ba%97-data/
+  if (!storeName) {
+    const canonical = doc.querySelector('link[rel="canonical"]')?.getAttribute('href') || '';
+    const urlText = canonical + ' ' + rawHtml.slice(0, 5000);
+    const urlMatch = urlText.match(/202\d-\d{1,2}-\d{1,2}-([^\s/]+)-data/);
+    if (urlMatch) {
+      try {
+        const decoded = decodeURIComponent(urlMatch[1]).replace(/[-_]/g, ' ').trim();
+        if (decoded) {
+          storeName = decoded;
+        }
+      } catch {
+        // ignore decode failure
+      }
+    }
+  }
+
+  // 1F. Fallback filename
+  if (!storeName && fileName) {
+    const cleanFileName = fileName
+      .replace(/\.[^/.]+$/, '')
+      .replace(/202\d[-_.]?\d{1,2}[-_.]?\d{1,2}/g, '')
+      .replace(/データまとめ|アナスロ|data/gi, '')
+      .replace(/[_\-\s]+/g, ' ')
+      .trim();
+    if (cleanFileName.length > 1) {
+      storeName = cleanFileName;
+    }
+  }
+
+  if (!storeName) {
+    storeName = 'アナスロ登録店舗';
+  }
+
+  // 2. Extract Date & Day of Week
+  let dateStr = '';
+  let dayOfWeek = '日';
+
+  const dateSearchText =
+    (doc.querySelector('h1.entry-title')?.textContent || '') +
+    ' ' +
+    (doc.title || '') +
+    ' ' +
+    (fileName || '') +
+    ' ' +
+    rawHtml.slice(0, 10000);
+
+  const dMatch1 = dateSearchText.match(/(202\d)[年/-](\d{1,2})[月/-](\d{1,2})/);
+  const dMatch2 = dateSearchText.match(/(202\d)\.(\d{1,2})\.(\d{1,2})/);
+  const dMatch3 = dateSearchText.match(/(202\d)-(\d{2})-(\d{2})/);
+
+  if (dMatch1) {
+    const y = parseInt(dMatch1[1], 10);
+    const m = parseInt(dMatch1[2], 10);
+    const d = parseInt(dMatch1[3], 10);
+    dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  } else if (dMatch2) {
+    const y = parseInt(dMatch2[1], 10);
+    const m = parseInt(dMatch2[2], 10);
+    const d = parseInt(dMatch2[3], 10);
+    dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  } else if (dMatch3) {
+    dateStr = `${dMatch3[1]}-${dMatch3[2]}-${dMatch3[3]}`;
+  }
+
+  if (!dateStr) {
+    errors.push(`HTML (${fileName || 'アナスロファイル'}) から日付を特定できませんでした。`);
+    return {
+      success: false,
+      errors,
+      totalRecordsCount: 0,
+    };
+  }
+
+  dayOfWeek = calculateDayOfWeek(dateStr);
+  const dowMatch = dateSearchText.match(/[\(（]([日月火水木金土])[\)）]/);
+  if (dowMatch) {
+    dayOfWeek = dowMatch[1];
+  }
+
+  // 3. Extract Detailed Machine & Model Data
+  const allParsedMachines: ParsedMachineRecord[] = [];
+  const parsedModels: DailyModelRecord[] = [];
+
+  // Query all headings in the document that represent models
+  const allHeadings = Array.from(doc.querySelectorAll('h4'));
+  const modelHeadings = allHeadings.filter((h) => {
+    const id = h.id || '';
+    if (id.startsWith('last_digit_section')) return false;
+    return id.startsWith('section') || h.textContent?.includes('設置');
+  });
+
+  modelHeadings.forEach((h4) => {
+    const headingTitle = h4.textContent?.trim() || '';
+    if (!headingTitle || headingTitle.includes('全データ一覧')) return;
+
+    const isVariety = headingTitle.includes('1台設置') || headingTitle.includes('バラエティ');
+
+    // Find the table associated with this h4
+    let curr: Element | null = h4.nextElementSibling;
+    let table: HTMLTableElement | null = null;
+    while (curr && curr.tagName !== 'H4' && curr.tagName !== 'H2') {
+      const found = curr.tagName === 'TABLE' ? (curr as HTMLTableElement) : curr.querySelector('table');
+      if (found) {
+        table = found;
+        break;
+      }
+      curr = curr.nextElementSibling;
+    }
+
+    if (!table) return;
+
+    if (isVariety) {
+      // 1台設置機種 table: each row is an individual model
+      // Format: <th class=fixed01>機種名</th><th>台番号</th><th>G数</th><th>差枚</th><th>BB</th><th>RB</th>
+      const rows = Array.from(table.querySelectorAll('tr'));
+      rows.forEach((row) => {
+        if (row.querySelector('th')) return;
+        const tds = Array.from(row.querySelectorAll('td'));
+        if (tds.length >= 4) {
+          const mName = tds[0].textContent?.trim() || '';
+          if (!mName || mName.includes('機種名') || mName.includes('平均')) return;
+
+          const machNum = parseInt(tds[1].textContent?.trim() || '0', 10);
+          const games = parseInt(tds[2].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
+          const diff = parseInt(tds[3].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
+          const bb = tds.length > 4 ? parseInt(tds[4].textContent?.replace(/[,+]/g, '').trim() || '0', 10) : 0;
+          const rb = tds.length > 5 ? parseInt(tds[5].textContent?.replace(/[,+]/g, '').trim() || '0', 10) : 0;
+
+          const tailDigit = machNum % 10;
+          const sMach = String(machNum);
+          const isZoro = sMach.length >= 2 && sMach.split('').every((c) => c === sMach[0]);
+
+          allParsedMachines.push({
+            machineNum: machNum,
+            modelName: mName,
+            games,
+            diff,
+            bb,
+            rb,
+            isZoro,
+            tailDigit,
+          });
+
+          parsedModels.push({
+            modelName: mName,
+            avgDiffCoins: diff,
+            totalDiffCoins: diff,
+            avgGames: games,
+            winMachines: diff > 0 ? 1 : 0,
+            totalMachines: 1,
+            winRate: diff > 0 ? 100 : 0,
+            isSmallCount: true,
+          });
+        }
+      });
+    } else {
+      // Multi-machine model section
+      const modelName = headingTitle;
+      const rows = Array.from(table.querySelectorAll('tr'));
+
+      let modelTotalGames = 0;
+      let modelTotalDiff = 0;
+      let modelWinCount = 0;
+      let modelMachineCount = 0;
+
+      rows.forEach((row) => {
+        if (row.querySelector('th')) return;
+        if (row.id === 'avg_data_rows' || row.textContent?.includes('平均')) return;
+
+        const tds = Array.from(row.querySelectorAll('td'));
+        if (tds.length >= 3) {
+          const machNum = parseInt(tds[0].textContent?.trim() || '0', 10);
+          const games = parseInt(tds[1].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
+          const diff = parseInt(tds[2].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
+          const bb = tds.length > 3 ? parseInt(tds[3].textContent?.replace(/[,+]/g, '').trim() || '0', 10) : 0;
+          const rb = tds.length > 4 ? parseInt(tds[4].textContent?.replace(/[,+]/g, '').trim() || '0', 10) : 0;
+
+          const tailDigit = machNum % 10;
+          const sMach = String(machNum);
+          const isZoro = sMach.length >= 2 && sMach.split('').every((c) => c === sMach[0]);
+
+          modelMachineCount++;
+          modelTotalGames += games;
+          modelTotalDiff += diff;
+          if (diff > 0) modelWinCount++;
+
+          allParsedMachines.push({
+            machineNum: machNum,
+            modelName,
+            games,
+            diff,
+            bb,
+            rb,
+            isZoro,
+            tailDigit,
+          });
+        }
+      });
+
+      if (modelMachineCount > 0) {
+        const mAvgDiff = Math.round(modelTotalDiff / modelMachineCount);
+        const mAvgGames = Math.round(modelTotalGames / modelMachineCount);
+        const mWinRate = Math.round((modelWinCount / modelMachineCount) * 1000) / 10;
+
+        parsedModels.push({
+          modelName,
+          avgDiffCoins: mAvgDiff,
+          totalDiffCoins: modelTotalDiff,
+          avgGames: mAvgGames,
+          winMachines: modelWinCount,
+          totalMachines: modelMachineCount,
+          winRate: mWinRate,
+          isSmallCount: modelMachineCount <= 2,
+        });
+      }
+    }
+  });
+
+  // 3B. Fallback if detailed section tables were not present: check "機種別データピックアップ"
+  if (parsedModels.length === 0) {
+    const pickupHeadings = Array.from(doc.querySelectorAll('h2, h3, h4'));
+    const pickupH2 = pickupHeadings.find((h) => h.textContent?.includes('データピックアップ'));
+    if (pickupH2) {
+      let curr = pickupH2.nextElementSibling;
+      while (curr && curr.tagName !== 'H2') {
+        const pTitle = curr.querySelector('p');
+        const tbl = curr.tagName === 'TABLE' ? (curr as HTMLTableElement) : curr.querySelector('table');
+        if (pTitle && tbl) {
+          const mNameMatch = pTitle.textContent?.match(/(?:\d+位[：:])?\s*(.+)$/);
+          const mName = mNameMatch ? mNameMatch[1].trim() : pTitle.textContent?.trim() || '';
+          const dataTds = Array.from(tbl.querySelectorAll('tr:nth-child(2) td, tr:not(:has(th)) td'));
+          if (dataTds.length >= 4) {
+            const totDiff = parseInt(dataTds[0].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
+            const avgDiff = parseInt(dataTds[1].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
+            const avgG = parseInt(dataTds[2].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
+            const wrTxt = dataTds[3].textContent?.trim() || '';
+
+            let winM = 0;
+            let totM = 1;
+            const slashM = wrTxt.match(/(\d+)\s*[\/／]\s*(\d+)/);
+            if (slashM) {
+              winM = parseInt(slashM[1], 10);
+              totM = parseInt(slashM[2], 10);
+            }
+            const winR = totM > 0 ? Math.round((winM / totM) * 1000) / 10 : null;
+
+            parsedModels.push({
+              modelName: mName,
+              avgDiffCoins: avgDiff,
+              totalDiffCoins: totDiff,
+              avgGames: avgG,
+              winMachines: winM,
+              totalMachines: totM,
+              winRate: winR,
+              isSmallCount: totM <= 2,
+            });
+          }
+        }
+        curr = curr.nextElementSibling;
+      }
+    }
+  }
+
+  // 4. Calculate Hall-Wide Overall Summary (全体結果)
+  let totalMachines = 0;
+  let winMachines: number | null = null;
+  let totalDiffCoins = 0;
+  let avgDiffCoins = 0;
+  let avgGames = 0;
+  let winRate: number | null = null;
+
+  if (allParsedMachines.length > 0) {
+    totalMachines = allParsedMachines.length;
+    const wins = allParsedMachines.filter((m) => m.diff > 0).length;
+    winMachines = wins;
+    totalDiffCoins = allParsedMachines.reduce((sum, m) => sum + m.diff, 0);
+    const totalGames = allParsedMachines.reduce((sum, m) => sum + m.games, 0);
+    avgDiffCoins = Math.round(totalDiffCoins / totalMachines);
+    avgGames = Math.round(totalGames / totalMachines);
+    winRate = Math.round((wins / totalMachines) * 1000) / 10;
+  } else if (parsedModels.length > 0) {
+    totalMachines = parsedModels.reduce((sum, m) => sum + m.totalMachines, 0);
+    const wins = parsedModels.reduce((sum, m) => sum + m.winMachines, 0);
+    winMachines = wins;
+    totalDiffCoins = parsedModels.reduce((sum, m) => sum + m.totalDiffCoins, 0);
+    const totalGames = parsedModels.reduce((sum, m) => sum + m.avgGames * m.totalMachines, 0);
+    avgDiffCoins = totalMachines > 0 ? Math.round(totalDiffCoins / totalMachines) : 0;
+    avgGames = totalMachines > 0 ? Math.round(totalGames / totalMachines) : 0;
+    winRate = totalMachines > 0 ? Math.round((wins / totalMachines) * 1000) / 10 : null;
+  } else {
+    totalMachines = 160;
+  }
+
+  // 5. Tail Number Analysis (末尾別結果)
+  const parsedTails: DailyTailRecord[] = [];
+
+  // Derive tails 0..9 directly from machine data for exact numbers
+  for (let t = 0; t <= 9; t++) {
+    const matching = allParsedMachines.filter((m) => m.tailDigit === t);
+    if (matching.length > 0) {
+      const tTotDiff = matching.reduce((sum, m) => sum + m.diff, 0);
+      const tTotGames = matching.reduce((sum, m) => sum + m.games, 0);
+      const tWins = matching.filter((m) => m.diff > 0).length;
+      const tAvgDiff = Math.round(tTotDiff / matching.length);
+      const tAvgGames = Math.round(tTotGames / matching.length);
+      const tWinRate = Math.round((tWins / matching.length) * 1000) / 10;
+
+      parsedTails.push({
+        tailName: `末尾${t}`,
+        tailNum: t,
+        avgDiffCoins: tAvgDiff,
+        totalDiffCoins: tTotDiff,
+        avgGames: tAvgGames,
+        winMachines: tWins,
+        totalMachines: matching.length,
+        winRate: tWinRate,
+      });
+    }
+  }
+
+  // Zoro tail (ゾロ目)
+  // Check if h4#last_digit_section10 (末尾ゾロ目) is present with specific machine numbers
+  const zoroH4 = Array.from(doc.querySelectorAll('h4[id*="last_digit"], h4')).find((h) => h.textContent?.includes('ゾロ目'));
+  let zoroMachNums: number[] = [];
+  if (zoroH4) {
+    let curr = zoroH4.nextElementSibling;
+    while (curr && curr.tagName !== 'H4' && curr.tagName !== 'H2') {
+      const tbl = curr.tagName === 'TABLE' ? (curr as HTMLTableElement) : curr.querySelector('table');
+      if (tbl) {
+        const rows = Array.from(tbl.querySelectorAll('tr'));
+        rows.forEach((r) => {
+          if (r.querySelector('th')) return;
+          const tds = Array.from(r.querySelectorAll('td'));
+          // In tail detail tables, td[1] is machine number (台番号), or td[0] if single column
+          const numStr = (tds.length >= 2 ? tds[1].textContent : tds[0]?.textContent) || '0';
+          const num = parseInt(numStr.trim(), 10);
+          if (num > 0) zoroMachNums.push(num);
+        });
+        break;
+      }
+      curr = curr.nextElementSibling;
+    }
+  }
+
+  const zoroMatches = zoroMachNums.length > 0
+    ? allParsedMachines.filter((m) => zoroMachNums.includes(m.machineNum))
+    : allParsedMachines.filter((m) => m.isZoro);
+
+  if (zoroMatches.length > 0) {
+    const zTotDiff = zoroMatches.reduce((sum, m) => sum + m.diff, 0);
+    const zTotGames = zoroMatches.reduce((sum, m) => sum + m.games, 0);
+    const zWins = zoroMatches.filter((m) => m.diff > 0).length;
+    const zAvgDiff = Math.round(zTotDiff / zoroMatches.length);
+    const zAvgGames = Math.round(zTotGames / zoroMatches.length);
+    const zWinRate = Math.round((zWins / zoroMatches.length) * 1000) / 10;
+
+    parsedTails.push({
+      tailName: '末尾 ゾロ目',
+      tailNum: null,
+      avgDiffCoins: zAvgDiff,
+      totalDiffCoins: zTotDiff,
+      avgGames: zAvgGames,
+      winMachines: zWins,
+      totalMachines: zoroMatches.length,
+      winRate: zWinRate,
+    });
+  }
+
+  // Fallback if allParsedMachines was empty: parse table#last_digit_data_table directly
+  if (parsedTails.length === 0) {
+    const lastDigitTable = doc.querySelector('table#last_digit_data_table, #last_digit_list table');
+    if (lastDigitTable) {
+      const rows = Array.from(lastDigitTable.querySelectorAll('tr'));
+      rows.forEach((row) => {
+        if (row.querySelector('th')) return;
+        const tds = Array.from(row.querySelectorAll('td'));
+        if (tds.length >= 4) {
+          const tailTxt = tds[0].textContent?.trim() || '';
+          const totDiff = parseInt(tds[1].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
+          const avgDiff = parseInt(tds[2].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
+          const avgG = parseInt(tds[3].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
+          const wrTxt = tds[4]?.textContent?.trim() || '';
+
+          let tWin = 0;
+          let tTot = 1;
+          const sMatch = wrTxt.match(/(\d+)\s*[\/／]\s*(\d+)/);
+          if (sMatch) {
+            tWin = parseInt(sMatch[1], 10);
+            tTot = parseInt(sMatch[2], 10);
+          }
+          const tWinRate = tTot > 0 ? Math.round((tWin / tTot) * 1000) / 10 : null;
+          const numMatch = tailTxt.match(/\d+/);
+          const tailNum = numMatch ? parseInt(numMatch[0], 10) : null;
+          const tailName = tailNum !== null ? `末尾${tailNum}` : tailTxt;
+
+          parsedTails.push({
+            tailName,
+            tailNum,
+            avgDiffCoins: avgDiff,
+            totalDiffCoins: totDiff || avgDiff * tTot,
+            avgGames: avgG,
+            winMachines: tWin,
+            totalMachines: tTot,
+            winRate: tWinRate,
+          });
+        }
+      });
+    }
+  }
+
+  // 6. Notable / Top Models Pickup
+  const positiveModels = [...parsedModels]
+    .filter((m) => m.avgDiffCoins > 0)
+    .sort((a, b) => b.avgDiffCoins - a.avgDiffCoins);
+
+  const notable =
+    positiveModels
+      .slice(0, 4)
+      .map((m) => `${m.modelName.replace(/^L|スマスロ|パチスロ/g, '')}(+${m.avgDiffCoins.toLocaleString()})`)
+      .join('、') || '出玉データあり';
+
+  // 7. Store Profile & Default Rates
+  let address = '東京都';
+  let oldEventDays = '7のつく日';
+  let exchangeRateStr = '46枚貸/52枚交換';
+  const { rateLend, rateExchange } = parseRatesFromExchangeRate(exchangeRateStr);
+
+  const specialDayRules: SpecialDayRules = parseSpecialDayRulesFromText(
+    storeName.includes('7') ? '7のつく日' : storeName.includes('5') ? '5のつく日' : '7のつく日'
+  );
+
+  const isOldEventDay = isDateSpecialDay(dateStr, specialDayRules);
+  const day = parseInt(dateStr.split('-')[2], 10);
+  const is7Day = day % 10 === 7;
+
+  const [yearStr, monthStr] = dateStr.split('-');
+  const year = parseInt(yearStr, 10);
+  const month = parseInt(monthStr, 10);
+  const yearMonth = `${yearStr}-${monthStr}`;
+
+  const dailyRecord: DailyRecord = {
+    date: dateStr,
+    yearMonth,
+    year,
+    month,
+    day,
+    dayOfWeek,
+    avgDiffCoins,
+    avgGames,
+    winRate,
+    winMachines,
+    totalMachines,
+    totalDiffCoins,
+    hallCoinProfit: -totalDiffCoins,
+    playerCoinProfit: totalDiffCoins,
+    hallYenProfit: 0,
+    playerYenProfit: 0,
+    inCoins: 0,
+    outCoins: 0,
+    payoutRate: 100,
+    estimatedRevenue: 0,
+    exchangeGapProfit: 0,
+    gModelHallProfit: 0,
+    gModelPlayerProfit: 0,
+    isOldEventDay,
+    is7Day,
+    notable,
+    models: parsedModels,
+    tails: parsedTails,
+  };
+
+  const processed = processStoreData([dailyRecord], rateLend, rateExchange, 35, specialDayRules);
+
+  const storeProfile: StoreProfile = {
+    id: `store-${storeName.replace(/[\s\u3000]+/g, '-').toLowerCase()}`,
+    name: storeName,
+    address,
+    oldEventDays,
+    exchangeRate: exchangeRateStr,
+    rateLend,
+    rateExchange,
+    cashRatio: 35,
+    totalMachinesApprox: totalMachines,
+    dataRange: dateStr,
+    specialDayRules,
+    dailyRecords: processed.dailyRecords,
+  };
+
+  return {
+    success: true,
+    store: storeProfile,
+    errors: [],
+    totalRecordsCount: 1,
+  };
+}
+
 /**
  * Parses a Slorepo daily report page (日別出玉データ).
  * Extracts store name, date, overall results (全体結果: 総差枚, 平均差枚, 平均G数, 勝率),
  * model breakdown (機種別データ & 少台数機種), tail results (末尾別結果), and top pickup models.
  */
 export function parseSlorepoDailyHtml(doc: Document, rawHtml: string, fileName: string = ''): ParseHtmlResult {
+  // Delegate if this is an Ana-slo format page
+  if (
+    rawHtml.includes('ana-slo.com') ||
+    rawHtml.includes('アナスロ') ||
+    doc.querySelector('#last_digit_data_table') !== null ||
+    doc.querySelector('#machine_list') !== null
+  ) {
+    return parseAnaSloDailyHtml(doc, rawHtml, fileName);
+  }
+
   const errors: string[] = [];
 
   // 1. Extract Store Name
@@ -456,8 +1048,21 @@ export function parseSlorepoHtml(htmlContent: string, fileName: string = ''): Pa
     const parser = new DOMParser();
     const doc = parser.parseFromString(htmlContent, 'text/html');
 
-    // Check if this is a Daily Report file (contains 全体結果 or 機種別データ or 末尾別結果 or 総差枚)
+    // Check if this is an Ana-slo (アナスロ: ana-slo.com) daily report
     const bodyText = doc.body?.textContent || '';
+    const isAnaSlo =
+      htmlContent.includes('ana-slo.com') ||
+      htmlContent.includes('アナスロ') ||
+      doc.querySelector('#last_digit_data_table') !== null ||
+      doc.querySelector('#last_digit_list') !== null ||
+      doc.querySelector('#machine_list') !== null ||
+      (bodyText.includes('データまとめ') && (bodyText.includes('末尾別データ') || bodyText.includes('詳細データ')));
+
+    if (isAnaSlo) {
+      return parseAnaSloDailyHtml(doc, htmlContent, fileName);
+    }
+
+    // Check if this is a Daily Report file (contains 全体結果 or 機種別データ or 末尾別結果 or 総差枚)
     const isDailyReport =
       bodyText.includes('全体結果') ||
       (bodyText.includes('機種別') && (bodyText.includes('末尾') || bodyText.includes('差枚'))) ||

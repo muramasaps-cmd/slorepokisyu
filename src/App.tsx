@@ -14,6 +14,7 @@ import { DailyModal } from './components/DailyModal';
 import { StoreManagerModal } from './components/StoreManagerModal';
 import { ConfirmModal } from './components/ConfirmModal';
 import { ModelMultiSelectModal } from './components/ModelMultiSelectModal';
+import { TargetDateRanking } from './components/TargetDateRanking';
 import { processStoreData, aggregateStoreModels } from './utils/dataEngine';
 import { parseSlorepoHtml, parseRatesFromExchangeRate } from './utils/htmlParser';
 import { parseSpecialDayRulesFromText } from './utils/specialDayRules';
@@ -133,6 +134,18 @@ export default function App() {
   const [modelPreset, setModelPreset] = useState<ModelPresetMode>('all');
   const [selectedModelNames, setSelectedModelNames] = useState<string[]>([]);
   const [isMultiSelectModalOpen, setIsMultiSelectModalOpen] = useState<boolean>(false);
+
+  // Target Date (攻略狙い日) State
+  const [targetDate, setTargetDate] = useState<string>('');
+
+  const latestDataDate = useMemo(() => {
+    if (!currentStore?.dailyRecords || currentStore.dailyRecords.length === 0) return '';
+    let maxDate = '';
+    for (const r of currentStore.dailyRecords) {
+      if (r.date > maxDate) maxDate = r.date;
+    }
+    return maxDate;
+  }, [currentStore?.dailyRecords]);
 
   // Drag-and-drop state on empty screen
   const [emptyScreenDragging, setEmptyScreenDragging] = useState<boolean>(false);
@@ -633,6 +646,7 @@ export default function App() {
           rateLend: rateLend,
           rateExchange: rateExchange,
           totalMachinesApprox: currentStore.totalMachinesApprox,
+          specialDayRules: currentStore.specialDayRules,
         }}
         perspective={perspective}
         setPerspective={setPerspective}
@@ -647,6 +661,9 @@ export default function App() {
         totalMonths={filteredMonthlyStats.length}
         onOpenStoreManager={() => setIsStoreModalOpen(true)}
         onChangeOldEventDays={handleChangeOldEventDays}
+        targetDate={targetDate}
+        setTargetDate={setTargetDate}
+        latestDataDate={latestDataDate}
       />
 
       {/* Main Content Area */}
@@ -1012,6 +1029,21 @@ export default function App() {
             />
           </div>
         </div>
+
+        {/* 攻略狙い日 指定時の狙い台・おすすめ機種ランキング */}
+        {targetDate && (
+          <TargetDateRanking
+            targetDate={targetDate}
+            setTargetDate={setTargetDate}
+            dailyRecords={currentStore.dailyRecords || []}
+            perspective={perspective}
+            unit={unit}
+            rateLend={rateLend}
+            rateExchange={rateExchange}
+            specialDayRules={currentStore.specialDayRules}
+            oldEventDays={currentStore.oldEventDays}
+          />
+        )}
 
         {/* 店舗分析深堀り: 機種別・台番号末尾詳細分析 */}
         <ModelDeepAnalysis

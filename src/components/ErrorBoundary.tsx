@@ -1,6 +1,5 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { AlertTriangle, RotateCcw, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
-import { ATTACHED_STORE } from '../data/attachedStore';
 
 interface Props {
   children: ReactNode;
@@ -33,8 +32,6 @@ export class ErrorBoundary extends Component<Props, State> {
   private handleResetAndRecover = () => {
     try {
       localStorage.clear();
-      localStorage.setItem('SLOT_ANALYZER_HTML_STORES_V2', JSON.stringify([ATTACHED_STORE]));
-      localStorage.setItem('SLOT_ANALYZER_HTML_ACTIVE_ID_V2', ATTACHED_STORE.id);
     } catch (e) {
       console.error('Failed to reset storage:', e);
     }

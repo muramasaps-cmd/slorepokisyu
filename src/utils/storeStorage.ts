@@ -1,7 +1,6 @@
 import { DailyRecord, StoreProfile } from '../data/types';
 import { parseRatesFromExchangeRate } from './htmlParser';
 import { parseSpecialDayRulesFromText } from './specialDayRules';
-import { ATTACHED_STORE } from '../data/attachedStore';
 
 const STORAGE_KEY_STORES = 'SLOT_ANALYZER_HTML_STORES_V2';
 const STORAGE_KEY_ACTIVE_ID = 'SLOT_ANALYZER_HTML_ACTIVE_ID_V2';
@@ -98,9 +97,9 @@ export function mergeDailyRecords(recordsA: DailyRecord[] = [], recordsB: DailyR
 /**
  * Helper to normalize store rates and fill any blank machine counts from other days
  */
-function normalizeStore(store: StoreProfile): StoreProfile {
-  if (!store || typeof store !== 'object') {
-    return ATTACHED_STORE;
+function normalizeStore(store: StoreProfile): StoreProfile | null {
+  if (!store || typeof store !== 'object' || !store.name) {
+    return null;
   }
   let rateLend = store.rateLend || 46;
   let rateExchange = store.rateExchange || 52;
@@ -202,11 +201,11 @@ export function getSavedStores(): StoreProfile[] {
     if (raw !== null) {
       const parsed: StoreProfile[] = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        // Filter out dummy store 'plaza-515' and any invalid entries
+        // Filter out dummy store 'plaza-515', sample store 'store-maruhan-kamata', and any invalid entries
         const filtered = parsed
-          .filter((s) => s && typeof s === 'object' && s.id !== 'plaza-515')
+          .filter((s) => s && typeof s === 'object' && s.id !== 'plaza-515' && s.id !== 'store-maruhan-kamata' && s.id !== 'sample-store')
           .map(normalizeStore)
-          .filter(Boolean);
+          .filter((s): s is StoreProfile => Boolean(s));
 
         if (filtered.length > 0) {
           // Deduplicate stores using areStoresSame
@@ -254,14 +253,11 @@ export function getSavedStores(): StoreProfile[] {
       }
     }
 
-    // Default to the attached store data (使用するのは添付したデータのみ)
-    const initial = [ATTACHED_STORE];
-    saveStoresToStorage(initial);
-    setActiveStoreId(ATTACHED_STORE.id);
-    return initial;
+    // Only user-imported HTML stores are kept. Empty when no imported stores.
+    return [];
   } catch (err) {
     console.warn('Failed to load stores from localStorage', err);
-    return [ATTACHED_STORE];
+    return [];
   }
 }
 

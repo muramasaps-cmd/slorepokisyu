@@ -90,13 +90,18 @@ export function mergeDailyRecords(recordsA: DailyRecord[] = [], recordsB: DailyR
     }
   }
 
-  return Array.from(dateMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+  return Array.from(dateMap.values())
+    .filter((r) => r && r.date)
+    .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
 }
 
 /**
  * Helper to normalize store rates and fill any blank machine counts from other days
  */
 function normalizeStore(store: StoreProfile): StoreProfile {
+  if (!store || typeof store !== 'object') {
+    return ATTACHED_STORE;
+  }
   let rateLend = store.rateLend || 46;
   let rateExchange = store.rateExchange || 52;
   if (store.exchangeRate) {
@@ -116,8 +121,8 @@ function normalizeStore(store: StoreProfile): StoreProfile {
     specialDayRules = parseSpecialDayRulesFromText(store.oldEventDays || '');
   }
 
-  if (store.dailyRecords && store.dailyRecords.length > 0) {
-    const validWithMachines = store.dailyRecords.filter((r) => r.totalMachines && r.totalMachines > 0);
+  if (store.dailyRecords && Array.isArray(store.dailyRecords) && store.dailyRecords.length > 0) {
+    const validWithMachines = store.dailyRecords.filter((r) => r && r.totalMachines && r.totalMachines > 0);
     let fallbackCount = store.totalMachinesApprox || 162;
     if (validWithMachines.length > 0) {
       const freq = new Map<number, number>();
@@ -131,13 +136,13 @@ function normalizeStore(store: StoreProfile): StoreProfile {
       });
     }
 
-    const normalizedRecords = store.dailyRecords.map((r, idx) => {
+    const normalizedRecords = store.dailyRecords.filter(Boolean).map((r, idx) => {
       if (!r.totalMachines || r.totalMachines <= 0) {
         let nearestDist = Infinity;
         let nearestCount = fallbackCount;
         for (let i = 0; i < store.dailyRecords.length; i++) {
           const other = store.dailyRecords[i];
-          if (other.totalMachines && other.totalMachines > 0) {
+          if (other && other.totalMachines && other.totalMachines > 0) {
             const dist = Math.abs(i - idx);
             if (dist < nearestDist) {
               nearestDist = dist;
@@ -168,6 +173,7 @@ function normalizeStore(store: StoreProfile): StoreProfile {
 
     return {
       ...store,
+      name: store.name || 'スロット店舗',
       rateLend,
       rateExchange,
       specialDayRules,
@@ -178,6 +184,7 @@ function normalizeStore(store: StoreProfile): StoreProfile {
 
   return {
     ...store,
+    name: store.name || 'スロット店舗',
     rateLend,
     rateExchange,
     specialDayRules,
@@ -195,13 +202,17 @@ export function getSavedStores(): StoreProfile[] {
     if (raw !== null) {
       const parsed: StoreProfile[] = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        // Filter out dummy store 'plaza-515'
-        const filtered = parsed.filter((s) => s.id !== 'plaza-515').map(normalizeStore);
+        // Filter out dummy store 'plaza-515' and any invalid entries
+        const filtered = parsed
+          .filter((s) => s && typeof s === 'object' && s.id !== 'plaza-515')
+          .map(normalizeStore)
+          .filter(Boolean);
+
         if (filtered.length > 0) {
           // Deduplicate stores using areStoresSame
           const deduped: StoreProfile[] = [];
           for (const s of filtered) {
-            const existingIdx = deduped.findIndex((d) => d.id === s.id || areStoresSame(d.name, s.name));
+            const existingIdx = deduped.findIndex((d) => d && (d.id === s.id || areStoresSame(d.name, s.name)));
             if (existingIdx === -1) {
               deduped.push(s);
             } else {
@@ -211,18 +222,18 @@ export function getSavedStores(): StoreProfile[] {
               const updatedStore: StoreProfile = {
                 ...existing,
                 // Prefer shorter or cleaner name without trailing numbers if both exist
-                name: existing.name.length <= s.name.length ? existing.name : s.name,
-                address: existing.address && existing.address !== '住所未登録' ? existing.address : s.address,
-                oldEventDays: existing.oldEventDays || s.oldEventDays,
-                exchangeRate: existing.exchangeRate || s.exchangeRate,
-                rateLend: existing.rateLend || s.rateLend,
-                rateExchange: existing.rateExchange || s.rateExchange,
+                name: (existing.name?.length || 0) <= (s.name?.length || 0) ? (existing.name || s.name) : (s.name || existing.name),
+                address: existing.address && existing.address !== '住所未登録' ? existing.address : (s.address || '住所未登録'),
+                oldEventDays: existing.oldEventDays || s.oldEventDays || '',
+                exchangeRate: existing.exchangeRate || s.exchangeRate || '',
+                rateLend: existing.rateLend || s.rateLend || 46,
+                rateExchange: existing.rateExchange || s.rateExchange || 52,
                 totalMachinesApprox: Math.max(existing.totalMachinesApprox || 0, s.totalMachinesApprox || 0),
                 dailyRecords: mergedDaily,
                 dataRange:
-                  mergedDaily.length > 0
-                    ? `${mergedDaily[0]?.date.slice(0, 7)} ～ ${mergedDaily[mergedDaily.length - 1]?.date.slice(0, 7)}`
-                    : existing.dataRange,
+                  mergedDaily.length > 0 && mergedDaily[0]?.date && mergedDaily[mergedDaily.length - 1]?.date
+                    ? `${mergedDaily[0].date.slice(0, 7)} ～ ${mergedDaily[mergedDaily.length - 1].date.slice(0, 7)}`
+                    : (existing.dataRange || ''),
                 updatedAt: new Date().toISOString(),
               };
               deduped[existingIdx] = updatedStore;

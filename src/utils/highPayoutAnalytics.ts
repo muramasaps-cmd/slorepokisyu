@@ -306,8 +306,10 @@ export function analyzeHighPayoutMachines(
   const allItems: ExtractedHighPayoutItem[] = [];
   const highItems: ExtractedHighPayoutItem[] = [];
 
-  // Sort daily records chronologically for previous-day tracking
-  const sortedRecords = [...dailyRecords].sort((a, b) => a.date.localeCompare(b.date));
+  // Sort daily records chronologically for previous-day tracking (filtered for valid dates)
+  const sortedRecords = [...(dailyRecords || [])]
+    .filter((r) => r && r.date)
+    .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
 
   // Build date-indexed map of models to look up previous day
   const dateModelMap = new Map<string, Map<string, { avgDiffCoins: number; payoutRate: number; avgGames: number }>>();
@@ -1169,13 +1171,19 @@ export function analyzeHighPayoutMachines(
 
   // Top scale
   const sortedScales = [...scaleStats].sort((a, b) => b.highPayoutCount - a.highPayoutCount);
-  const topScaleItem = sortedScales[0];
+  const topScaleItem = sortedScales[0] || {
+    scaleType: 'large' as MachineScaleType,
+    label: '多台数主力',
+    highPayoutCount: 0,
+    shareOfHighPayout: 0,
+    highPayoutRate: 0,
+  };
   const topScale = {
     scaleType: topScaleItem.scaleType,
     label: topScaleItem.label,
-    highCount: topScaleItem.highPayoutCount,
-    share: topScaleItem.shareOfHighPayout,
-    rate: topScaleItem.highPayoutRate,
+    highCount: topScaleItem.highPayoutCount || 0,
+    share: topScaleItem.shareOfHighPayout || 0,
+    rate: topScaleItem.highPayoutRate || 0,
   };
 
   // Build Diagnostic Scores (1..5)

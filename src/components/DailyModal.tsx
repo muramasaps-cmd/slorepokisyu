@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { DailyRecord, MonthlyStat } from '../data/types';
-import { ProfitModelType } from './Header';
+import { ProfitModelType, UnitMode } from './Header';
 import { formatYen, formatYenExact, formatCoinsExact, formatNumber } from '../utils/formatters';
 import { analyzeSpecialDayPatterns } from '../utils/specialDayPatterns';
 import {
@@ -29,7 +29,7 @@ interface DailyModalProps {
   monthlyStats: MonthlyStat[];
   dailyRecords: DailyRecord[];
   perspective: 'hall' | 'player';
-  unit: 'yen' | 'coins' | 'avgDiff';
+  unit: UnitMode;
   profitModel?: any;
   onClose: () => void;
 }
@@ -147,7 +147,11 @@ export const DailyModal: React.FC<DailyModalProps> = ({
                   </span>
                 </div>
                 <p className="text-slate-600 mt-0.5 text-[11px] leading-relaxed">
-                  {monthPattern.explanation}
+                  {monthPattern.classificationName === '還元集中' || monthPattern.classification === 'all_win'
+                    ? 'すべての特日でプレイヤー優勢（還元）となった月です。'
+                    : monthPattern.classification === 'all_loss'
+                    ? 'すべての特日でホール優勢（回収）となった月です。'
+                    : '特日によって還元・回収が分かれた月です。'}
                 </p>
               </div>
             </div>
@@ -169,7 +173,7 @@ export const DailyModal: React.FC<DailyModalProps> = ({
                       ev.isWin ? 'bg-emerald-200 text-emerald-900' : 'bg-rose-200 text-rose-900'
                     }`}
                   >
-                    {ev.status}
+                    {ev.isWin ? '客勝ち' : '店勝ち'}
                   </span>
                   <span className="text-[11px] font-semibold">
                     {ev.avgDiffCoins > 0 ? `+${ev.avgDiffCoins}` : ev.avgDiffCoins}枚

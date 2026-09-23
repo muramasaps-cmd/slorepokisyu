@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { StoreProfile, MonthlyStat, DailyRecord } from './data/types';
+import { ATTACHED_STORE } from './data/attachedStore';
 import { Header, ProfitModelType, UnitMode } from './components/Header';
 import { KpiCards } from './components/KpiCards';
 import { ModelComparisonBanner } from './components/ModelComparisonBanner';
@@ -557,6 +558,27 @@ export default function App() {
                 <span>{emptyError}</span>
               </div>
             )}
+
+            {/* Quick load sample attached store button */}
+            <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+              <span className="text-slate-500">
+                HTMLファイルをお持ちでない場合、すぐに分析画面を体験できます:
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  const initial = [ATTACHED_STORE];
+                  saveStoresToStorage(initial);
+                  setActiveStoreId(ATTACHED_STORE.id);
+                  setStores(initial);
+                  setActiveStoreIdState(ATTACHED_STORE.id);
+                }}
+                className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl shadow-xs transition-colors cursor-pointer flex items-center gap-1.5 shrink-0"
+              >
+                <Building2 className="w-4 h-4" />
+                サンプル店舗データ（マルハン蒲田）を表示
+              </button>
+            </div>
           </div>
         </main>
       </div>
@@ -608,7 +630,7 @@ export default function App() {
                 onChange={(e) => handleSelectStore(e.target.value)}
                 className="text-xs font-bold text-slate-900 bg-transparent focus:outline-hidden cursor-pointer"
               >
-                {stores.map((s) => (
+                {uniqueStores.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name} ({s.totalMachinesApprox}台)
                   </option>

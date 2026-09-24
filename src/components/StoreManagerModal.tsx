@@ -7,6 +7,8 @@ import {
   readFilesAsText,
   ParsedStoreGroup,
 } from '../utils/multiHtmlParser';
+import { parseSlorepoHtml } from '../utils/htmlParser';
+import { SAMPLE_ANA_SLO_HTML, SAMPLE_ANA_SLO_FILENAME } from '../data/sampleAnaSlo';
 import {
   X,
   Building2,
@@ -230,6 +232,32 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
     setConfirmResetOpen(true);
   };
 
+  // Load sample data
+  const handleLoadSample = () => {
+    setIsProcessing(true);
+    setProcessStatus('添付サンプル（みとや大森町店）を読み込み中...');
+    try {
+      const res = parseSlorepoHtml(SAMPLE_ANA_SLO_HTML, SAMPLE_ANA_SLO_FILENAME);
+      if (res.success && res.store) {
+        if (onSaveStores) {
+          onSaveStores([res.store], res.store.id);
+        } else {
+          onSaveStore(res.store);
+          onSelectStore(res.store.id);
+        }
+        setParseSuccessMsg('添付サンプル（みとや大森町店 2026/09/22）を正常に読み込みました！');
+        setActiveTab('list');
+      } else {
+        setParseErrors(res.errors || ['サンプルデータの解析に失敗しました。']);
+      }
+    } catch (e: any) {
+      setParseErrors([e?.message || 'サンプルの読み込み中にエラーが発生しました。']);
+    } finally {
+      setIsProcessing(false);
+      setProcessStatus('');
+    }
+  };
+
   const grandTotalRecordsInStaged = stagedGroups.reduce(
     (acc, g) => acc + g.totalRecordsCount,
     0
@@ -308,14 +336,40 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
           {/* TAB 1: HTML IMPORT */}
           {activeTab === 'import' && (
             <div className="space-y-6">
+              {/* Sample Quick Load Banner */}
+              <div className="bg-gradient-to-r from-amber-500/15 via-amber-500/5 to-slate-50 border border-amber-300 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <span className="bg-amber-500 text-slate-950 text-[10px] font-black px-2 py-0.5 rounded shadow-2xs">
+                      添付サンプル対応
+                    </span>
+                    <span className="font-extrabold text-slate-900 text-xs sm:text-sm">
+                      みとや大森町店 (2026/09/22) アナスロ実データ
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-600">
+                    全277台・42機種別・末尾0〜9・ゾロ目データを含む実ファイルを1クリックで取り込みます。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleLoadSample}
+                  disabled={isProcessing}
+                  className="px-4 py-2 bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-bold text-xs rounded-xl shadow-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all shrink-0"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-slate-950" />
+                  <span>サンプルを読込</span>
+                </button>
+              </div>
+
               {/* Guidance Banner */}
               <div className="p-4 bg-amber-50/80 border border-amber-200/80 rounded-xl text-xs text-amber-900 space-y-1.5">
                 <div className="font-bold flex items-center gap-1.5 text-amber-950">
                   <FileCode className="w-4 h-4 text-amber-600" />
-                  スロレポ（slorepo.com）の複数HTMLファイル一括取り込みに対応
+                  アナスロ（ana-slo.com）およびスロレポ（slorepo.com）の複数HTMLファイル一括取り込みに対応
                 </div>
                 <p className="text-amber-800 leading-relaxed">
-                  保存したスロレポ店舗HTML（<code>.html</code> / <code>.htm</code>）を<strong>複数まとめてドラッグ＆ドロップまたは選択</strong>できます。
+                  保存したアナスロ／スロレポ店舗HTML（<code>.html</code> / <code>.htm</code>）を<strong>複数まとめてドラッグ＆ドロップまたは選択</strong>できます。
                   同じ店舗の複数月ファイルは<strong>重複日付を除去して自動統合</strong>され、別店舗のファイルは<strong>店舗ごとに自動分類</strong>してワンクリックで一括登録できます。
                 </p>
               </div>

@@ -45,8 +45,9 @@ export const DailyModal: React.FC<DailyModalProps> = ({
 }) => {
   const [filterType, setFilterType] = useState<'all' | 'eventOnly' | 'winOnly' | 'lossOnly'>('all');
   const [expandedDate, setExpandedDate] = useState<string | null>(null);
-  const [detailTab, setDetailTab] = useState<'models' | 'tails'>('models');
+  const [detailTab, setDetailTab] = useState<'models' | 'tails' | 'machines'>('models');
   const [dailyModelFilter, setDailyModelFilter] = useState<'all' | 'smart_slot' | 'a_type' | 'juggler'>('all');
+  const [machineSearch, setMachineSearch] = useState<string>('');
 
   const monthSummary = useMemo(() => {
     return monthlyStats.find((m) => m.yearMonth === yearMonth);
@@ -411,6 +412,19 @@ export const DailyModal: React.FC<DailyModalProps> = ({
                                 >
                                   台番号末尾 ({d.tails?.length || 0})
                                 </button>
+                                {d.machines && d.machines.length > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setDetailTab('machines')}
+                                    className={`px-3 py-1 font-bold rounded cursor-pointer ${
+                                      detailTab === 'machines'
+                                        ? 'bg-white text-slate-900 shadow-2xs'
+                                        : 'text-slate-500 hover:text-slate-900'
+                                    }`}
+                                  >
+                                    台番号別 ({d.machines.length})
+                                  </button>
+                                )}
                               </div>
                             </div>
 
@@ -577,6 +591,89 @@ export const DailyModal: React.FC<DailyModalProps> = ({
                                     </div>
                                   </div>
                                 ))}
+                              </div>
+                            )}
+
+                            {/* Daily Machines Tab */}
+                            {detailTab === 'machines' && d.machines && (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="text"
+                                    value={machineSearch}
+                                    onChange={(e) => setMachineSearch(e.target.value)}
+                                    placeholder="台番号または機種名で検索..."
+                                    className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs w-64 focus:bg-white focus:outline-hidden focus:ring-1 focus:ring-amber-500"
+                                  />
+                                  <span className="text-xs text-slate-500">
+                                    全{d.machines.length}台中{' '}
+                                    {
+                                      d.machines.filter(
+                                        (m) =>
+                                          !machineSearch ||
+                                          String(m.machineNum).includes(machineSearch) ||
+                                          m.modelName.toLowerCase().includes(machineSearch.toLowerCase())
+                                      ).length
+                                    }
+                                    台表示
+                                  </span>
+                                </div>
+                                <div className="max-h-80 overflow-y-auto border border-slate-200 rounded-lg">
+                                  <table className="w-full text-left text-xs">
+                                    <thead className="bg-slate-100 text-slate-600 sticky top-0 font-bold border-b border-slate-200">
+                                      <tr>
+                                        <th className="p-2">台番号</th>
+                                        <th className="p-2">機種名</th>
+                                        <th className="p-2 text-right">差枚</th>
+                                        <th className="p-2 text-right">G数</th>
+                                        <th className="p-2 text-right">BB</th>
+                                        <th className="p-2 text-right">RB</th>
+                                        <th className="p-2 text-right">末尾</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                      {d.machines
+                                        .filter(
+                                          (m) =>
+                                            !machineSearch ||
+                                            String(m.machineNum).includes(machineSearch) ||
+                                            m.modelName.toLowerCase().includes(machineSearch.toLowerCase())
+                                        )
+                                        .map((m) => (
+                                          <tr key={m.machineNum} className="hover:bg-slate-50">
+                                            <td className="p-2 font-bold flex items-center gap-1">
+                                              <span>{m.machineNum}</span>
+                                              {m.isZoro && (
+                                                <span className="bg-amber-100 text-amber-800 text-[10px] px-1 rounded font-bold">
+                                                  ゾロ目
+                                                </span>
+                                              )}
+                                            </td>
+                                            <td className="p-2 font-medium text-slate-800">{m.modelName}</td>
+                                            <td
+                                              className={`p-2 text-right font-bold ${
+                                                m.diff > 0
+                                                  ? 'text-blue-600'
+                                                  : m.diff < 0
+                                                  ? 'text-rose-600'
+                                                  : 'text-slate-600'
+                                              }`}
+                                            >
+                                              {m.diff > 0 ? `+${m.diff.toLocaleString()}` : m.diff.toLocaleString()}
+                                            </td>
+                                            <td className="p-2 text-right text-slate-600">
+                                              {m.games.toLocaleString()}G
+                                            </td>
+                                            <td className="p-2 text-right text-slate-600">{m.bb ?? '-'}</td>
+                                            <td className="p-2 text-right text-slate-600">{m.rb ?? '-'}</td>
+                                            <td className="p-2 text-right font-semibold text-slate-500">
+                                              末尾{m.tailDigit ?? m.machineNum % 10}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                    </tbody>
+                                  </table>
+                                </div>
                               </div>
                             )}
                           </div>

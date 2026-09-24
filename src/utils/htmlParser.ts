@@ -579,13 +579,39 @@ export function parseAnaSloDailyHtml(
 
   // 7. Store Profile & Default Rates
   let address = '東京都';
+  const catSpans = Array.from(
+    doc.querySelectorAll('.st-catgroup a span, #breadcrumb a span, a[rel="category tag"], a[href*="/category/"]')
+  );
+  for (const span of catSpans) {
+    const txt = span.textContent?.trim() || '';
+    if (/(東京都|北海道|京都府|大阪府|.{2,3}県)/.test(txt)) {
+      address = txt;
+      break;
+    }
+  }
+
   let oldEventDays = '7のつく日';
+  if (storeName.includes('みとや')) {
+    oldEventDays = '3のつく日・8のつく日・月日ゾロ目・11日・22日';
+  } else if (storeName.includes('7')) {
+    oldEventDays = '7のつく日';
+  } else if (storeName.includes('5')) {
+    oldEventDays = '5のつく日';
+  } else if (storeName.includes('3')) {
+    oldEventDays = '3のつく日';
+  } else if (storeName.includes('0')) {
+    oldEventDays = '0のつく日';
+  } else if (storeName.includes('1')) {
+    oldEventDays = '1のつく日';
+  } else if (storeName.includes('6')) {
+    oldEventDays = '6のつく日';
+  } else if (storeName.includes('8')) {
+    oldEventDays = '8のつく日';
+  }
+
   let exchangeRateStr = '46枚貸/52枚交換';
   const { rateLend, rateExchange } = parseRatesFromExchangeRate(exchangeRateStr);
-
-  const specialDayRules: SpecialDayRules = parseSpecialDayRulesFromText(
-    storeName.includes('7') ? '7のつく日' : storeName.includes('5') ? '5のつく日' : '7のつく日'
-  );
+  const specialDayRules: SpecialDayRules = parseSpecialDayRulesFromText(oldEventDays);
 
   const isOldEventDay = isDateSpecialDay(dateStr, specialDayRules);
   const day = parseInt(dateStr.split('-')[2], 10);
@@ -625,6 +651,7 @@ export function parseAnaSloDailyHtml(
     notable,
     models: parsedModels,
     tails: parsedTails,
+    machines: allParsedMachines,
   };
 
   const processed = processStoreData([dailyRecord], rateLend, rateExchange, 35, specialDayRules);

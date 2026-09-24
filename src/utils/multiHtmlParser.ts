@@ -171,14 +171,19 @@ function aggregateParsedResults(
     }
   }
 
-  // If there are generic "スロレポ登録店舗" groups alongside specific named store groups,
+  // If there are generic "スロレポ登録店舗" or "アナスロ登録店舗" groups alongside specific named store groups,
   // merge the generic records into the dominant group
   const allGroups = Array.from(groupMap.values());
-  const namedGroups = allGroups.filter((g) => g.storeName !== 'スロレポ登録店舗');
+  const namedGroups = allGroups.filter(
+    (g) => g.storeName !== 'スロレポ登録店舗' && g.storeName !== 'アナスロ登録店舗'
+  );
   if (namedGroups.length > 0) {
     const dominantGroup = namedGroups.sort((a, b) => b.stores.length - a.stores.length)[0];
     for (const [key, group] of Array.from(groupMap.entries())) {
-      if (group.storeName === 'スロレポ登録店舗' && group !== dominantGroup) {
+      if (
+        (group.storeName === 'スロレポ登録店舗' || group.storeName === 'アナスロ登録店舗') &&
+        group !== dominantGroup
+      ) {
         group.sourceFileNames.forEach((n) => dominantGroup.sourceFileNames.push(n));
         group.stores.forEach((s) => dominantGroup.stores.push(s));
         groupMap.delete(key);

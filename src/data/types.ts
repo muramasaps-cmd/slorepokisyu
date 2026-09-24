@@ -52,6 +52,17 @@ export interface DailyTailRecord {
   totalMachines: number;
 }
 
+export interface DailyMachineRecord {
+  machineNum: number;
+  modelName: string;
+  games: number;
+  diff: number;
+  bb?: number;
+  rb?: number;
+  isZoro?: boolean;
+  tailDigit?: number;
+}
+
 export interface DailyRecord {
   date: string; // YYYY-MM-DD
   yearMonth: string; // YYYY-MM
@@ -86,9 +97,10 @@ export interface DailyRecord {
   is7Day: boolean;
   notable: string;
 
-  // Daily detailed breakdown (機種別・末尾別)
+  // Daily detailed breakdown (機種別・末尾別・台番号別)
   models?: DailyModelRecord[];
   tails?: DailyTailRecord[];
+  machines?: DailyMachineRecord[];
 }
 
 export interface AggregatedModelStat {

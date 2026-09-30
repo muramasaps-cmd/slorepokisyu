@@ -972,6 +972,47 @@ export function parseSlorepoDailyHtml(doc: Document, rawHtml: string, fileName: 
     }
   }
 
+  // テーブル3から機種別データを取得するフォールバック
+  if (parsedModels.length === 0 && allTables.length >= 3) {
+    const table3 = allTables[2];
+    const rows = Array.from(table3.querySelectorAll('tr'));
+    for (const row of rows) {
+      if (row.querySelector('th')) continue;
+      const tds = Array.from(row.querySelectorAll('td'));
+      if (tds.length >= 3) {
+        const modelName = tds[0].textContent?.trim() || '';
+        if (!modelName || modelName.includes('機種') || modelName.includes('平均') || modelName.includes('合計')) continue;
+        const diff = parseInt(tds[1].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
+        const games = parseInt(tds[2].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
+        let mWin = 0;
+        let mTot = 1;
+        let mWinRate: number | null = null;
+        if (tds.length >= 4) {
+          const wrText = tds[3].textContent?.trim() || '';
+          const mMatch = wrText.match(/(\d+)\s*[\/／]\s*(\d+)/);
+          if (mMatch) {
+            mWin = parseInt(mMatch[1], 10);
+            mTot = parseInt(mMatch[2], 10);
+            mWinRate = mTot > 0 ? Math.round((mWin / mTot) * 1000) / 10 : null;
+          } else {
+            const pMatch = wrText.match(/(\d+(?:\.\d+)?)\s*%/);
+            if (pMatch) mWinRate = parseFloat(pMatch[1]);
+          }
+        }
+        parsedModels.push({
+          modelName,
+          avgDiffCoins: diff,
+          totalDiffCoins: diff * mTot,
+          avgGames: games,
+          winMachines: mWin,
+          totalMachines: mTot,
+          winRate: mWinRate,
+          isSmallCount: mTot <= 2,
+        });
+      }
+    }
+  }
+
   // If totalMachines was not found in overall table, calculate from parsedModels
   if (totalMachines <= 0) {
     if (parsedModels.length > 0) {
@@ -1090,11 +1131,14 @@ export function parseSlorepoHtml(htmlContent: string, fileName: string = ''): Pa
     }
 
     // Check if this is a Daily Report file (contains 全体結果 or 機種別データ or 末尾別結果 or 総差枚)
+    // ただしHTML内に3つ以上のテーブルがありテーブル3が出玉データを持つ場合は、テーブル3を優先取得するため店舗データとして処理する
+    const allTablesPreCheck = Array.from(doc.querySelectorAll('table'));
+    const hasTable3 = allTablesPreCheck.length >= 3;
     const isDailyReport =
-      bodyText.includes('全体結果') ||
-      (bodyText.includes('機種別') && (bodyText.includes('末尾') || bodyText.includes('差枚'))) ||
-      (bodyText.includes('総差枚') && bodyText.includes('平均差枚')) ||
-      (bodyText.includes('機種別データ') && bodyText.includes('末尾別結果'));
+      !hasTable3 &&
+      (bodyText.includes('全体結果') ||
+        (bodyText.includes('総差枚') && bodyText.includes('平均差枚') && bodyText.includes('全体')) ||
+        (bodyText.includes('機種別データ') && bodyText.includes('末尾別結果')));
 
     if (isDailyReport) {
       return parseSlorepoDailyHtml(doc, htmlContent, fileName);
@@ -1145,21 +1189,43 @@ export function parseSlorepoHtml(htmlContent: string, fileName: string = ''): Pa
     // 4. Parse Special Day Rules from oldEventDays
     const specialDayRules: SpecialDayRules = parseSpecialDayRulesFromText(oldEventDays);
 
-    // 5. Parse Daily Records from tables
-    // First look for table.date, but also include any table containing report headers
-    const dateTables: HTMLTableElement[] = Array.from(doc.querySelectorAll('table.date'));
+    // 5. Parse Daily Records from Table 3 (ユーザー指定: HTMLのテーブル3から取得)
     const allTables: HTMLTableElement[] = Array.from(doc.querySelectorAll('table'));
-    allTables.forEach((tbl) => {
-      if (!dateTables.includes(tbl)) {
-        const text = tbl.textContent || '';
-        if (text.includes('日付') && (text.includes('差枚') || text.includes('勝率') || text.includes('平均G') || text.includes('G数') || text.includes('優秀機種'))) {
-          dateTables.push(tbl);
+    let dateTables: HTMLTableElement[] = [];
+
+    // 明示的なテーブル3（id, class, data-table属性）を優先探索
+    const table3ById = doc.querySelector<HTMLTableElement>(
+      '#table3, #table-3, #table_3, table.table3, table.table-3, table[data-table="3"]'
+    );
+
+    if (table3ById) {
+      dateTables = [table3ById];
+    } else if (allTables.length >= 3) {
+      // HTML内の3番目のテーブル（テーブル3: 0-indexed で allTables[2]）から取得
+      dateTables = [allTables[2]];
+    } else {
+      // テーブルが3つ未満の場合（テーブル単体を貼り付けた場合など）のフォールバック
+      const explicitDateTables = Array.from(doc.querySelectorAll<HTMLTableElement>('table.date'));
+      if (explicitDateTables.length > 0) {
+        dateTables = explicitDateTables;
+      } else {
+        allTables.forEach((tbl) => {
+          const text = tbl.textContent || '';
+          if (
+            text.includes('日付') &&
+            (text.includes('差枚') || text.includes('勝率') || text.includes('平均G') || text.includes('G数') || text.includes('優秀機種'))
+          ) {
+            dateTables.push(tbl);
+          }
+        });
+        if (dateTables.length === 0 && allTables.length > 0) {
+          dateTables = [allTables[allTables.length - 1]];
         }
       }
-    });
+    }
 
     if (dateTables.length === 0) {
-      errors.push('日付別レポートのテーブル (<table class="date"> 等) が見つかりませんでした。');
+      errors.push('HTMLからテーブル3または出玉データテーブルが見つかりませんでした。');
     }
 
     interface RawExtractedRow {
@@ -1189,19 +1255,62 @@ export function parseSlorepoHtml(htmlContent: string, fileName: string = ''): Pa
         contextYear = parseInt(contextMatch[1], 10);
       }
 
+      // ヘッダー行からカラムインデックスを自動検出（テーブル3の列順序に柔軟に対応）
+      let colDateIdx = 0;
+      let colDiffIdx = 1;
+      let colGamesIdx = 2;
+      let colWinRateIdx = 3;
+      let colTopModelsIdx = 4;
+
+      const headerTr =
+        table.querySelector('thead tr') ||
+        table.querySelector('tr:has(th)') ||
+        table.querySelector('tr');
+      if (headerTr) {
+        const headerCells = Array.from(headerTr.querySelectorAll('th, td'));
+        let foundDate = -1;
+        let foundDiff = -1;
+        let foundGames = -1;
+        let foundWin = -1;
+        let foundTop = -1;
+
+        headerCells.forEach((c, idx) => {
+          const txt = c.textContent?.trim() || '';
+          if (foundDate === -1 && (txt.includes('日付') || txt.includes('日') || txt.toLowerCase().includes('date'))) {
+            foundDate = idx;
+          } else if (txt.includes('平均差枚')) {
+            foundDiff = idx;
+          } else if (foundDiff === -1 && (txt.includes('差枚') || txt.includes('出玉') || txt.includes('メダル'))) {
+            foundDiff = idx;
+          } else if (foundGames === -1 && (txt.includes('平均G') || txt.includes('G数') || txt.includes('ゲーム') || txt.includes('回転'))) {
+            foundGames = idx;
+          } else if (foundWin === -1 && (txt.includes('勝率') || txt.includes('勝'))) {
+            foundWin = idx;
+          } else if (foundTop === -1 && (txt.includes('優秀機種') || txt.includes('機種') || txt.includes('注目') || txt.includes('末尾') || txt.includes('ピックアップ'))) {
+            foundTop = idx;
+          }
+        });
+
+        if (foundDate !== -1) colDateIdx = foundDate;
+        if (foundDiff !== -1) colDiffIdx = foundDiff;
+        if (foundGames !== -1) colGamesIdx = foundGames;
+        if (foundWin !== -1) colWinRateIdx = foundWin;
+        if (foundTop !== -1) colTopModelsIdx = foundTop;
+      }
+
       const trs = table.querySelectorAll('tbody tr, tr');
       trs.forEach((tr) => {
         // Skip header rows
         if (tr.querySelector('th')) return;
 
         const tds = tr.querySelectorAll('td');
-        if (tds.length < 3) return;
+        if (tds.length < 2) return;
 
-        // Cell 0: Date
-        const dateCell = tds[0];
-        const dateLink = dateCell.querySelector('a');
+        // Date Cell
+        const dateCell = tds[colDateIdx] || tds[0];
+        const dateLink = dateCell?.querySelector('a');
         const href = dateLink?.getAttribute('href') || '';
-        const cellText = dateCell.textContent?.trim() || '';
+        const cellText = dateCell?.textContent?.trim() || '';
 
         let formattedDate = '';
         let rowYear: number | null = null;
@@ -1252,23 +1361,26 @@ export function parseSlorepoHtml(htmlContent: string, fileName: string = ''): Pa
 
         if (!formattedDate) return;
 
-        // Cell 1: Avg Diff Coins (e.g. "+61", "-57", "0")
-        const diffText = tds[1].textContent?.trim().replace(/,/g, '') || '0';
+        // Avg Diff Coins (e.g. "+61", "-57", "0")
+        const diffCell = tds[colDiffIdx] || tds[1];
+        const diffText = diffCell?.textContent?.trim().replace(/,/g, '') || '0';
         const diffMatch = diffText.match(/([+-]?\d+)/);
         const avgDiff = diffMatch ? parseInt(diffMatch[1], 10) : 0;
 
-        // Cell 2: Avg Games (e.g. "1,299" -> 1299)
-        const gamesText = tds[2].textContent?.trim().replace(/,/g, '') || '0';
+        // Avg Games (e.g. "1,299" -> 1299)
+        const gamesCell = tds[colGamesIdx] || tds[2];
+        const gamesText = gamesCell?.textContent?.trim().replace(/,/g, '') || '0';
         const gamesMatch = gamesText.match(/(\d+)/);
         const avgGames = gamesMatch ? parseInt(gamesMatch[1], 10) : 0;
 
-        // Cell 3: Win Rate & Machines (e.g. "30% (48/162)")
+        // Win Rate & Machines (e.g. "30% (48/162)")
         let winRate: number | null = null;
         let winMachines: number | null = null;
         let rowTotalMachines: number | null = null;
 
-        if (tds.length >= 4) {
-          const rateCellText = tds[3].textContent || '';
+        const rateCell = tds[colWinRateIdx] || tds[3];
+        if (rateCell) {
+          const rateCellText = rateCell.textContent || '';
           const pctMatch = rateCellText.match(/(\d+(?:\.\d+)?)\s*%/);
           if (pctMatch) {
             winRate = parseFloat(pctMatch[1]);
@@ -1289,10 +1401,11 @@ export function parseSlorepoHtml(htmlContent: string, fileName: string = ''): Pa
           }
         }
 
-        // Cell 4: Top models (優秀機種・末尾)
+        // Top models (優秀機種・末尾)
         let topModels = '';
-        if (tds.length >= 5) {
-          topModels = tds[4].textContent?.trim().replace(/\s+/g, ' ') || '';
+        const topCell = tds[colTopModelsIdx] || tds[4];
+        if (topCell) {
+          topModels = topCell.textContent?.trim().replace(/\s+/g, ' ') || '';
         }
 
         rawRows.push({
@@ -1306,6 +1419,75 @@ export function parseSlorepoHtml(htmlContent: string, fileName: string = ''): Pa
         });
       });
     });
+
+    // テーブル3が日付一覧ではなく機種別データだった場合の救済パース
+    if (rawRows.length === 0 && dateTables.length > 0) {
+      const targetTbl = dateTables[0];
+      const modelRecords: DailyModelRecord[] = [];
+      let pageDateStr = '';
+      const dateMatch = (doc.title + ' ' + (doc.querySelector('h1, h2, h3, h4.title')?.textContent || '') + ' ' + fileName).match(/(202\d)[年/-](\d{1,2})[月/-](\d{1,2})/);
+      if (dateMatch) {
+        pageDateStr = `${dateMatch[1]}-${String(parseInt(dateMatch[2], 10)).padStart(2, '0')}-${String(parseInt(dateMatch[3], 10)).padStart(2, '0')}`;
+      } else {
+        pageDateStr = new Date().toISOString().substring(0, 10);
+      }
+
+      const trs = Array.from(targetTbl.querySelectorAll('tbody tr, tr'));
+      trs.forEach((tr) => {
+        if (tr.querySelector('th')) return;
+        const tds = Array.from(tr.querySelectorAll('td'));
+        if (tds.length >= 3) {
+          const mName = tds[0].textContent?.trim() || '';
+          if (!mName || mName.includes('機種') || mName.includes('平均') || mName.includes('合計')) return;
+          const diff = parseInt(tds[1].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
+          const games = parseInt(tds[2].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
+          let winM = 0;
+          let totM = 1;
+          let wRate: number | null = null;
+          if (tds.length >= 4) {
+            const wrText = tds[3].textContent?.trim() || '';
+            const mSlash = wrText.match(/(\d+)\s*[\/／]\s*(\d+)/);
+            if (mSlash) {
+              winM = parseInt(mSlash[1], 10);
+              totM = parseInt(mSlash[2], 10);
+              wRate = totM > 0 ? Math.round((winM / totM) * 1000) / 10 : null;
+            } else {
+              const pMatch = wrText.match(/(\d+(?:\.\d+)?)\s*%/);
+              if (pMatch) wRate = parseFloat(pMatch[1]);
+            }
+          }
+          modelRecords.push({
+            modelName: mName,
+            avgDiffCoins: diff,
+            totalDiffCoins: diff * totM,
+            avgGames: games,
+            winMachines: winM,
+            totalMachines: totM,
+            winRate: wRate,
+            isSmallCount: totM <= 2,
+          });
+        }
+      });
+
+      if (modelRecords.length > 0) {
+        const totMachines = modelRecords.reduce((sum, m) => sum + m.totalMachines, 0) || 160;
+        const totDiff = modelRecords.reduce((sum, m) => sum + m.totalDiffCoins, 0);
+        const winCnt = modelRecords.reduce((sum, m) => sum + m.winMachines, 0);
+        const avgD = Math.round(totDiff / totMachines);
+        const avgG = Math.round(modelRecords.reduce((sum, m) => sum + m.avgGames * m.totalMachines, 0) / totMachines);
+        const wRate = Math.round((winCnt / totMachines) * 1000) / 10;
+        
+        rawRows.push({
+          date: pageDateStr,
+          avgDiff: avgD,
+          avgGames: avgG,
+          winRate: wRate,
+          winMachines: winCnt,
+          rowTotalMachines: totMachines,
+          topModels: modelRecords.filter(m => m.avgDiffCoins > 0).slice(0, 4).map(m => `${m.modelName}(+${m.avgDiffCoins})`).join('、'),
+        });
+      }
+    }
 
     if (rawRows.length === 0) {
       return {

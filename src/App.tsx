@@ -44,7 +44,6 @@ import {
   parseMultipleSlorepoHtmlAsync,
   readFilesAsText,
 } from './utils/multiHtmlParser';
-import { SAMPLE_ANA_SLO_HTML, SAMPLE_ANA_SLO_FILENAME } from './data/sampleAnaSlo';
 import {
   SlidersHorizontal,
   RotateCcw,
@@ -457,26 +456,6 @@ export default function App() {
     handleSaveStores(storeProfiles, storeProfiles[0].id);
   };
 
-  // Quick load attached sample data
-  const handleLoadSampleData = () => {
-    try {
-      setEmptyIsLoading(true);
-      setEmptyStatusText('添付サンプル（みとや大森町店 2026/09/22）を読み込み中...');
-      const res = parseSlorepoHtml(SAMPLE_ANA_SLO_HTML, SAMPLE_ANA_SLO_FILENAME);
-      if (res.success && res.store) {
-        handleSaveStores([res.store], res.store.id);
-        setEmptyError('');
-      } else {
-        setEmptyError(res.errors.join(' / ') || 'サンプルデータの読み込みに失敗しました。');
-      }
-    } catch (e: any) {
-      setEmptyError(e?.message || 'サンプルの読み込み中にエラーが発生しました。');
-    } finally {
-      setEmptyIsLoading(false);
-      setEmptyStatusText('');
-    }
-  };
-
   // Empty state view when no stores exist
   if (!currentStore || uniqueStores.length === 0) {
     return (
@@ -512,32 +491,6 @@ export default function App() {
 
           {/* Quick Actions Card */}
           <div className="w-full bg-white rounded-2xl shadow-xl border border-slate-200 p-6 space-y-5">
-            {/* Attached Sample Quick Load Card */}
-            <div className="bg-gradient-to-r from-amber-500/15 via-amber-500/5 to-slate-50 border border-amber-300 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-2">
-                  <span className="bg-amber-500 text-slate-950 text-[10px] font-black px-2 py-0.5 rounded shadow-2xs">
-                    添付サンプル対応
-                  </span>
-                  <span className="font-extrabold text-slate-900 text-xs sm:text-sm">
-                    みとや大森町店 (2026/09/22) アナスロ実データ
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-600">
-                  全277台・42機種・末尾別・台番号別データを含む添付ファイルを1クリックで読み込んで分析画面を開始します。
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={handleLoadSampleData}
-                disabled={emptyIsLoading}
-                className="w-full sm:w-auto px-4 py-2.5 bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-black text-xs rounded-xl shadow-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all shrink-0"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-slate-950" />
-                <span>サンプルを読み込む</span>
-              </button>
-            </div>
-
             <div className="flex items-center justify-between">
               <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs">
                 <button

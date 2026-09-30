@@ -202,9 +202,18 @@ export function getSavedStores(): StoreProfile[] {
     if (raw !== null) {
       const parsed: StoreProfile[] = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        // Filter out dummy store 'plaza-515', sample store 'store-maruhan-kamata', and any invalid entries
+        // Filter out dummy store 'plaza-515', sample stores, and any invalid entries
         const filtered = parsed
-          .filter((s) => s && typeof s === 'object' && s.id !== 'plaza-515' && s.id !== 'store-maruhan-kamata' && s.id !== 'sample-store')
+          .filter(
+            (s) =>
+              s &&
+              typeof s === 'object' &&
+              s.id !== 'plaza-515' &&
+              s.id !== 'store-maruhan-kamata' &&
+              s.id !== 'sample-store' &&
+              !s.id?.includes('mitoya') &&
+              s.name !== 'みとや大森町店'
+          )
           .map(normalizeStore)
           .filter((s): s is StoreProfile => Boolean(s));
 
@@ -315,7 +324,19 @@ export async function loadStoresFromStorageAsync(): Promise<StoreProfile[]> {
   try {
     const idbStores = await loadStoresFromIdb();
     if (idbStores && idbStores.length > 0) {
-      return idbStores.map(normalizeStore);
+      return idbStores
+        .filter(
+          (s) =>
+            s &&
+            typeof s === 'object' &&
+            s.id !== 'plaza-515' &&
+            s.id !== 'store-maruhan-kamata' &&
+            s.id !== 'sample-store' &&
+            !s.id?.includes('mitoya') &&
+            s.name !== 'みとや大森町店'
+        )
+        .map(normalizeStore)
+        .filter((s): s is StoreProfile => Boolean(s));
     }
   } catch (err) {
     console.warn('Failed to load from IndexedDB, falling back to LocalStorage', err);

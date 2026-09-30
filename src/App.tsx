@@ -10,6 +10,7 @@ import { TailNumberAnalysis } from './components/TailNumberAnalysis';
 import { DayOfWeekAnalysis } from './components/DayOfWeekAnalysis';
 import { SpecialDayPatterns } from './components/SpecialDayPatterns';
 import { MonthlyTable } from './components/MonthlyTable';
+import { HeatmapAnalysis } from './components/HeatmapAnalysis';
 import { DailyModal } from './components/DailyModal';
 import { StoreManagerModal } from './components/StoreManagerModal';
 import { ConfirmModal } from './components/ConfirmModal';
@@ -1151,6 +1152,17 @@ export default function App() {
         {/* Detailed Monthly Table */}
         <MonthlyTable
           monthlyStats={filteredMonthlyStats}
+          dailyRecords={filteredDailyRecords}
+          perspective={perspective}
+          unit={unit}
+          profitModel={profitModel}
+          specialDayRules={currentStore.specialDayRules}
+          oldEventDays={currentStore.oldEventDays}
+          onSelectMonth={(ym) => setSelectedMonthModal(ym)}
+        />
+
+        {/* 総合出玉・粗利ヒートマップ分析 (最下部) */}
+        <HeatmapAnalysis
           dailyRecords={filteredDailyRecords}
           perspective={perspective}
           unit={unit}

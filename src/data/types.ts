@@ -23,9 +23,18 @@ export interface StoreInfo {
   isPreset?: boolean;
 }
 
+export interface RankingWeights {
+  diffCoinDivisor: number; // default: 35
+  winRateMultiplier: number; // default: 0.6
+  allHighMultiplier: number; // default: 4.5
+  matchingBlendWeight: number; // default: 0.75
+  scaleFactorEnabled: boolean; // default: true
+}
+
 export interface StoreProfile extends StoreInfo {
   id: string;
   dailyRecords: DailyRecord[];
+  customRankingWeights?: RankingWeights;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -57,6 +66,8 @@ export interface DailyMachineRecord {
   modelName: string;
   games: number;
   diff: number;
+  payoutRate?: number; // 出率 (%)
+  refUrl?: string; // 参照URL
   bb?: number;
   rb?: number;
   isZoro?: boolean;

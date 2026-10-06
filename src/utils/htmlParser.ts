@@ -1,4 +1,5 @@
 import {
+  DailyMachineRecord,
   DailyModelRecord,
   DailyRecord,
   DailyTailRecord,
@@ -7,12 +8,263 @@ import {
 } from '../data/types';
 import { calculateDayOfWeek, isDateSpecialDay, processStoreData } from './dataEngine';
 import { parseSpecialDayRulesFromText } from './specialDayRules';
+import { isCsvOrTsv, parseUnitLevelCsv, normalizeDateString } from './csvParser';
 
 export interface ParseHtmlResult {
   success: boolean;
   store?: StoreProfile;
   errors: string[];
   totalRecordsCount: number;
+}
+
+/**
+ * Extracts individual machine records from any HTML table that contains a machine number (台番/台番号) column.
+ * Handles Min-repo, Slorepo, Ana-slo, or generic hall report tables.
+ */
+export function extractMachinesFromHtmlTable(
+  table: HTMLTableElement,
+  fallbackDate: string,
+  fallbackStore: string
+): { machines: DailyMachineRecord[]; date: string; storeName: string }[] {
+  const allTrs = Array.from(table.querySelectorAll('tr'));
+  if (allTrs.length === 0) return [];
+
+  let headerRowIndex = -1;
+  let colMachine = -1;
+  let colModel = -1;
+  let colDiff = -1;
+  let colGames = -1;
+  let colPayout = -1;
+  let colDate = -1;
+  let colStore = -1;
+  let colBb = -1;
+  let colRb = -1;
+
+  // Search the first 8 rows to find the true column header row
+  for (let rIdx = 0; rIdx < Math.min(allTrs.length, 8); rIdx++) {
+    const tr = allTrs[rIdx];
+    const cells = Array.from(tr.querySelectorAll('th, td'));
+    let tempColMach = -1;
+    let tempColMod = -1;
+    let tempColDiff = -1;
+    let tempColGames = -1;
+    let tempColPayout = -1;
+    let tempColDate = -1;
+    let tempColStore = -1;
+    let tempColBb = -1;
+    let tempColRb = -1;
+
+    cells.forEach((c, idx) => {
+      const txt = (c.textContent || '').trim().toLowerCase();
+      if (
+        tempColMach === -1 &&
+        (txt.includes('台番') ||
+          txt.includes('台番号') ||
+          txt.includes('台no') ||
+          txt.includes('台id') ||
+          txt === '台' ||
+          txt === '番号' ||
+          txt === 'no' ||
+          txt === 'no.' ||
+          txt === 'num' ||
+          txt.includes('machine'))
+      ) {
+        tempColMach = idx;
+      } else if (
+        tempColMod === -1 &&
+        (txt.includes('機種') ||
+          txt.includes('機種名') ||
+          txt === 'model' ||
+          txt === 'kishu')
+      ) {
+        tempColMod = idx;
+      } else if (
+        tempColDiff === -1 &&
+        (txt.includes('差枚') ||
+          txt.includes('差枚数') ||
+          txt === 'diff' ||
+          txt === '出玉' ||
+          txt.includes('コイン') ||
+          txt === 'samai')
+      ) {
+        tempColDiff = idx;
+      } else if (
+        tempColGames === -1 &&
+        (txt.includes('g数') ||
+          txt.includes('ゲーム') ||
+          txt === 'games' ||
+          txt === 'game' ||
+          txt === 'g' ||
+          txt.includes('回転') ||
+          txt.includes('総回転'))
+      ) {
+        tempColGames = idx;
+      } else if (
+        tempColPayout === -1 &&
+        (txt.includes('出率') ||
+          txt.includes('出玉率') ||
+          txt.includes('機械割') ||
+          txt === 'rate' ||
+          txt === 'payout' ||
+          txt.includes('割'))
+      ) {
+        tempColPayout = idx;
+      } else if (tempColDate === -1 && (txt.includes('日付') || txt === 'date')) {
+        tempColDate = idx;
+      } else if (
+        tempColStore === -1 &&
+        (txt.includes('店舗') || txt.includes('店名') || txt === 'store' || txt.includes('ホール'))
+      ) {
+        tempColStore = idx;
+      } else if (tempColBb === -1 && (txt === 'bb' || txt === 'big' || txt.includes('ビッグ'))) {
+        tempColBb = idx;
+      } else if (tempColRb === -1 && (txt === 'rb' || txt === 'reg' || txt.includes('レギュラー'))) {
+        tempColRb = idx;
+      }
+    });
+
+    // Valid header if it found machine column, or both model & diff columns
+    if (tempColMach !== -1 || (tempColMod !== -1 && tempColDiff !== -1)) {
+      headerRowIndex = rIdx;
+      colMachine = tempColMach;
+      colModel = tempColMod;
+      colDiff = tempColDiff;
+      colGames = tempColGames;
+      colPayout = tempColPayout;
+      colDate = tempColDate;
+      colStore = tempColStore;
+      colBb = tempColBb;
+      colRb = tempColRb;
+      break;
+    }
+  }
+
+  // Fallback if no machine column named explicitly, but columns match positional layout [台番, 機種, 差枚, G数, ...]
+  if (colMachine === -1) {
+    for (let rIdx = Math.max(0, headerRowIndex + 1); rIdx < Math.min(allTrs.length, 5); rIdx++) {
+      const cells = Array.from(allTrs[rIdx].querySelectorAll('td, th'));
+      if (cells.length >= 3) {
+        const c0Num = parseInt(cells[0].textContent?.replace(/[^0-9]/g, '') || '', 10);
+        const c1Txt = cells[1].textContent?.trim() || '';
+        const c2Diff = parseInt(cells[2].textContent?.replace(/[,+▲\-]/g, '') || '', 10);
+        if (!isNaN(c0Num) && c0Num > 0 && c0Num < 10000 && c1Txt.length > 1 && !isNaN(c2Diff)) {
+          colMachine = 0;
+          if (colModel === -1) colModel = 1;
+          if (colDiff === -1) colDiff = 2;
+          if (colGames === -1 && cells.length > 3) colGames = 3;
+          if (colPayout === -1 && cells.length > 4) colPayout = 4;
+          break;
+        }
+      }
+    }
+  }
+
+  if (colMachine === -1) return [];
+
+  const parsedRows: { machine: DailyMachineRecord; date: string; store: string }[] = [];
+
+  for (let rIdx = 0; rIdx < allTrs.length; rIdx++) {
+    if (rIdx <= headerRowIndex) continue; // Skip header row
+    const tr = allTrs[rIdx];
+
+    const tds = Array.from(tr.querySelectorAll('td, th'));
+    if (tds.length <= colMachine) continue;
+
+    // Check if row is a sub-header or title span
+    const rowText = tr.textContent?.trim() || '';
+    if (rowText.includes('機種名') && rowText.includes('差枚')) continue;
+    if (rowText.includes('平均') && !rowText.match(/\d+番/)) continue;
+    if (rowText.includes('合計') && !rowText.match(/\d+番/)) continue;
+
+    const machText = tds[colMachine]?.textContent?.trim() || '';
+    const machNum = parseInt(machText.replace(/[^0-9]/g, ''), 10);
+    if (isNaN(machNum) || machNum <= 0 || machNum > 99999) continue;
+
+    const rawModelName = (colModel !== -1 && tds[colModel] ? tds[colModel]?.textContent?.trim() : '') || '不明機種';
+    if (rawModelName.includes('機種名') || rawModelName === '機種' || rawModelName === '合計' || rawModelName === '平均') {
+      continue;
+    }
+    const modelName = rawModelName;
+
+    const diffText = (colDiff !== -1 && tds[colDiff] ? tds[colDiff]?.textContent?.trim() : '') || '0';
+    const diff = parseInt(diffText.replace(/[,+"]/g, '').replace(/▲/g, '-'), 10) || 0;
+
+    const gamesText = (colGames !== -1 && tds[colGames] ? tds[colGames]?.textContent?.trim() : '') || '0';
+    const games = parseInt(gamesText.replace(/[,+Gg"]/g, ''), 10) || 0;
+
+    let payoutRate: number | undefined;
+    if (colPayout !== -1 && tds[colPayout]) {
+      const pText = tds[colPayout].textContent?.trim() || '';
+      const pVal = parseFloat(pText.replace(/[^0-9.]/g, ''));
+      if (!isNaN(pVal) && pVal > 0) {
+        payoutRate = pVal <= 2.5 ? Math.round(pVal * 1000) / 10 : Math.round(pVal * 10) / 10;
+      }
+    } else if (games > 200) {
+      // Calculate derived payout rate if games > 200
+      const inCoins = games * 3;
+      const outCoins = inCoins + diff;
+      if (inCoins > 0) {
+        payoutRate = Math.round((outCoins / inCoins) * 1000) / 10;
+      }
+    }
+
+    const bb = colBb !== -1 && tds[colBb] ? parseInt(tds[colBb].textContent?.replace(/[^0-9]/g, '') || '0', 10) || undefined : undefined;
+    const rb = colRb !== -1 && tds[colRb] ? parseInt(tds[colRb].textContent?.replace(/[^0-9]/g, '') || '0', 10) || undefined : undefined;
+
+    // Look for link in any cell of this row
+    const refLink = tr.querySelector('a')?.getAttribute('href') || undefined;
+
+    let dateStr = fallbackDate;
+    if (colDate !== -1 && tds[colDate]) {
+      const dText = tds[colDate].textContent?.trim() || '';
+      const normD = normalizeDateString(dText);
+      if (normD) dateStr = normD;
+    }
+
+    let storeName = fallbackStore;
+    if (colStore !== -1 && tds[colStore]) {
+      const sText = tds[colStore].textContent?.trim() || '';
+      if (sText) storeName = sText;
+    }
+
+    const sMach = String(machNum);
+    const isZoro = sMach.length >= 2 && sMach.split('').every((c) => c === sMach[0]);
+    const tailDigit = machNum % 10;
+
+    parsedRows.push({
+      machine: {
+        machineNum: machNum,
+        modelName,
+        diff,
+        games,
+        payoutRate,
+        refUrl: refLink,
+        bb,
+        rb,
+        isZoro,
+        tailDigit,
+      },
+      date: dateStr,
+      store: storeName,
+    });
+  }
+
+  if (parsedRows.length === 0) return [];
+
+  // Group by date
+  const byDate = new Map<string, { machines: DailyMachineRecord[]; storeName: string }>();
+  parsedRows.forEach((p) => {
+    if (!byDate.has(p.date)) {
+      byDate.set(p.date, { machines: [], storeName: p.store });
+    }
+    byDate.get(p.date)!.machines.push(p.machine);
+  });
+
+  return Array.from(byDate.entries()).map(([d, val]) => ({
+    date: d,
+    machines: val.machines,
+    storeName: val.storeName,
+  }));
 }
 
 /**
@@ -1013,9 +1265,68 @@ export function parseSlorepoDailyHtml(doc: Document, rawHtml: string, fileName: 
     }
   }
 
-  // If totalMachines was not found in overall table, calculate from parsedModels
+  // 5B. Extract Machine-level records from all tables containing 台番 / 台番号
+  const allParsedMachines: DailyMachineRecord[] = [];
+  for (const table of allTables) {
+    const extractedGroups = extractMachinesFromHtmlTable(table, dateStr, storeName);
+    if (extractedGroups.length > 0) {
+      extractedGroups.forEach((group) => {
+        group.machines.forEach((m) => allParsedMachines.push(m));
+      });
+    }
+  }
+
+  // If models were empty but machines were found, build models from machines
+  if (parsedModels.length === 0 && allParsedMachines.length > 0) {
+    const modelMap = new Map<string, DailyMachineRecord[]>();
+    allParsedMachines.forEach((m) => {
+      if (!modelMap.has(m.modelName)) modelMap.set(m.modelName, []);
+      modelMap.get(m.modelName)!.push(m);
+    });
+    modelMap.forEach((list, mName) => {
+      const totD = list.reduce((sum, m) => sum + m.diff, 0);
+      const totG = list.reduce((sum, m) => sum + m.games, 0);
+      const wins = list.filter((m) => m.diff > 0).length;
+      parsedModels.push({
+        modelName: mName,
+        avgDiffCoins: Math.round(totD / list.length),
+        totalDiffCoins: totD,
+        avgGames: Math.round(totG / list.length),
+        winMachines: wins,
+        totalMachines: list.length,
+        winRate: Math.round((wins / list.length) * 1000) / 10,
+        isSmallCount: list.length <= 2,
+      });
+    });
+  }
+
+  // If tails were empty but machines were found, build tails from machines
+  if (parsedTails.length === 0 && allParsedMachines.length > 0) {
+    for (let t = 0; t <= 9; t++) {
+      const matching = allParsedMachines.filter((m) => m.tailDigit === t);
+      if (matching.length > 0) {
+        const totD = matching.reduce((sum, m) => sum + m.diff, 0);
+        const totG = matching.reduce((sum, m) => sum + m.games, 0);
+        const wins = matching.filter((m) => m.diff > 0).length;
+        parsedTails.push({
+          tailName: `末尾${t}`,
+          tailNum: t,
+          avgDiffCoins: Math.round(totD / matching.length),
+          totalDiffCoins: totD,
+          avgGames: Math.round(totG / matching.length),
+          winMachines: wins,
+          totalMachines: matching.length,
+          winRate: Math.round((wins / matching.length) * 1000) / 10,
+        });
+      }
+    }
+  }
+
+  // If totalMachines was not found in overall table, calculate from parsedModels or machines
   if (totalMachines <= 0) {
-    if (parsedModels.length > 0) {
+    if (allParsedMachines.length > 0) {
+      totalMachines = allParsedMachines.length;
+    } else if (parsedModels.length > 0) {
       totalMachines = parsedModels.reduce((acc, m) => acc + m.totalMachines, 0);
     } else {
       totalMachines = 160;
@@ -1076,6 +1387,7 @@ export function parseSlorepoDailyHtml(doc: Document, rawHtml: string, fileName: 
     notable,
     models: parsedModels,
     tails: parsedTails,
+    machines: allParsedMachines.length > 0 ? allParsedMachines : undefined,
   };
 
   const rateLend = 46;
@@ -1113,6 +1425,19 @@ export function parseSlorepoHtml(htmlContent: string, fileName: string = ''): Pa
   const errors: string[] = [];
 
   try {
+    // 0. Check if input is CSV or TSV format (e.g. 店舗名,日付,機種,台番,差枚,G数,出率,参照URL)
+    if (isCsvOrTsv(htmlContent) || fileName.toLowerCase().endsWith('.csv') || fileName.toLowerCase().endsWith('.tsv')) {
+      const csvRes = parseUnitLevelCsv(htmlContent, fileName);
+      if (csvRes.success && csvRes.stores.length > 0) {
+        return {
+          success: true,
+          store: csvRes.stores[0],
+          errors: [],
+          totalRecordsCount: csvRes.totalRecordsCount,
+        };
+      }
+    }
+
     const parser = new DOMParser();
     const doc = parser.parseFromString(htmlContent, 'text/html');
 
@@ -1226,6 +1551,175 @@ export function parseSlorepoHtml(htmlContent: string, fileName: string = ''): Pa
 
     if (dateTables.length === 0) {
       errors.push('HTMLからテーブル3または出玉データテーブルが見つかりませんでした。');
+    }
+
+    // 5A. Check if Table 3 or any table contains individual machine records (台番 / 台番号)
+    const tablesWithMachines = dateTables.filter((tbl) => {
+      const text = tbl.textContent || '';
+      return text.includes('台番') || text.includes('台番号');
+    });
+
+    if (tablesWithMachines.length === 0 && allTables.length > 0) {
+      allTables.forEach((tbl) => {
+        const text = tbl.textContent || '';
+        if (text.includes('台番') || text.includes('台番号')) {
+          tablesWithMachines.push(tbl);
+        }
+      });
+    }
+
+    if (tablesWithMachines.length > 0) {
+      const contextDateStr =
+        normalizeDateString(
+          (doc.title || '') +
+            ' ' +
+            (doc.querySelector('h1, h2, h3, h4.title')?.textContent || '') +
+            ' ' +
+            fileName
+        ) || new Date().toISOString().substring(0, 10);
+
+      const allExtractedDailyRecords: DailyRecord[] = [];
+
+      tablesWithMachines.forEach((tbl) => {
+        const groups = extractMachinesFromHtmlTable(tbl, contextDateStr, storeName);
+        groups.forEach((g) => {
+          const dateStr = g.date;
+          const machines = g.machines;
+          if (machines.length === 0) return;
+
+          // Build models
+          const modelMap = new Map<string, DailyMachineRecord[]>();
+          machines.forEach((m) => {
+            if (!modelMap.has(m.modelName)) modelMap.set(m.modelName, []);
+            modelMap.get(m.modelName)!.push(m);
+          });
+          const models: DailyModelRecord[] = Array.from(modelMap.entries())
+            .map(([mName, list]) => {
+              const totD = list.reduce((sum, m) => sum + m.diff, 0);
+              const totG = list.reduce((sum, m) => sum + m.games, 0);
+              const wins = list.filter((m) => m.diff > 0).length;
+              return {
+                modelName: mName,
+                avgDiffCoins: Math.round(totD / list.length),
+                totalDiffCoins: totD,
+                avgGames: Math.round(totG / list.length),
+                winMachines: wins,
+                totalMachines: list.length,
+                winRate: Math.round((wins / list.length) * 1000) / 10,
+                isSmallCount: list.length <= 2,
+              };
+            })
+            .sort((a, b) => b.totalDiffCoins - a.totalDiffCoins);
+
+          // Build tails
+          const tails: DailyTailRecord[] = [];
+          for (let t = 0; t <= 9; t++) {
+            const match = machines.filter((m) => m.tailDigit === t);
+            if (match.length > 0) {
+              const totD = match.reduce((sum, m) => sum + m.diff, 0);
+              const totG = match.reduce((sum, m) => sum + m.games, 0);
+              const wins = match.filter((m) => m.diff > 0).length;
+              tails.push({
+                tailName: `末尾${t}`,
+                tailNum: t,
+                avgDiffCoins: Math.round(totD / match.length),
+                totalDiffCoins: totD,
+                avgGames: Math.round(totG / match.length),
+                winMachines: wins,
+                totalMachines: match.length,
+                winRate: Math.round((wins / match.length) * 1000) / 10,
+              });
+            }
+          }
+          const zoro = machines.filter((m) => m.isZoro);
+          if (zoro.length > 0) {
+            const totD = zoro.reduce((sum, m) => sum + m.diff, 0);
+            const totG = zoro.reduce((sum, m) => sum + m.games, 0);
+            const wins = zoro.filter((m) => m.diff > 0).length;
+            tails.push({
+              tailName: '末尾 ゾロ目',
+              tailNum: null,
+              avgDiffCoins: Math.round(totD / zoro.length),
+              totalDiffCoins: totD,
+              avgGames: Math.round(totG / zoro.length),
+              winMachines: wins,
+              totalMachines: zoro.length,
+              winRate: Math.round((wins / zoro.length) * 1000) / 10,
+            });
+          }
+
+          const totD = machines.reduce((sum, m) => sum + m.diff, 0);
+          const totG = machines.reduce((sum, m) => sum + m.games, 0);
+          const wins = machines.filter((m) => m.diff > 0).length;
+          const [y, m, d] = dateStr.split('-');
+          const isOldEvent = isDateSpecialDay(dateStr, specialDayRules);
+
+          allExtractedDailyRecords.push({
+            date: dateStr,
+            yearMonth: `${y}-${m}`,
+            year: parseInt(y, 10),
+            month: parseInt(m, 10),
+            day: parseInt(d, 10),
+            dayOfWeek: calculateDayOfWeek(dateStr),
+            avgDiffCoins: Math.round(totD / machines.length),
+            avgGames: Math.round(totG / machines.length),
+            winRate: Math.round((wins / machines.length) * 1000) / 10,
+            winMachines: wins,
+            totalMachines: machines.length,
+            totalDiffCoins: totD,
+            hallCoinProfit: -totD,
+            playerCoinProfit: totD,
+            hallYenProfit: 0,
+            playerYenProfit: 0,
+            inCoins: 0,
+            outCoins: 0,
+            payoutRate: 100,
+            estimatedRevenue: 0,
+            exchangeGapProfit: 0,
+            gModelHallProfit: 0,
+            gModelPlayerProfit: 0,
+            isOldEventDay: isOldEvent,
+            is7Day: parseInt(d, 10) % 10 === 7,
+            notable:
+              models
+                .filter((mod) => mod.avgDiffCoins > 0)
+                .slice(0, 4)
+                .map((mod) => `${mod.modelName}(+${mod.avgDiffCoins})`)
+                .join('、') || '出玉データあり',
+            models,
+            tails,
+            machines,
+          });
+        });
+      });
+
+      if (allExtractedDailyRecords.length > 0) {
+        allExtractedDailyRecords.sort((a, b) => a.date.localeCompare(b.date));
+        const processed = processStoreData(allExtractedDailyRecords, rateLend, rateExchange, 35, specialDayRules);
+        const firstD = processed.dailyRecords[0]?.date || '';
+        const lastD = processed.dailyRecords[processed.dailyRecords.length - 1]?.date || '';
+        return {
+          success: true,
+          store: {
+            id: `store-${storeName.replace(/[\s\u3000]+/g, '-').toLowerCase()}-${Date.now().toString(36)}`,
+            name: storeName,
+            address,
+            oldEventDays,
+            exchangeRate: exchangeRateStr,
+            rateLend,
+            rateExchange,
+            cashRatio: 35,
+            grandOpen,
+            totalMachinesApprox: Math.max(...processed.dailyRecords.map((r) => r.totalMachines)),
+            dataRange: `${firstD.slice(0, 7)} ～ ${lastD.slice(0, 7)} (${processed.dailyRecords.length}日分実データ)`,
+            specialDayRules,
+            dailyRecords: processed.dailyRecords,
+            createdAt: new Date().toISOString(),
+          },
+          errors: [],
+          totalRecordsCount: processed.dailyRecords.length,
+        };
+      }
     }
 
     interface RawExtractedRow {

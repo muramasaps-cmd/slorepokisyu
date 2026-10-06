@@ -3,6 +3,7 @@ import { parseRatesFromExchangeRate, parseSlorepoHtml } from './htmlParser';
 import { processStoreData } from './dataEngine';
 import { parseSpecialDayRulesFromText } from './specialDayRules';
 import { areStoresSame, normalizeStoreNameKey } from './storeStorage';
+import { isCsvOrTsv, parseUnitLevelCsv } from './csvParser';
 
 export interface ParsedStoreGroup {
   store: StoreProfile;
@@ -11,6 +12,7 @@ export interface ParsedStoreGroup {
   newRecordsCount: number;
   totalRecordsCount: number;
   originalStoreId?: string;
+  parsedStoreName?: string;
 }
 
 export interface MultiParseResult {
@@ -43,14 +45,15 @@ export function decodeHtmlBuffer(buffer: ArrayBuffer): string {
     headSnippet.includes('charset=cp932') ||
     headSnippet.includes('charset=windows-31j');
 
-  // Also check if text has many replacement characters (mojibake)
+  // Also check if text has replacement characters (mojibake from non-UTF8 like Shift-JIS)
   const replacementCount = (text.match(/\uFFFD/g) || []).length;
 
-  if (hasSjisMeta || replacementCount > 5) {
+  if (hasSjisMeta || replacementCount > 0) {
     try {
       const sjisDecoder = new TextDecoder('shift-jis');
       const sjisText = sjisDecoder.decode(buffer);
-      if (sjisText && sjisText.length > 0) {
+      const sjisReplacements = (sjisText.match(/\uFFFD/g) || []).length;
+      if (sjisText && sjisReplacements < replacementCount) {
         return sjisText;
       }
     } catch {
@@ -228,16 +231,23 @@ function aggregateParsedResults(
         const prevQuality =
           (prev.totalMachines > 0 ? 2 : 0) +
           (prev.winMachines !== null ? 2 : 0) +
+          (prev.machines && prev.machines.length > 0 ? 20 : 0) +
           (prev.notable ? 1 : 0) +
           (prev.models && prev.models.length > 0 ? 4 : 0);
         const newQuality =
           (r.totalMachines > 0 ? 2 : 0) +
           (r.winMachines !== null ? 2 : 0) +
+          (r.machines && r.machines.length > 0 ? 20 : 0) +
           (r.notable ? 1 : 0) +
           (r.models && r.models.length > 0 ? 4 : 0);
 
         if (newQuality >= prevQuality) {
-          dateMap.set(r.date, r);
+          const mergedMachines = (r.machines && r.machines.length > 0) ? r.machines : prev.machines;
+          dateMap.set(r.date, { ...r, machines: mergedMachines });
+        } else {
+          if ((!prev.machines || prev.machines.length === 0) && (r.machines && r.machines.length > 0)) {
+            dateMap.set(r.date, { ...prev, machines: r.machines });
+          }
         }
       }
     }
@@ -318,7 +328,10 @@ function aggregateParsedResults(
 
     const mergedStoreProfile: StoreProfile = {
       id: storeId,
-      name: existingMatch?.name || group.storeName,
+      name:
+        group.storeName && !group.storeName.includes('登録店舗')
+          ? group.storeName
+          : existingMatch?.name || group.storeName || '登録店舗',
       address: bestAddress,
       oldEventDays: bestOldEventDays,
       exchangeRate: bestExchangeRate,
@@ -344,6 +357,7 @@ function aggregateParsedResults(
       newRecordsCount,
       totalRecordsCount: processed.dailyRecords.length,
       originalStoreId: existingMatch?.id,
+      parsedStoreName: group.storeName,
     });
   }
 
@@ -386,19 +400,37 @@ export async function parseMultipleSlorepoHtmlAsync(
     }
 
     try {
-      const res = parseSlorepoHtml(f.content, f.name);
-      if (!res.success || !res.store) {
-        errors.push({
-          fileName: f.name,
-          error: res.errors.length > 0 ? res.errors.join(' / ') : '出玉データの解析に失敗しました。',
+      if (isCsvOrTsv(f.content) || f.name.toLowerCase().endsWith('.csv') || f.name.toLowerCase().endsWith('.tsv')) {
+        const csvRes = parseUnitLevelCsv(f.content, f.name);
+        if (!csvRes.success || csvRes.stores.length === 0) {
+          errors.push({
+            fileName: f.name,
+            error: csvRes.errors.length > 0 ? csvRes.errors.join(' / ') : 'CSVデータの解析に失敗しました。',
+          });
+          continue;
+        }
+        csvRes.stores.forEach((st) => {
+          parsedIndividualResults.push({
+            fileName: f.name,
+            store: st,
+            recordsCount: st.dailyRecords.length,
+          });
         });
-        continue;
+      } else {
+        const res = parseSlorepoHtml(f.content, f.name);
+        if (!res.success || !res.store) {
+          errors.push({
+            fileName: f.name,
+            error: res.errors.length > 0 ? res.errors.join(' / ') : '出玉データの解析に失敗しました。',
+          });
+          continue;
+        }
+        parsedIndividualResults.push({
+          fileName: f.name,
+          store: res.store,
+          recordsCount: res.totalRecordsCount,
+        });
       }
-      parsedIndividualResults.push({
-        fileName: f.name,
-        store: res.store,
-        recordsCount: res.totalRecordsCount,
-      });
     } catch (e: any) {
       errors.push({
         fileName: f.name,
@@ -435,19 +467,37 @@ export function parseMultipleSlorepoHtml(
       continue;
     }
     try {
-      const res = parseSlorepoHtml(f.content, f.name);
-      if (!res.success || !res.store) {
-        errors.push({
-          fileName: f.name,
-          error: res.errors.length > 0 ? res.errors.join(' / ') : '出玉データの解析に失敗しました。',
+      if (isCsvOrTsv(f.content) || f.name.toLowerCase().endsWith('.csv') || f.name.toLowerCase().endsWith('.tsv')) {
+        const csvRes = parseUnitLevelCsv(f.content, f.name);
+        if (!csvRes.success || csvRes.stores.length === 0) {
+          errors.push({
+            fileName: f.name,
+            error: csvRes.errors.length > 0 ? csvRes.errors.join(' / ') : 'CSVデータの解析に失敗しました。',
+          });
+          continue;
+        }
+        csvRes.stores.forEach((st) => {
+          parsedIndividualResults.push({
+            fileName: f.name,
+            store: st,
+            recordsCount: st.dailyRecords.length,
+          });
         });
-        continue;
+      } else {
+        const res = parseSlorepoHtml(f.content, f.name);
+        if (!res.success || !res.store) {
+          errors.push({
+            fileName: f.name,
+            error: res.errors.length > 0 ? res.errors.join(' / ') : '出玉データの解析に失敗しました。',
+          });
+          continue;
+        }
+        parsedIndividualResults.push({
+          fileName: f.name,
+          store: res.store,
+          recordsCount: res.totalRecordsCount,
+        });
       }
-      parsedIndividualResults.push({
-        fileName: f.name,
-        store: res.store,
-        recordsCount: res.totalRecordsCount,
-      });
     } catch (e: any) {
       errors.push({
         fileName: f.name,

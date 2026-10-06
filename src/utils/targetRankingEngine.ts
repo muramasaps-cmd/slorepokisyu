@@ -1,8 +1,16 @@
 // Engine for calculating target machine recommendations and tail rankings for a specific target date
-import { DailyRecord, DailyModelRecord, DailyTailRecord, SpecialDayRules } from '../data/types';
+import { DailyRecord, DailyModelRecord, DailyTailRecord, SpecialDayRules, RankingWeights } from '../data/types';
 import { calculateDayOfWeek, isDateSpecialDay } from './dataEngine';
 import { isJapaneseHoliday } from './holidayUtils';
 import { isSmartSlot, isAType, isJuggler } from './modelFilterUtils';
+
+export const DEFAULT_RANKING_WEIGHTS: RankingWeights = {
+  diffCoinDivisor: 35,
+  winRateMultiplier: 0.6,
+  allHighMultiplier: 4.5,
+  matchingBlendWeight: 0.75,
+  scaleFactorEnabled: true,
+};
 
 export interface ModelTargetScore {
   modelName: string;
@@ -75,7 +83,8 @@ export function calculateTargetDateRanking(
   targetDate: string,
   dailyRecords: DailyRecord[],
   specialDayRules?: SpecialDayRules,
-  oldEventDays: string = ''
+  oldEventDays: string = '',
+  weights: RankingWeights = DEFAULT_RANKING_WEIGHTS
 ): TargetDateForecast | null {
   if (!targetDate || !dailyRecords || dailyRecords.length === 0) return null;
 
@@ -278,13 +287,19 @@ export function calculateTargetDateRanking(
       ? Math.round(entry.primaryGames.reduce((a, b) => a + b, 0) / entry.primaryGames.length)
       : Math.round(entry.allGames.reduce((a, b) => a + b, 0) / sampleDays);
 
+    const diffDivisor = weights?.diffCoinDivisor ?? 35;
+    const winRateMult = weights?.winRateMultiplier ?? 0.6;
+    const allHighMult = weights?.allHighMultiplier ?? 4.5;
+    const blendWeight = weights?.matchingBlendWeight ?? 0.75;
+    const useScaleFactor = weights?.scaleFactorEnabled ?? true;
+
     // Blended Expected Diff Coins:
-    // If matchingDays >= 3, rely 75% on matching days, 25% on overall.
+    // If matchingDays >= 3, rely matchingBlendWeight on matching days, (1 - matchingBlendWeight) on overall.
     // If matchingDays 1..2, rely 50% on matching, 50% on overall.
     // If matchingDays 0, rely on overall with slight dampening.
     let expectedDiffCoins = allAvgDiff;
     if (matchingDays >= 3) {
-      expectedDiffCoins = Math.round(matchingAvgDiff * 0.75 + allAvgDiff * 0.25);
+      expectedDiffCoins = Math.round(matchingAvgDiff * blendWeight + allAvgDiff * (1 - blendWeight));
     } else if (matchingDays > 0) {
       expectedDiffCoins = Math.round(matchingAvgDiff * 0.5 + allAvgDiff * 0.5);
     } else {
@@ -293,7 +308,7 @@ export function calculateTargetDateRanking(
 
     let predictedWinRate = allWinRate;
     if (matchingDays >= 3) {
-      predictedWinRate = Math.round((matchingWinRate * 0.75 + allWinRate * 0.25) * 10) / 10;
+      predictedWinRate = Math.round((matchingWinRate * blendWeight + allWinRate * (1 - blendWeight)) * 10) / 10;
     } else if (matchingDays > 0) {
       predictedWinRate = Math.round((matchingWinRate * 0.5 + allWinRate * 0.5) * 10) / 10;
     }
@@ -312,10 +327,14 @@ export function calculateTargetDateRanking(
 
     // Composite ranking score (base around 50)
     let compositeScore = 50;
-    compositeScore += (expectedDiffCoins / 35);
-    compositeScore += (predictedWinRate - 48) * 0.6;
-    compositeScore += entry.allHighCount * 4.5;
-    compositeScore = Math.round(compositeScore * scaleFactor * sampleFactor * 10) / 10;
+    compositeScore += (expectedDiffCoins / diffDivisor);
+    compositeScore += (predictedWinRate - 48) * winRateMult;
+    compositeScore += entry.allHighCount * allHighMult;
+    if (useScaleFactor) {
+      compositeScore = Math.round(compositeScore * scaleFactor * sampleFactor * 10) / 10;
+    } else {
+      compositeScore = Math.round(compositeScore * 10) / 10;
+    }
 
     // Rank Grade
     let rankGrade: ModelTargetScore['rankGrade'] = 'C';

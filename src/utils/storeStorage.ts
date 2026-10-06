@@ -8,18 +8,16 @@ const STORAGE_KEY_ACTIVE_ID = 'SLOT_ANALYZER_HTML_ACTIVE_ID_V2';
 
 /**
  * Normalizes store name for grouping/comparison (trims spaces, fullwidth characters, punctuation, dates, brackets, suffixes)
+ * Preserves distinct hall numbers (e.g. 蒲田1 vs 蒲田7) so separate halls are NEVER mixed!
  */
 export function normalizeStoreNameKey(name: string): string {
   if (!name) return '';
-  let clean = name
+  return name
     .trim()
     // convert full-width numbers and alphanumeric characters to half-width
     .replace(/[０-９Ａ-Ｚａ-ｚ]/g, (s) => String.fromCharCode(s.charCodeAt(0) - 0xfee0))
     // remove brackets like 【...】 or [...] or （...）
-    .replace(/【[^】]*】/g, '')
-    .replace(/\[[^\]]*\]/g, '')
-    .replace(/（[^）]*）/g, '')
-    .replace(/\([^)]*\)/g, '')
+    .replace(/【[^】]*】|\[[^\]]*\]|（[^）]*）|\([^)]*\)/g, '')
     // remove date patterns like 2026-9-20, 2026/09/20, 9月20日
     .replace(/202\d[年/-]\d{1,2}[月/-]\d{1,2}[日]?/g, '')
     .replace(/\d{1,2}月\d{1,2}日/g, '')
@@ -27,18 +25,14 @@ export function normalizeStoreNameKey(name: string): string {
     .replace(/[\(（][日月火水木金土][\)）]/g, '')
     // remove spaces, hyphens, punctuation
     .replace(/[\s\u3000\-_/・]+/g, '')
+    // Strip trailing generic "店"
+    .replace(/店$/g, '')
     .toLowerCase();
-
-  // Strip trailing digits (often event day numbers like '7')
-  clean = clean.replace(/[0-9]+$/, '');
-  // Strip trailing "店"
-  clean = clean.replace(/店$/, '');
-  return clean;
 }
 
 /**
- * Robustly checks if two store names designate the exact same store
- * (e.g. 'マルハンメガシティ2000蒲田' vs 'マルハンメガシティ2000蒲田7' vs 'マルハンメガシティ2000蒲田店')
+ * Checks if two store names designate the exact same store.
+ * Strictly separates different halls (e.g. 'マルハンメガシティ2000蒲田7' vs 'マルハンメガシティ2000 蒲田1').
  */
 export function areStoresSame(nameA: string, nameB: string): boolean {
   if (!nameA || !nameB) return false;
@@ -47,17 +41,8 @@ export function areStoresSame(nameA: string, nameB: string): boolean {
   const normA = normalizeStoreNameKey(nameA);
   const normB = normalizeStoreNameKey(nameB);
   if (!normA || !normB) return false;
-  if (normA === normB) return true;
 
-  // If one contains the other and length difference is minor (<= 5 chars)
-  if (
-    (normA.includes(normB) || normB.includes(normA)) &&
-    Math.abs(normA.length - normB.length) <= 5
-  ) {
-    return true;
-  }
-
-  return false;
+  return normA === normB;
 }
 
 /**
@@ -74,18 +59,33 @@ export function mergeDailyRecords(recordsA: DailyRecord[] = [], recordsB: DailyR
       const prevQuality =
         (prev.totalMachines > 0 ? 2 : 0) +
         (prev.winMachines !== null ? 2 : 0) +
+        (prev.machines && prev.machines.length > 0 ? 20 : 0) +
         (prev.models && prev.models.length > 0 ? 10 : 0) +
         (prev.tails && prev.tails.length > 0 ? 5 : 0) +
         (prev.notable ? 1 : 0);
       const newQuality =
         (r.totalMachines > 0 ? 2 : 0) +
         (r.winMachines !== null ? 2 : 0) +
+        (r.machines && r.machines.length > 0 ? 20 : 0) +
         (r.models && r.models.length > 0 ? 10 : 0) +
         (r.tails && r.tails.length > 0 ? 5 : 0) +
         (r.notable ? 1 : 0);
 
       if (newQuality >= prevQuality) {
-        dateMap.set(r.date, r);
+        // If the new record lacks machines but previous had machines, retain previous machines
+        const mergedMachines = (r.machines && r.machines.length > 0) ? r.machines : prev.machines;
+        dateMap.set(r.date, {
+          ...r,
+          machines: mergedMachines,
+        });
+      } else if (prevQuality > newQuality) {
+        // If previous lacks machines but new has machines, attach them
+        if ((!prev.machines || prev.machines.length === 0) && (r.machines && r.machines.length > 0)) {
+          dateMap.set(r.date, {
+            ...prev,
+            machines: r.machines,
+          });
+        }
       }
     }
   }
@@ -296,6 +296,7 @@ function stripDerivedForStorage(stores: StoreProfile[]): StoreProfile[] {
       notable: d.notable,
       models: d.models,
       tails: d.tails,
+      machines: d.machines,
     } as DailyRecord)),
   }));
 }

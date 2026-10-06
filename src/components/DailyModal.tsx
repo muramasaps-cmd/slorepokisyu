@@ -626,9 +626,11 @@ export const DailyModal: React.FC<DailyModalProps> = ({
                                         <th className="p-2">機種名</th>
                                         <th className="p-2 text-right">差枚</th>
                                         <th className="p-2 text-right">G数</th>
+                                        <th className="p-2 text-right">出率</th>
                                         <th className="p-2 text-right">BB</th>
                                         <th className="p-2 text-right">RB</th>
                                         <th className="p-2 text-right">末尾</th>
+                                        <th className="p-2 text-center">参照</th>
                                       </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-100">
@@ -664,10 +666,27 @@ export const DailyModal: React.FC<DailyModalProps> = ({
                                             <td className="p-2 text-right text-slate-600">
                                               {m.games.toLocaleString()}G
                                             </td>
+                                            <td className="p-2 text-right text-slate-600 font-semibold">
+                                              {m.payoutRate != null ? `${m.payoutRate}%` : '-'}
+                                            </td>
                                             <td className="p-2 text-right text-slate-600">{m.bb ?? '-'}</td>
                                             <td className="p-2 text-right text-slate-600">{m.rb ?? '-'}</td>
                                             <td className="p-2 text-right font-semibold text-slate-500">
                                               末尾{m.tailDigit ?? m.machineNum % 10}
+                                            </td>
+                                            <td className="p-2 text-center">
+                                              {m.refUrl ? (
+                                                <a
+                                                  href={m.refUrl}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  className="text-blue-600 hover:text-blue-800 underline text-[10px]"
+                                                >
+                                                  リンク
+                                                </a>
+                                              ) : (
+                                                '-'
+                                              )}
                                             </td>
                                           </tr>
                                         ))}

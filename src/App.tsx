@@ -1,8 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { StoreProfile, MonthlyStat, DailyRecord } from './data/types';
+import { StoreProfile, MonthlyStat, DailyRecord, RankingWeights } from './data/types';
 import { Header, ProfitModelType, UnitMode } from './components/Header';
 import { KpiCards } from './components/KpiCards';
-import { ModelComparisonBanner } from './components/ModelComparisonBanner';
 import { ProfitChart } from './components/ProfitChart';
 import { ModelDeepAnalysis } from './components/ModelDeepAnalysis';
 import { HighPayoutAnalysis } from './components/HighPayoutAnalysis';
@@ -16,6 +15,7 @@ import { StoreManagerModal } from './components/StoreManagerModal';
 import { ConfirmModal } from './components/ConfirmModal';
 import { ModelMultiSelectModal } from './components/ModelMultiSelectModal';
 import { TargetDateRanking } from './components/TargetDateRanking';
+import { AccuracyValidation } from './components/AccuracyValidation';
 import { processStoreData, aggregateStoreModels } from './utils/dataEngine';
 import { parseSlorepoHtml, parseRatesFromExchangeRate } from './utils/htmlParser';
 import { parseSpecialDayRulesFromText } from './utils/specialDayRules';
@@ -44,6 +44,7 @@ import {
   parseMultipleSlorepoHtmlAsync,
   readFilesAsText,
 } from './utils/multiHtmlParser';
+import { generateUnitLevelCsvTemplate } from './utils/csvParser';
 import {
   SlidersHorizontal,
   RotateCcw,
@@ -53,6 +54,7 @@ import {
   Plus,
   UploadCloud,
   FileCode,
+  FileSpreadsheet,
   Sparkles,
   CheckCircle2,
   AlertCircle,
@@ -61,6 +63,10 @@ import {
   Cpu,
   Zap,
   Target,
+  BarChart3,
+  Calendar,
+  ShieldCheck,
+  Calculator,
 } from 'lucide-react';
 
 export default function App() {
@@ -118,6 +124,10 @@ export default function App() {
   const [profitModel, setProfitModel] = useState<ProfitModelType>('gCount');
   const [selectedYear, setSelectedYear] = useState<string>('all');
   const [selectedMonthModal, setSelectedMonthModal] = useState<string | null>(null);
+
+  // 6 Tabs State
+  type ActiveTab = 'overview' | 'forecast' | 'models' | 'trends' | 'tables' | 'validation';
+  const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
 
   // Custom rate and model parameters (initialized from active store's header exchange rate)
   const [rateLend, setRateLend] = useState<number>(() => {
@@ -382,6 +392,17 @@ export default function App() {
     setStores(updatedList);
   };
 
+  const handleSaveStoreWeights = (weights: RankingWeights | undefined) => {
+    if (!currentStore) return;
+    const updatedStore: StoreProfile = {
+      ...currentStore,
+      customRankingWeights: weights,
+      updatedAt: new Date().toISOString(),
+    };
+    const updatedList = upsertStore(updatedStore);
+    setStores(updatedList);
+  };
+
   // 「初期状態にリセットで全店舗削除」
   const handleResetAllStores = () => {
     const reset = resetAllStores();
@@ -402,7 +423,7 @@ export default function App() {
 
     try {
       const readResults = await readFilesAsText(files, (done, total) => {
-        setEmptyStatusText(`HTMLファイルを読込中... (${done}/${total}件)`);
+        setEmptyStatusText(`ファイルを読込中... (${done}/${total}件)`);
         setEmptyProgressPercent(Math.round((done / total) * 45));
       });
 
@@ -482,10 +503,10 @@ export default function App() {
               <UploadCloud className="w-8 h-8" />
             </div>
             <h2 className="text-2xl font-black text-slate-900">
-              店舗HTMLファイルを取り込んで即座に分析
+              出玉データ（CSV / HTML）を取り込んで即座に分析
             </h2>
             <p className="text-xs sm:text-sm text-slate-600 max-w-md mx-auto">
-              アナスロ（ana-slo.com）またはスロレポ（slorepo.com）の店舗HTMLファイルを取り込むと、店舗名・住所・換金率・特日・機種別・末尾別出玉データが自動解析されます。
+              みんレポ台番CSV（店舗名,日付,機種,台番,差枚,G数,出率,参照URL）やアナスロ・スロレポの店舗HTMLを取り込むと、各台の台番・差枚・G数・出率および機種別・末尾別データが自動解析されます。
             </p>
           </div>
 
@@ -502,7 +523,7 @@ export default function App() {
                       : 'text-slate-500 hover:text-slate-800'
                   }`}
                 >
-                  HTMLファイルを選択 / ドロップ
+                  CSV / HTMLファイルを選択
                 </button>
                 <button
                   type="button"
@@ -513,7 +534,7 @@ export default function App() {
                       : 'text-slate-500 hover:text-slate-800'
                   }`}
                 >
-                  HTMLコード直接貼り付け
+                  テキスト / CSV直接貼り付け
                 </button>
               </div>
             </div>
@@ -549,7 +570,7 @@ export default function App() {
                     }
                   }}
                   multiple
-                  accept=".html,.htm,text/html"
+                  accept=".csv,.tsv,.txt,.html,.htm,text/csv,text/html,text/plain"
                   className="hidden"
                 />
                 <div className="w-14 h-14 rounded-full bg-amber-100 flex items-center justify-center text-amber-600 shadow-2xs">
@@ -572,13 +593,13 @@ export default function App() {
                         />
                       </div>
                       <p className="text-[11px] text-slate-500">
-                        大量のHTMLファイル（100件以上）もブラウザ内で安全に順次解析・統合しています
+                        大量のファイル（100件以上）もブラウザ内で安全に順次解析・統合しています
                       </p>
                     </div>
                   ) : (
                     <>
                       <p className="text-sm font-bold text-slate-800">
-                        ここにスロレポ店舗HTMLファイルをドラッグ＆ドロップ（複数ファイル一括対応）
+                        ここにみんレポ台番CSVまたはスロレポHTMLファイルをドラッグ＆ドロップ（複数ファイル一括対応）
                       </p>
                       <p className="text-xs text-slate-500 mt-1">
                         またはクリックしてパソコンからファイルを選択（ShiftやCtrlキーで複数選択可能）
@@ -592,11 +613,23 @@ export default function App() {
             {/* Paste Mode */}
             {emptyInputMode === 'paste' && (
               <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-700">
+                    CSVデータまたはHTMLソースを貼り付け:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setEmptyPastedHtml(generateUnitLevelCsvTemplate())}
+                    className="text-xs text-amber-700 hover:text-amber-900 font-bold underline cursor-pointer"
+                  >
+                    サンプルCSV（蒲田7の2日分）を入力
+                  </button>
+                </div>
                 <textarea
                   rows={8}
                   value={emptyPastedHtml}
                   onChange={(e) => setEmptyPastedHtml(e.target.value)}
-                  placeholder="<!DOCTYPE html>... <html>... または <table>... を貼り付けてください"
+                  placeholder={'店舗名,日付,機種,台番,差枚,G数,出率,参照URL\nマルハンメガシティ2000蒲田7,2026-10-04,スロット ソードアート・オンラインⅡ,3069,"-7,400","7,405",66.7%,https://min-repo.com/3389710/?kishu=all&sort=num\n\nまたはHTMLソース（<!DOCTYPE html>... <table>...）'}
                   className="w-full text-xs font-mono p-3 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-amber-500"
                 />
                 <button
@@ -604,7 +637,7 @@ export default function App() {
                   onClick={() => handleDirectHtmlImport(emptyPastedHtml)}
                   className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
                 >
-                  HTMLコードを解析して店舗登録
+                  貼り付けたデータを解析して店舗登録
                 </button>
               </div>
             )}
@@ -620,7 +653,7 @@ export default function App() {
             <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs bg-slate-50/80 -mx-6 -mb-6 p-4 rounded-b-2xl">
               <div className="text-slate-500 space-y-0.5">
                 <span className="font-bold text-slate-700 block">
-                  取り込んだHTMLファイルのデータのみを完全に使用
+                  取り込んだCSV・HTMLファイルのデータのみを完全に使用
                 </span>
                 <span className="text-[11px] text-slate-500 block">
                   ※サンプルデータ等は一切含まず、取り込まれたデータのみを保持します。リセット実行時はすべてのデータが安全に全削除されます。
@@ -789,15 +822,6 @@ export default function App() {
                 </button>
               )}
             </div>
-
-            <button
-              type="button"
-              onClick={() => setIsStoreModalOpen(true)}
-              className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold rounded-lg transition-colors flex items-center gap-1 cursor-pointer shadow-2xs shrink-0 whitespace-nowrap"
-            >
-              <UploadCloud className="w-3.5 h-3.5" />
-              HTML取込 / 他店舗追加
-            </button>
           </div>
 
           {/* Right side: Period & Condition Settings */}
@@ -827,16 +851,6 @@ export default function App() {
               <span>
                 換金率・条件調整 ({rateLend}枚貸/{rateExchange}枚交換・比率{cashRatio}%)
               </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setIsResetConfirmOpen(true)}
-              className="px-2.5 py-1 bg-slate-100 hover:bg-rose-50 text-slate-500 hover:text-rose-600 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1 cursor-pointer shrink-0 whitespace-nowrap"
-              title="初期状態にリセット（全店舗削除）"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>リセット</span>
             </button>
           </div>
         </div>
@@ -868,12 +882,12 @@ export default function App() {
 
         {/* Optional Rate Settings Drawer */}
         {showSettings && (
-          <div className="bg-white p-4 rounded-xl border border-amber-300 shadow-sm animate-in fade-in duration-150">
+          <div className="bg-white p-4 rounded-xl border border-amber-300 shadow-sm animate-in fade-in duration-150 space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
                 <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
                   <SlidersHorizontal className="w-4 h-4 text-amber-500" />
-                  換金率およびG数モデルパラメーター調整 ({currentStore.name})
+                  換金率およびG数モデルパラメーター設定 ({currentStore.name})
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
                   貸出・交換レートや現金投資比率を変更すると、全日・全月分の粗利および推計売上がリアルタイムで再計算されます
@@ -918,19 +932,18 @@ export default function App() {
                   </select>
                 </div>
 
-                <div className="flex items-center gap-1.5 text-xs">
-                  <label className="text-slate-600 font-medium">現金投資比率:</label>
-                  <select
+                <div className="flex items-center gap-2 text-xs">
+                  <label className="text-slate-600 font-medium whitespace-nowrap">現金投資比率:</label>
+                  <input
+                    type="range"
+                    min="20"
+                    max="50"
+                    step="1"
                     value={cashRatio}
                     onChange={(e) => setCashRatio(Number(e.target.value))}
-                    className="bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs font-semibold"
-                  >
-                    <option value={25}>25% (超高持ち玉)</option>
-                    <option value={30}>30% (高持ち玉比率)</option>
-                    <option value={35}>35% (業界標準・標準店)</option>
-                    <option value={40}>40% (低持ち玉・高稼働)</option>
-                    <option value={45}>45% (激戦区・夜間客多)</option>
-                  </select>
+                    className="w-24 accent-amber-500 h-1.5 bg-slate-200 rounded-lg cursor-pointer"
+                  />
+                  <span className="font-black text-amber-600 w-8">{cashRatio}%</span>
                 </div>
 
                 <button
@@ -950,196 +963,278 @@ export default function App() {
                 </button>
               </div>
             </div>
+
+            {/* Dynamic Store Calculation Display (Replaces fixed ModelComparisonBanner) */}
+            {(() => {
+              const lendUnit = rateLend > 0 ? 1000 / rateLend : 0;
+              const exchUnit = rateExchange > 0 ? 1000 / rateExchange : 0;
+              const gap = lendUnit - exchUnit;
+              return (
+                <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3 text-xs text-amber-950 flex flex-col md:flex-row md:items-center justify-between gap-2">
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-1.5 font-bold text-amber-900">
+                      <Calculator className="w-4 h-4 text-amber-600" />
+                      <span>{currentStore.name} 換金ギャップ利益の動的算出構造</span>
+                    </div>
+                    <p className="text-[11px] text-amber-800 leading-relaxed">
+                      「<strong>{rateLend}枚貸 ({lendUnit.toFixed(2)}円/枚) ／ {rateExchange}枚交換 ({exchUnit.toFixed(2)}円/枚) ＝ 1枚あたり {gap >= 0 ? '+' : ''}{gap.toFixed(2)}円の換金ギャップ粗利</strong>」
+                      {gap === 0 ? '（等価交換）' : ''}。
+                      稼働ゲーム数・現金投資比率（{cashRatio}%）と掛け合わせ、客勝ち還元日でも発生するホール粗利を正確に可視化しています。
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <span className="text-[10px] text-slate-500 block">1枚あたりギャップ</span>
+                    <span className="text-base font-black text-amber-700">
+                      {gap >= 0 ? `+${gap.toFixed(2)}` : gap.toFixed(2)}円/枚
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
 
-        {/* Perspective Status Indicator Banner */}
-        <div
-          className={`px-4 py-2.5 rounded-xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs transition-all shadow-2xs ${
-            perspective === 'hall'
-              ? 'bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border-indigo-500/40 text-white'
-              : 'bg-gradient-to-r from-emerald-950 via-teal-900 to-emerald-950 border-emerald-500/50 text-white'
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            <span
-              className={`px-2 py-0.5 rounded text-[11px] font-black ${
-                perspective === 'hall' ? 'bg-amber-400 text-slate-950' : 'bg-emerald-400 text-slate-950'
-              }`}
-            >
-              {perspective === 'hall' ? 'ホール経営目線' : 'スロッター収支目線'}
-            </span>
-            <span className="font-medium text-slate-200">
-              {perspective === 'hall' ? (
-                <span>
-                  <strong>「+」黒字</strong> = 店舗の粗利獲得 (回収) ／ <strong>「-」赤字</strong> = 出玉還元 (客勝ち)
-                </span>
-              ) : (
-                <span>
-                  <strong>「+」青/緑</strong> = スロッターの勝ち (出玉獲得) ／ <strong>「-」赤字</strong> = スロッターの負け
-                </span>
-              )}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2 self-end sm:self-auto text-[11px]">
-            <span className="text-slate-400 hidden md:inline">ワンクリック切替:</span>
-            <button
-              type="button"
-              onClick={() => setPerspective(perspective === 'hall' ? 'player' : 'hall')}
-              className="underline hover:text-amber-300 font-bold cursor-pointer"
-            >
-              {perspective === 'hall' ? 'スロッター目線に切り替える →' : 'ホール目線に切り替える →'}
-            </button>
-          </div>
+        {/* 6-Tab Navigation Bar */}
+        <div className="flex items-center gap-1 sm:gap-2 border-b border-slate-200 bg-white px-2 sm:px-4 py-2 rounded-xl shadow-2xs overflow-x-auto">
+          {[
+            { id: 'overview' as const, label: '概要', icon: BarChart3, desc: 'KPIと月別推移' },
+            { id: 'forecast' as const, label: '狙い日予測', icon: Target, desc: '機種・末尾ランキング' },
+            { id: 'models' as const, label: '機種分析', icon: Cpu, desc: '機種別深掘り・高出玉' },
+            { id: 'trends' as const, label: '日付傾向', icon: Calendar, desc: '末尾・曜日・特日' },
+            { id: 'tables' as const, label: '月別・ヒートマップ', icon: Layers, desc: '月別表・ヒートマップ' },
+            { id: 'validation' as const, label: '精度検証', icon: ShieldCheck, desc: 'バックテスト・自動調整' },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-1.5 px-3 py-2 text-xs sm:text-sm font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap ${
+                  isActive
+                    ? 'bg-amber-500 text-slate-950 shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+                title={tab.desc}
+              >
+                <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-slate-950' : 'text-slate-500'}`} />
+                <span>{tab.label}</span>
+                {tab.id === 'validation' && (
+                  <span
+                    className={`px-1.5 py-0.2 rounded text-[10px] font-black ${
+                      isActive ? 'bg-slate-950 text-amber-300' : 'bg-indigo-100 text-indigo-700'
+                    }`}
+                  >
+                    新規
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
-        {/* Model Comparison Banner */}
-        <ModelComparisonBanner
-          profitModel={profitModel}
-          setProfitModel={setProfitModel}
-          perspective={perspective}
-          totalDiffProfit={totalDiffProfit}
-          totalGModelProfit={totalGModelProfit}
-          totalRevenue={totalRevenue}
-          avgPayoutRate={avgPayoutRate}
-          cashRatio={cashRatio}
-          setCashRatio={setCashRatio}
-        />
+        {/* TAB 1: 概要 (KPI と月別推移グラフ) */}
+        {activeTab === 'overview' && (
+          <div className="space-y-5 animate-in fade-in duration-150">
+            {/* 1-Line Condensed Perspective Status Bar */}
+            <div
+              className={`px-3.5 py-1.5 rounded-lg border flex items-center justify-between gap-2 text-xs transition-all shadow-2xs ${
+                perspective === 'hall'
+                  ? 'bg-slate-900 border-indigo-500/40 text-white'
+                  : 'bg-emerald-950 border-emerald-500/40 text-white'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <span
+                  className={`px-2 py-0.5 rounded text-[11px] font-black ${
+                    perspective === 'hall' ? 'bg-amber-400 text-slate-950' : 'bg-emerald-400 text-slate-950'
+                  }`}
+                >
+                  {perspective === 'hall' ? 'ホール経営目線' : 'スロッター収支目線'}
+                </span>
+                <span className="text-slate-300 text-xs hidden sm:inline">
+                  {perspective === 'hall'
+                    ? '「+」黒字＝店舗粗利 (回収) ／「-」赤字＝出玉還元 (客勝ち)'
+                    : '「+」青/緑＝客勝ち (出玉獲得) ／「-」赤字＝客負け'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPerspective(perspective === 'hall' ? 'player' : 'hall')}
+                className="text-[11px] underline hover:text-amber-300 font-bold cursor-pointer shrink-0"
+              >
+                {perspective === 'hall' ? 'スロッター目線に切替 →' : 'ホール目線に切替 →'}
+              </button>
+            </div>
 
-        {/* TOP Section: Left KPI Cards / Right Monthly Profit Chart */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
-          {/* TOP Left: KPI Cards (2x2 grid) */}
-          <div className="lg:col-span-5 flex flex-col justify-between">
-            <KpiCards
-              monthlyStats={filteredMonthlyStats}
+            {/* TOP Section: Left KPI Cards / Right Monthly Profit Chart */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
+              {/* TOP Left: KPI Cards (2x2 grid) */}
+              <div className="lg:col-span-5 flex flex-col justify-between">
+                <KpiCards
+                  monthlyStats={filteredMonthlyStats}
+                  perspective={perspective}
+                  unit={unit}
+                  profitModel={profitModel}
+                />
+              </div>
+
+              {/* TOP Right: Monthly Profit Chart */}
+              <div className="lg:col-span-7 flex flex-col">
+                <ProfitChart
+                  monthlyStats={filteredMonthlyStats}
+                  perspective={perspective}
+                  unit={unit}
+                  profitModel={profitModel}
+                  onSelectMonth={(ym) => setSelectedMonthModal(ym)}
+                />
+              </div>
+            </div>
+
+            {/* Footnote / Explanation */}
+            <div className="p-4 bg-white rounded-xl border border-slate-200/80 text-xs text-slate-500 space-y-1.5">
+              <div className="font-bold text-slate-700 flex items-center gap-1.5">
+                <HelpCircle className="w-4 h-4 text-indigo-500" />
+                G数(IN枚数)連動 利益算出方式について
+              </div>
+              <ul className="list-disc list-inside space-y-1 text-slate-600 pl-1">
+                <li>
+                  <strong>G数(IN枚数)連動モデル (実務ホールコン方式):</strong> IN枚数（平均G数 × 3枚 × 台数）から現金投資売上を推計し、貸出・交換レートによる換金ギャップ（{rateLend}枚貸 / {rateExchange}枚交換＝1枚あたり約{((1000/rateLend) - (1000/rateExchange)).toFixed(2)}円の手数料）を算入した実務粗利です。高稼働な日ほど確定する手数料収益と差枚還元を同時に把握できます。
+                </li>
+                <li>
+                  <strong>店舗特日ルール ({currentStore.name}):</strong> {currentStore.oldEventDays || '未設定'}
+                </li>
+              </ul>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 2: 狙い日予測 (機種・末尾ランキング) */}
+        {activeTab === 'forecast' && (
+          <div className="space-y-6 animate-in fade-in duration-150">
+            <TargetDateRanking
+              targetDate={targetDate || latestDataDate || new Date().toISOString().slice(0, 10)}
+              setTargetDate={setTargetDate}
+              dailyRecords={currentStore.dailyRecords || []}
               perspective={perspective}
               unit={unit}
-              profitModel={profitModel}
+              rateLend={rateLend}
+              rateExchange={rateExchange}
+              specialDayRules={currentStore.specialDayRules}
+              oldEventDays={currentStore.oldEventDays}
+              customWeights={currentStore.customRankingWeights}
             />
           </div>
+        )}
 
-          {/* TOP Right: Monthly Profit Chart */}
-          <div className="lg:col-span-7 flex flex-col">
-            <ProfitChart
-              monthlyStats={filteredMonthlyStats}
+        {/* TAB 3: 機種分析 (機種別の深掘り、高出玉分析) */}
+        {activeTab === 'models' && (
+          <div className="space-y-6 animate-in fade-in duration-150">
+            {/* 店舗分析深堀り: 機種別・台番号末尾詳細分析 */}
+            <ModelDeepAnalysis
+              dailyRecords={filteredDailyRecords}
               perspective={perspective}
               unit={unit}
-              profitModel={profitModel}
+              rateLend={currentStore.rateLend}
+              rateExchange={currentStore.rateExchange}
+              globalModelPreset={modelPreset}
+              globalSelectedModelNames={selectedModelNames}
+              activeFilterLabel={activeFilterLabel}
+              onSelectPreset={handleSelectModelPreset}
+              onOpenModelModal={() => setIsMultiSelectModalOpen(true)}
+              onToggleModel={handleToggleModelInSelection}
+            />
+
+            {/* 出率が高い台の特徴・投入傾向分析 */}
+            <HighPayoutAnalysis
+              dailyRecords={filteredDailyRecords}
+              perspective={perspective}
+              unit={unit}
+              rateLend={rateLend}
+              rateExchange={rateExchange}
+              oldEventDays={currentStore.oldEventDays}
+              specialDayRules={currentStore.specialDayRules}
+            />
+          </div>
+        )}
+
+        {/* TAB 4: 日付傾向 (末尾、曜日、特日) */}
+        {activeTab === 'trends' && (
+          <div className="space-y-6 animate-in fade-in duration-150">
+            {/* 〇のつく日別の利益・出玉傾向分析 */}
+            <TailNumberAnalysis
+              dailyRecords={filteredDailyRecords}
+              perspective={perspective}
+              unit={unit}
+              setUnit={setUnit}
+              oldEventDays={currentStore.oldEventDays}
+              specialDayRules={currentStore.specialDayRules}
+            />
+
+            {/* 曜日別 利益・出玉傾向分析 */}
+            <DayOfWeekAnalysis
+              dailyRecords={filteredDailyRecords}
+              perspective={perspective}
+              unit={unit}
+              setUnit={setUnit}
+              oldEventDays={currentStore.oldEventDays}
+              specialDayRules={currentStore.specialDayRules}
+            />
+
+            {/* Special Day Patterns (出す・回収するサイクル分析) */}
+            <SpecialDayPatterns
+              dailyRecords={filteredDailyRecords}
+              perspective={perspective}
+              unit={unit}
+              specialDayRules={currentStore.specialDayRules}
+              oldEventDays={currentStore.oldEventDays}
               onSelectMonth={(ym) => setSelectedMonthModal(ym)}
             />
           </div>
-        </div>
-
-        {/* 攻略狙い日 指定時の狙い台・おすすめ機種ランキング */}
-        {targetDate && (
-          <TargetDateRanking
-            targetDate={targetDate}
-            setTargetDate={setTargetDate}
-            dailyRecords={currentStore.dailyRecords || []}
-            perspective={perspective}
-            unit={unit}
-            rateLend={rateLend}
-            rateExchange={rateExchange}
-            specialDayRules={currentStore.specialDayRules}
-            oldEventDays={currentStore.oldEventDays}
-          />
         )}
 
-        {/* 店舗分析深堀り: 機種別・台番号末尾詳細分析 */}
-        <ModelDeepAnalysis
-          dailyRecords={filteredDailyRecords}
-          perspective={perspective}
-          unit={unit}
-          rateLend={currentStore.rateLend}
-          rateExchange={currentStore.rateExchange}
-          globalModelPreset={modelPreset}
-          globalSelectedModelNames={selectedModelNames}
-          activeFilterLabel={activeFilterLabel}
-          onSelectPreset={handleSelectModelPreset}
-          onOpenModelModal={() => setIsMultiSelectModalOpen(true)}
-          onToggleModel={handleToggleModelInSelection}
-        />
+        {/* TAB 5: 月別・ヒートマップ (月別表、ヒートマップ) */}
+        {activeTab === 'tables' && (
+          <div className="space-y-6 animate-in fade-in duration-150">
+            {/* Detailed Monthly Table */}
+            <MonthlyTable
+              monthlyStats={filteredMonthlyStats}
+              dailyRecords={filteredDailyRecords}
+              perspective={perspective}
+              unit={unit}
+              profitModel={profitModel}
+              specialDayRules={currentStore.specialDayRules}
+              oldEventDays={currentStore.oldEventDays}
+              onSelectMonth={(ym) => setSelectedMonthModal(ym)}
+            />
 
-        {/* 出率が高い台の特徴・投入傾向分析 */}
-        <HighPayoutAnalysis
-          dailyRecords={filteredDailyRecords}
-          perspective={perspective}
-          unit={unit}
-          rateLend={rateLend}
-          rateExchange={rateExchange}
-          oldEventDays={currentStore.oldEventDays}
-          specialDayRules={currentStore.specialDayRules}
-        />
-
-        {/* 〇のつく日別の利益・出玉傾向分析 */}
-        <TailNumberAnalysis
-          dailyRecords={filteredDailyRecords}
-          perspective={perspective}
-          unit={unit}
-          setUnit={setUnit}
-          oldEventDays={currentStore.oldEventDays}
-          specialDayRules={currentStore.specialDayRules}
-        />
-
-        {/* 曜日別 利益・出玉傾向分析 */}
-        <DayOfWeekAnalysis
-          dailyRecords={filteredDailyRecords}
-          perspective={perspective}
-          unit={unit}
-          setUnit={setUnit}
-          oldEventDays={currentStore.oldEventDays}
-          specialDayRules={currentStore.specialDayRules}
-        />
-
-        {/* Special Day Patterns (出す・回収するサイクル分析) */}
-        <SpecialDayPatterns
-          dailyRecords={filteredDailyRecords}
-          perspective={perspective}
-          unit={unit}
-          specialDayRules={currentStore.specialDayRules}
-          oldEventDays={currentStore.oldEventDays}
-          onSelectMonth={(ym) => setSelectedMonthModal(ym)}
-        />
-
-        {/* Detailed Monthly Table */}
-        <MonthlyTable
-          monthlyStats={filteredMonthlyStats}
-          dailyRecords={filteredDailyRecords}
-          perspective={perspective}
-          unit={unit}
-          profitModel={profitModel}
-          specialDayRules={currentStore.specialDayRules}
-          oldEventDays={currentStore.oldEventDays}
-          onSelectMonth={(ym) => setSelectedMonthModal(ym)}
-        />
-
-        {/* 総合出玉・粗利ヒートマップ分析 (最下部) */}
-        <HeatmapAnalysis
-          dailyRecords={filteredDailyRecords}
-          perspective={perspective}
-          unit={unit}
-          profitModel={profitModel}
-          specialDayRules={currentStore.specialDayRules}
-          oldEventDays={currentStore.oldEventDays}
-          onSelectMonth={(ym) => setSelectedMonthModal(ym)}
-        />
-
-        {/* Footnote / Explanation */}
-        <div className="p-4 bg-white rounded-xl border border-slate-200/80 text-xs text-slate-500 space-y-1.5">
-          <div className="font-bold text-slate-700 flex items-center gap-1.5">
-            <HelpCircle className="w-4 h-4 text-indigo-500" />
-            G数(IN枚数)連動 利益算出方式について
+            {/* 総合出玉・粗利ヒートマップ分析 */}
+            <HeatmapAnalysis
+              dailyRecords={filteredDailyRecords}
+              perspective={perspective}
+              unit={unit}
+              profitModel={profitModel}
+              specialDayRules={currentStore.specialDayRules}
+              oldEventDays={currentStore.oldEventDays}
+              onSelectMonth={(ym) => setSelectedMonthModal(ym)}
+            />
           </div>
-          <ul className="list-disc list-inside space-y-1 text-slate-600 pl-1">
-            <li>
-              <strong>G数(IN枚数)連動モデル (実務ホールコン方式):</strong> IN枚数（平均G数 × 3枚 × 台数）から現金投資売上を推計し、貸出・交換レートによる換金ギャップ（{rateLend}枚貸 / {rateExchange}枚交換＝1枚あたり約{((1000/rateLend) - (1000/rateExchange)).toFixed(2)}円の手数料）を算入した実務粗利です。高稼働な日ほど確定する手数料収益と差枚還元を同時に把握できます。
-            </li>
-            <li>
-              <strong>店舗特日ルール ({currentStore.name}):</strong> {currentStore.oldEventDays || '未設定'}
-            </li>
-          </ul>
-        </div>
+        )}
+
+        {/* TAB 6: 精度検証 (バックテストと自動調整) */}
+        {activeTab === 'validation' && (
+          <div className="space-y-6 animate-in fade-in duration-150">
+            <AccuracyValidation
+              dailyRecords={currentStore.dailyRecords || []}
+              specialDayRules={currentStore.specialDayRules}
+              oldEventDays={currentStore.oldEventDays}
+              storeName={currentStore.name}
+              currentWeights={currentStore.customRankingWeights}
+              onSaveStoreWeights={handleSaveStoreWeights}
+            />
+          </div>
+        )}
       </main>
 
       {/* Daily Records Modal */}
@@ -1211,18 +1306,6 @@ export default function App() {
           }}
         />
       )}
-
-      {/* Footer */}
-      <footer className="border-t border-slate-200 bg-white py-4 mt-8">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-500">
-          <div>
-            {currentStore.name} 利益推移分析システム（スロレポHTMLインポート対応）
-          </div>
-          <div className="text-slate-400">
-            登録店舗数: {stores.length}店舗 / 現在表示: {filteredDailyRecords.length}日分
-          </div>
-        </div>
-      </footer>
     </div>
   );
 }

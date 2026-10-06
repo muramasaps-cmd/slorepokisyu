@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { DailyRecord, SpecialDayRules } from '../data/types';
+import { DailyRecord, SpecialDayRules, RankingWeights } from '../data/types';
 import {
   calculateTargetDateRanking,
   TargetDateForecast,
@@ -39,6 +39,7 @@ interface TargetDateRankingProps {
   rateExchange?: number;
   specialDayRules?: SpecialDayRules;
   oldEventDays?: string;
+  customWeights?: RankingWeights;
 }
 
 type ModelFilterType = 'all' | 'main' | 'smart_slot' | 'juggler_a' | 'small';
@@ -54,6 +55,7 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
   rateExchange = 52,
   specialDayRules,
   oldEventDays = '',
+  customWeights,
 }) => {
   const [modelFilter, setModelFilter] = useState<ModelFilterType>('all');
   const [modelSort, setModelSort] = useState<ModelSortType>('score');
@@ -62,8 +64,8 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
   // Compute forecast for target date
   const forecast = useMemo<TargetDateForecast | null>(() => {
     if (!targetDate) return null;
-    return calculateTargetDateRanking(targetDate, dailyRecords, specialDayRules, oldEventDays);
-  }, [targetDate, dailyRecords, specialDayRules, oldEventDays]);
+    return calculateTargetDateRanking(targetDate, dailyRecords, specialDayRules, oldEventDays, customWeights);
+  }, [targetDate, dailyRecords, specialDayRules, oldEventDays, customWeights]);
 
   if (!targetDate || !forecast) {
     return null;
@@ -189,7 +191,7 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
               <span>{forecast.targetDate} の狙い台・おすすめ機種ランキング</span>
             </h2>
             <p className="text-xs sm:text-sm text-slate-300 mt-1 max-w-3xl">
-              過去の類似営業日（同種特日・同曜日・同末尾日 計{forecast.matchingHistoricalDaysCount}日間）の全台差枚データから、高設定投入確率・期待差枚・勝率を多角的に算出した予測ランキングです。
+              過去の類似営業日（同種特日・同曜日・同末尾日 計{forecast.matchingHistoricalDaysCount}日間）の全台差枚データから、過去実績の相対評価・期待差枚・勝率を多角的に算出した予測ランキングです。
             </p>
           </div>
 

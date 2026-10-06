@@ -8,11 +8,13 @@ import {
   ParsedStoreGroup,
 } from '../utils/multiHtmlParser';
 import { parseSlorepoHtml } from '../utils/htmlParser';
+import { generateUnitLevelCsvTemplate } from '../utils/csvParser';
 import {
   X,
   Building2,
   UploadCloud,
   FileCode,
+  FileSpreadsheet,
   Trash2,
   Check,
   AlertCircle,
@@ -84,7 +86,7 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
 
     try {
       const readResults = await readFilesAsText(files, (done, total) => {
-        setProcessStatus(`HTMLファイルを読み込み中... (${done}/${total}件)`);
+        setProcessStatus(`ファイルを読み込み中... (${done}/${total}件)`);
         setProgressPercent(Math.round((done / total) * 45));
       });
 
@@ -246,10 +248,10 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
             </div>
             <div>
               <h2 className="text-base sm:text-lg font-black text-slate-900 flex items-center gap-2">
-                店舗管理 & HTMLデータ取込
+                店舗管理 & データ取込
               </h2>
               <p className="text-xs text-slate-500">
-                スロレポのHTMLファイルを取り込んで分析店舗として登録します（複数ファイル一括取込対応）
+                みんレポ台番CSV・アナスロ・スロレポの出玉ファイルを取り込んで分析店舗として登録します（台番自動取得・一括取込対応）
               </p>
             </div>
           </div>
@@ -275,7 +277,7 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
               }`}
             >
               <UploadCloud className="w-4 h-4" />
-              HTMLファイル取込 (複数一括対応)
+              出玉データ取込 (CSV / HTML一括対応)
             </button>
             <button
               type="button"
@@ -305,18 +307,18 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
 
         {/* Modal Body */}
         <div className="p-6 overflow-y-auto flex-1 space-y-6">
-          {/* TAB 1: HTML IMPORT */}
+          {/* TAB 1: DATA IMPORT */}
           {activeTab === 'import' && (
             <div className="space-y-6">
               {/* Guidance Banner */}
               <div className="p-4 bg-amber-50/80 border border-amber-200/80 rounded-xl text-xs text-amber-900 space-y-1.5">
                 <div className="font-bold flex items-center gap-1.5 text-amber-950">
-                  <FileCode className="w-4 h-4 text-amber-600" />
-                  アナスロ（ana-slo.com）およびスロレポ（slorepo.com）の複数HTMLファイル一括取り込みに対応
+                  <FileSpreadsheet className="w-4 h-4 text-amber-600" />
+                  みんレポ台番CSV（店舗名,日付,機種,台番,差枚,G数,出率,参照URL）およびアナスロ・スロレポHTML対応
                 </div>
                 <p className="text-amber-800 leading-relaxed">
-                  保存したアナスロ／スロレポ店舗HTML（<code>.html</code> / <code>.htm</code>）を<strong>複数まとめてドラッグ＆ドロップまたは選択</strong>できます。
-                  同じ店舗の複数月ファイルは<strong>重複日付を除去して自動統合</strong>され、別店舗のファイルは<strong>店舗ごとに自動分類</strong>してワンクリックで一括登録できます。
+                  保存したみんレポ台番CSV（<code>.csv</code>）や店舗HTML（<code>.html</code> / <code>.htm</code>）を<strong>複数まとめてドラッグ＆ドロップまたは選択</strong>できます。
+                  テーブル内の<strong>「台番」</strong>から台番号・差枚・G数・出率を自動取得し、機種別・末尾別の深掘り分析へ完全反映します。
                 </p>
               </div>
 
@@ -332,7 +334,7 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
                         : 'text-slate-500 hover:text-slate-800'
                     }`}
                   >
-                    HTMLファイルを選択 / ドロップ (複数可)
+                    CSV / HTMLファイルを選択 (複数可)
                   </button>
                   <button
                     type="button"
@@ -343,7 +345,7 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
                         : 'text-slate-500 hover:text-slate-800'
                     }`}
                   >
-                    HTMLコードを直接貼り付け
+                    テキスト / CSVを直接貼り付け
                   </button>
                 </div>
               </div>
@@ -369,7 +371,7 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
                     ref={fileInputRef}
                     onChange={handleFileChange}
                     multiple
-                    accept=".html,.htm,text/html"
+                    accept=".csv,.tsv,.txt,.html,.htm,text/csv,text/html,text/plain"
                     className="hidden"
                   />
 
@@ -396,16 +398,16 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
                           />
                         </div>
                         <p className="text-[11px] text-slate-500">
-                          大量のHTMLファイル（100件以上）もブラウザ内で安全に順次解析・統合しています
+                          大量のファイル（店舗別CSVやHTML 100件以上）もブラウザ内で安全に順次解析・統合しています
                         </p>
                       </div>
                     ) : (
                       <>
                         <p className="text-sm font-bold text-slate-800">
-                          ここにスロレポのHTMLファイルをドラッグ＆ドロップ（複数ファイル対応）
+                          ここに店舗別CSVファイルまたはHTMLファイルをドラッグ＆ドロップ（複数ファイル一括対応）
                         </p>
                         <p className="text-xs text-slate-500 mt-1">
-                          クリックしてPCから複数ファイルを選択（ShiftやCtrl/Cmdキーでまとめて選択可能）
+                          クリックしてPCから複数ファイルを選択（店舗ごとに別々のCSVファイルや複数日HTMLをまとめて選択可能）
                         </p>
                       </>
                     )}
@@ -420,26 +422,46 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
                 </div>
               )}
 
-              {/* Mode B: HTML Code Paste */}
+              {/* Mode B: CSV / HTML Code Paste */}
               {inputMode === 'paste' && (
                 <div className="space-y-3">
-                  <label className="block text-xs font-bold text-slate-700">
-                    スロレポ店舗ページのHTMLソースを貼り付け:
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-bold text-slate-700">
+                      CSVデータ（店舗名,日付,機種,台番,差枚,G数,出率,参照URL）またはHTMLソースを貼り付け:
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setPastedHtml(generateUnitLevelCsvTemplate())}
+                      className="text-xs text-amber-700 hover:text-amber-900 font-bold underline cursor-pointer"
+                    >
+                      サンプルCSV（蒲田7の2日分）を入力
+                    </button>
+                  </div>
                   <textarea
                     rows={8}
                     value={pastedHtml}
                     onChange={(e) => setPastedHtml(e.target.value)}
-                    placeholder="<!DOCTYPE html>... <html>... または <table>... をそのまま貼り付けてください"
+                    placeholder={'店舗名,日付,機種,台番,差枚,G数,出率,参照URL\nマルハンメガシティ2000蒲田7,2026-10-04,スロット ソードアート・オンラインⅡ,3069,"-7,400","7,405",66.7%,https://min-repo.com/3389710/?kishu=all&sort=num\n\nまたはHTMLソース（<!DOCTYPE html>... <table>...）'}
                     className="w-full text-xs font-mono p-3 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-amber-500"
                   />
-                  <button
-                    type="button"
-                    onClick={() => handleProcessPastedHtml(pastedHtml)}
-                    className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
-                  >
-                    貼り付けたHTMLを解析
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleProcessPastedHtml(pastedHtml)}
+                      className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                    >
+                      貼り付けたデータを解析・登録
+                    </button>
+                    {pastedHtml && (
+                      <button
+                        type="button"
+                        onClick={() => setPastedHtml('')}
+                        className="px-3 py-2 text-slate-500 hover:text-slate-800 text-xs font-semibold cursor-pointer"
+                      >
+                        クリア
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -506,11 +528,25 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
                           className="bg-white border-2 border-slate-200 hover:border-emerald-400/80 rounded-2xl p-4 sm:p-5 space-y-3 transition-all shadow-2xs"
                         >
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
-                            <div className="space-y-1">
+                            <div className="space-y-2 flex-1">
                               <div className="flex flex-wrap items-center gap-2">
-                                <h4 className="text-base font-black text-slate-900">
-                                  {store.name}
-                                </h4>
+                                <span className="text-2xs font-bold text-slate-500 uppercase tracking-wider">
+                                  店舗名:
+                                </span>
+                                <input
+                                  type="text"
+                                  value={store.name}
+                                  onChange={(e) => {
+                                    const newName = e.target.value;
+                                    setStagedGroups((prev) =>
+                                      prev.map((g) =>
+                                        g.store.id === store.id ? { ...g, store: { ...g.store, name: newName } } : g
+                                      )
+                                    );
+                                  }}
+                                  className="text-base font-black text-slate-900 border border-slate-300 rounded-lg px-2.5 py-0.5 bg-white focus:ring-2 focus:ring-amber-500 min-w-[200px]"
+                                  title="店舗名を直接編集可能"
+                                />
                                 {isExistingStoreUpdate ? (
                                   <span className="px-2.5 py-0.5 bg-sky-100 text-sky-800 border border-sky-300 font-bold text-2xs rounded-full flex items-center gap-1">
                                     <RefreshCw className="w-3 h-3 text-sky-600" />
@@ -526,6 +562,71 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
                                   {sourceFileNames.length}ファイル統合 ({sourceFileNames.join(', ')})
                                 </span>
                               </div>
+
+                              {stores.length > 0 && (
+                                <div className="flex flex-wrap items-center gap-2 text-xs pt-1">
+                                  <span className="text-2xs font-bold text-slate-500">
+                                    データの保存先:
+                                  </span>
+                                  <select
+                                    value={group.originalStoreId || (group.isExistingStoreUpdate ? store.id : 'new')}
+                                    onChange={(e) => {
+                                      const selectedVal = e.target.value;
+                                      if (selectedVal === 'new') {
+                                        setStagedGroups((prev) =>
+                                          prev.map((g) =>
+                                            g.store.id === store.id
+                                              ? {
+                                                  ...g,
+                                                  isExistingStoreUpdate: false,
+                                                  originalStoreId: undefined,
+                                                  store: {
+                                                    ...g.store,
+                                                    id: `store-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+                                                    name: g.parsedStoreName || g.store.name,
+                                                  },
+                                                }
+                                              : g
+                                          )
+                                        );
+                                      } else {
+                                        const target = stores.find((s) => s.id === selectedVal);
+                                        if (target) {
+                                          setStagedGroups((prev) =>
+                                            prev.map((g) =>
+                                              g.store.id === store.id
+                                                ? {
+                                                    ...g,
+                                                    isExistingStoreUpdate: true,
+                                                    originalStoreId: target.id,
+                                                    store: {
+                                                      ...g.store,
+                                                      id: target.id,
+                                                      name: target.name,
+                                                    },
+                                                  }
+                                                : g
+                                            )
+                                          );
+                                        }
+                                      }
+                                    }}
+                                    className="bg-white border border-slate-300 rounded-lg px-2.5 py-1 text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-amber-500 shadow-2xs"
+                                  >
+                                    <option value="new">➕ 新規店舗として登録 ({group.parsedStoreName || store.name})</option>
+                                    {stores.map((s) => (
+                                      <option key={s.id} value={s.id}>
+                                        既存店舗「{s.name}」に統合・更新する ({s.dailyRecords.length}日分データ有)
+                                      </option>
+                                    ))}
+                                  </select>
+                                  {group.parsedStoreName && (
+                                    <span className="text-[11px] text-slate-500">
+                                      (CSV元店舗名: <span className="font-semibold text-slate-700">{group.parsedStoreName}</span>)
+                                    </span>
+                                  )}
+                                </div>
+                              )}
                             </div>
 
                             <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">

@@ -1095,7 +1095,7 @@ export const MonthlyTable: React.FC<MonthlyTableProps> = ({
   };
 
   const filteredAndSorted = useMemo(() => {
-    let result = monthlyStats.filter((m) =>
+    const result = monthlyStats.filter((m) =>
       m.label.toLowerCase().includes(searchTerm.toLowerCase()) ||
       m.yearMonth.includes(searchTerm)
     );
@@ -1363,20 +1363,20 @@ export const MonthlyTable: React.FC<MonthlyTableProps> = ({
       </div>
 
       {/* Table Container */}
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto max-h-[700px] overflow-y-auto">
         <table className="w-full text-left text-xs sm:text-sm">
-          <thead className="bg-slate-50/80 text-slate-600 border-b border-slate-200 text-xs uppercase tracking-wider font-bold">
+          <thead className="bg-slate-50/95 backdrop-blur-xs text-slate-600 border-b border-slate-200 text-xs uppercase tracking-wider font-bold sticky top-0 z-20 shadow-2xs">
             <tr>
               <th
                 onClick={() => handleSort('yearMonth')}
-                className="py-3 px-4 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
+                className="py-2.5 px-4 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
               >
                 <div className="flex items-center gap-1">
                   対象月
                   <ArrowUpDown className="w-3 h-3 text-slate-400" />
                 </div>
               </th>
-              <th className="py-3 px-3 whitespace-nowrap">
+              <th className="py-2.5 px-3 whitespace-nowrap">
                 <div className="flex items-center gap-1 text-amber-700">
                   <Target className="w-3 h-3" />
                   特日サイクル
@@ -1384,7 +1384,7 @@ export const MonthlyTable: React.FC<MonthlyTableProps> = ({
               </th>
               <th
                 onClick={() => handleSort('daysCount')}
-                className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors text-right whitespace-nowrap"
+                className="py-2.5 px-3 cursor-pointer hover:bg-slate-100 transition-colors text-right whitespace-nowrap"
               >
                 <div className="flex items-center justify-end gap-1">
                   日数
@@ -1395,9 +1395,9 @@ export const MonthlyTable: React.FC<MonthlyTableProps> = ({
               {/* G-Model Total Profit */}
               <th
                 onClick={() => handleSort('gModelHallProfit')}
-                className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors text-right whitespace-nowrap text-indigo-700"
+                className="py-2.5 px-3 cursor-pointer hover:bg-slate-100 transition-colors text-right whitespace-nowrap text-slate-900"
               >
-                <div className="flex items-center justify-end gap-1">
+                <div className="flex items-center justify-end gap-1 font-bold">
                   {perspective === 'hall' ? 'ホール粗利 (月計)' : 'ユーザー収支 (月計)'}
                   <ArrowUpDown className="w-3 h-3 text-slate-400" />
                 </div>
@@ -1406,16 +1406,16 @@ export const MonthlyTable: React.FC<MonthlyTableProps> = ({
               {/* 1日平均ホール粗利 & 全体乖離 */}
               <th
                 onClick={() => handleSort('dailyAvgProfit')}
-                className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors text-right whitespace-nowrap text-indigo-700 bg-indigo-50/40"
+                className="py-2.5 px-3 cursor-pointer hover:bg-slate-100 transition-colors text-right whitespace-nowrap text-indigo-700 bg-indigo-50/60"
               >
-                <div className="flex items-center justify-end gap-1">
+                <div className="flex items-center justify-end gap-1 font-bold">
                   {perspective === 'hall' ? '1日平均粗利 & 全体乖離' : '1日平均収支 & 全体乖離'}
                   <ArrowUpDown className="w-3 h-3 text-slate-400" />
                 </div>
               </th>
 
               {/* 特日 / 通常日 内訳 */}
-              <th className="py-3 px-3 text-right whitespace-nowrap text-slate-700 bg-slate-100/50">
+              <th className="py-2.5 px-3 text-right whitespace-nowrap text-slate-700 bg-slate-100/60">
                 <div className="flex items-center justify-end gap-1">
                   <Layers className="w-3 h-3 text-slate-500" />
                   営業内訳 (特日 / 通常日)
@@ -1425,7 +1425,7 @@ export const MonthlyTable: React.FC<MonthlyTableProps> = ({
               {/* 1台あたり粗利 (台日粗利 & 月台粗利) */}
               <th
                 onClick={() => handleSort('perMachineDailyProfit')}
-                className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors text-right whitespace-nowrap text-slate-600"
+                className="py-2.5 px-3 cursor-pointer hover:bg-slate-100 transition-colors text-right whitespace-nowrap text-slate-600"
               >
                 <div className="flex items-center justify-end gap-1">
                   {perspective === 'hall' ? '1台あたり粗利 (日/台)' : '1台あたり収支 (日/台)'}
@@ -1435,7 +1435,7 @@ export const MonthlyTable: React.FC<MonthlyTableProps> = ({
 
               <th
                 onClick={() => handleSort('avgPayoutRate')}
-                className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors text-right whitespace-nowrap"
+                className="py-2.5 px-3 cursor-pointer hover:bg-slate-100 transition-colors text-right whitespace-nowrap"
               >
                 <div className="flex items-center justify-end gap-1">
                   機械割
@@ -1445,7 +1445,7 @@ export const MonthlyTable: React.FC<MonthlyTableProps> = ({
 
               <th
                 onClick={() => handleSort('avgDiffCoins')}
-                className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors text-right whitespace-nowrap"
+                className="py-2.5 px-3 cursor-pointer hover:bg-slate-100 transition-colors text-right whitespace-nowrap"
               >
                 <div className="flex items-center justify-end gap-1">
                   客側台平均
@@ -1455,7 +1455,7 @@ export const MonthlyTable: React.FC<MonthlyTableProps> = ({
 
               <th
                 onClick={() => handleSort('avgGames')}
-                className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors text-right whitespace-nowrap"
+                className="py-2.5 px-3 cursor-pointer hover:bg-slate-100 transition-colors text-right whitespace-nowrap"
               >
                 <div className="flex items-center justify-end gap-1">
                   平均G数
@@ -1463,11 +1463,11 @@ export const MonthlyTable: React.FC<MonthlyTableProps> = ({
                 </div>
               </th>
 
-              <th className="py-3 px-3 text-center whitespace-nowrap">
+              <th className="py-2.5 px-3 text-center whitespace-nowrap">
                 {perspective === 'hall' ? '店 勝/敗' : '客 勝/敗'}
               </th>
 
-              <th className="py-3 px-3 text-center whitespace-nowrap">
+              <th className="py-2.5 px-3 text-center whitespace-nowrap">
                 内訳 / 明細
               </th>
             </tr>
@@ -1514,7 +1514,7 @@ export const MonthlyTable: React.FC<MonthlyTableProps> = ({
                       isExpanded ? 'bg-indigo-50/20' : ''
                     }`}
                   >
-                    <td className="py-3 px-4 font-bold text-slate-900 whitespace-nowrap">
+                    <td className="py-2.5 px-4 font-bold text-slate-900 whitespace-nowrap">
                       <div className="flex items-center gap-1.5">
                         <button
                           type="button"
@@ -1528,7 +1528,7 @@ export const MonthlyTable: React.FC<MonthlyTableProps> = ({
                             <ChevronDown className="w-4 h-4" />
                           )}
                         </button>
-                        <span className="group-hover:text-amber-600 transition-colors font-extrabold">
+                        <span className="group-hover:text-amber-600 transition-colors font-extrabold font-mono">
                           {m.label}
                         </span>
                         {m.month === 7 && (
@@ -1539,7 +1539,7 @@ export const MonthlyTable: React.FC<MonthlyTableProps> = ({
                       </div>
                     </td>
 
-                    <td className="py-3 px-3 whitespace-nowrap">
+                    <td className="py-2.5 px-3 whitespace-nowrap">
                       {(() => {
                         const sp = specialDayMap.get(m.yearMonth);
                         if (!sp) return <span className="text-slate-300">-</span>;
@@ -1596,28 +1596,32 @@ export const MonthlyTable: React.FC<MonthlyTableProps> = ({
                       })()}
                     </td>
 
-                    <td className="py-3 px-3 text-right text-slate-600 whitespace-nowrap">
+                    <td className="py-2.5 px-3 text-right text-slate-600 font-mono tabular-nums whitespace-nowrap">
                       {m.daysCount}日
                     </td>
 
                     {/* G-Model Monthly Total Yen */}
                     <td
-                      className={`py-3 px-3 text-right font-extrabold whitespace-nowrap ${
-                        gYen >= 0 ? 'text-indigo-600' : 'text-rose-600'
+                      className={`py-2.5 px-3 text-right font-black font-mono tabular-nums whitespace-nowrap ${
+                        gYen >= 0
+                          ? perspective === 'hall'
+                            ? 'text-slate-900'
+                            : 'text-emerald-600'
+                          : 'text-rose-600'
                       }`}
                     >
                       {formatYenExact(gYen)}
                     </td>
 
                     {/* 1日平均ホール粗利 & 全体乖離 */}
-                    <td className="py-3 px-3 text-right whitespace-nowrap bg-indigo-50/30">
-                      <div className="font-extrabold text-slate-900">
+                    <td className="py-2.5 px-3 text-right whitespace-nowrap bg-indigo-50/30">
+                      <div className="font-extrabold font-mono tabular-nums text-slate-900">
                         {formatYen(monthDailyAvg)}
-                        <span className="text-[11px] font-normal text-slate-500 ml-0.5">/日</span>
+                        <span className="text-[10px] font-normal text-slate-500 ml-0.5">/日</span>
                       </div>
                       <div className="flex items-center justify-end gap-1 mt-0.5">
                         <span
-                          className={`text-[10px] px-1.5 py-0.2 rounded font-bold border inline-flex items-center gap-0.5 ${
+                          className={`text-[10px] font-mono tabular-nums px-1.5 py-0.2 rounded font-bold border inline-flex items-center gap-0.5 ${
                             diffFromOverall >= 0
                               ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                               : 'bg-rose-50 text-rose-700 border-rose-200'
@@ -1636,8 +1640,8 @@ export const MonthlyTable: React.FC<MonthlyTableProps> = ({
                     </td>
 
                     {/* 営業内訳 (特日 vs 通常日 1日平均 & 乖離) */}
-                    <td className="py-3 px-3 text-right whitespace-nowrap text-xs bg-slate-50/50">
-                      <div className="flex flex-col gap-0.5 text-[11px]">
+                    <td className="py-2.5 px-3 text-right whitespace-nowrap text-xs bg-slate-50/50">
+                      <div className="flex flex-col gap-0.5 text-[11px] font-mono tabular-nums">
                         <div className="flex items-center justify-end gap-1.5">
                           <span className="text-rose-600 font-bold">特日({m.eventDaysCount}日):</span>
                           <span className="font-semibold text-slate-800">{formatYen(eventDailyAvg)}/日</span>
@@ -1666,43 +1670,43 @@ export const MonthlyTable: React.FC<MonthlyTableProps> = ({
                     </td>
 
                     {/* Per-Machine Profit (日/台 & 月/台) */}
-                    <td className="py-3 px-3 text-right whitespace-nowrap">
+                    <td className="py-2.5 px-3 text-right whitespace-nowrap font-mono tabular-nums">
                       <div
                         className={`font-bold ${
                           perMachineDaily >= 0
                             ? perspective === 'hall'
-                              ? 'text-indigo-600'
-                              : 'text-blue-600'
+                              ? 'text-slate-900'
+                              : 'text-emerald-600'
                             : 'text-rose-600'
                         }`}
                       >
                         {formatYen(perMachineDaily)}/台・日
                       </div>
-                      <div className="text-[11px] text-slate-400">
+                      <div className="text-[10px] text-slate-400">
                         月: {formatYen(perMachineMonthly)}/台
                       </div>
                     </td>
 
                     {/* Payout rate / Machine split */}
-                    <td className="py-3 px-3 text-right font-semibold text-slate-700 whitespace-nowrap">
+                    <td className="py-2.5 px-3 text-right font-bold font-mono tabular-nums text-slate-700 whitespace-nowrap">
                       {m.avgPayoutRate.toFixed(2)}%
                     </td>
 
                     {/* Diff coins per machine */}
                     <td
-                      className={`py-3 px-3 text-right font-semibold whitespace-nowrap ${
+                      className={`py-2.5 px-3 text-right font-bold font-mono tabular-nums whitespace-nowrap ${
                         m.avgDiffCoins > 0 ? 'text-blue-600' : 'text-slate-700'
                       }`}
                     >
                       <div>{m.avgDiffCoins > 0 ? `+${m.avgDiffCoins}` : m.avgDiffCoins} 枚/台</div>
-                      <div className="text-[10px] text-slate-400">平均 {m.avgMachines}台</div>
+                      <div className="text-[10px] text-slate-400 font-sans">平均 {m.avgMachines}台</div>
                     </td>
 
-                    <td className="py-3 px-3 text-right text-slate-600 whitespace-nowrap">
-                      {formatNumber(m.avgGames)}G
+                    <td className="py-2.5 px-3 text-right text-slate-600 font-mono tabular-nums whitespace-nowrap">
+                      {formatNumber(m.avgGames)} G
                     </td>
 
-                    <td className="py-3 px-3 text-center whitespace-nowrap text-xs">
+                    <td className="py-2.5 px-3 text-center whitespace-nowrap text-xs font-mono tabular-nums">
                       {perspective === 'hall' ? (
                         <>
                           <span className="text-emerald-600 font-semibold" title="店舗黒字営業日">{m.hallWinDays}勝</span>
@@ -1711,14 +1715,14 @@ export const MonthlyTable: React.FC<MonthlyTableProps> = ({
                         </>
                       ) : (
                         <>
-                          <span className="text-blue-600 font-semibold" title="客側勝ち日">{m.playerWinDays}勝</span>
+                          <span className="text-emerald-600 font-semibold" title="客側勝ち日">{m.playerWinDays}勝</span>
                           <span className="text-slate-300 mx-1">/</span>
                           <span className="text-rose-600 font-semibold" title="店側回収日">{m.hallWinDays}敗</span>
                         </>
                       )}
                     </td>
 
-                    <td className="py-3 px-3 text-center whitespace-nowrap">
+                    <td className="py-2.5 px-3 text-center whitespace-nowrap">
                       <div className="flex items-center justify-center gap-1.5">
                         <button
                           type="button"

@@ -453,7 +453,7 @@ export const HeatmapAnalysis: React.FC<HeatmapAnalysisProps> = ({
     const availableMonths = Array.from(new Set(validDailyRecords.map((r) => r.yearMonth))).sort().reverse();
 
     // 6. Filter machines based on user controls
-    let filteredMachines = allMachinesList.filter((m) => {
+    const filteredMachines = allMachinesList.filter((m) => {
       if (mcModelFilter !== 'all' && m.modelName !== mcModelFilter) {
         return false;
       }

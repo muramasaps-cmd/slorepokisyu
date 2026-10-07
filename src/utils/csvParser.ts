@@ -622,6 +622,7 @@ export function parseUnitLevelCsv(
       const day = parseInt(dStr, 10);
       const yearMonth = `${yStr}-${mStr}`;
       const dayOfWeek = calculateDayOfWeek(dateStr);
+      if (!dayOfWeek) continue;
       const is7Day = day % 10 === 7;
       const isOldEvent = isDateSpecialDay(dateStr, specialDayRules);
 

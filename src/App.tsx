@@ -701,15 +701,15 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6 flex-1">
-        {/* Top Controls Bar with Store Switcher & Machine Filters right beside it */}
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
-          {/* Store Switcher + Machine Filter Presets (Moved right beside store selector) */}
+      <main className="max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-3.5 space-y-3.5 flex-1">
+        {/* Top Controls Bar: Compact Unified Toolbar */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2 bg-white px-3 py-2 rounded-xl border border-slate-200/90 shadow-2xs">
+          {/* Left: Store Selector + Machine Filter Presets */}
           <div className="flex flex-wrap items-center gap-2">
             {/* Store Switcher */}
-            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-300 px-2.5 py-1 rounded-lg shrink-0">
-              <Building2 className="w-4 h-4 text-amber-500 shrink-0" />
-              <span className="text-xs text-slate-500 font-medium whitespace-nowrap">分析店舗:</span>
+            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-lg shrink-0">
+              <Building2 className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+              <span className="text-xs text-slate-500 font-medium whitespace-nowrap">店舗:</span>
               <select
                 value={activeStoreIdState}
                 onChange={(e) => handleSelectStore(e.target.value)}
@@ -723,11 +723,11 @@ export default function App() {
               </select>
             </div>
 
-            {/* 機種絞り込み (分析店舗の横) */}
-            <div className="flex items-center gap-1 bg-slate-50 border border-slate-300 p-0.5 rounded-lg shrink-0 flex-wrap">
+            {/* 機種絞り込み Segmented Control */}
+            <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 p-0.5 rounded-lg shrink-0 flex-wrap">
               <div className="flex items-center gap-1 px-1.5 text-xs text-slate-600 font-bold whitespace-nowrap">
-                <Cpu className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                <span>機種絞込:</span>
+                <Cpu className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                <span>機種:</span>
               </div>
 
               {/* 全機種 */}
@@ -753,7 +753,7 @@ export default function App() {
                     ? 'bg-purple-600 text-white shadow-2xs'
                     : 'bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200'
                 }`}
-                title="スマスロのみで全データを集計"
+                title="スマスロのみで集計"
               >
                 <Zap className="w-3 h-3 text-purple-400 shrink-0" />
                 スマスロ ({modelPresetCounts.smart_slot})
@@ -768,7 +768,7 @@ export default function App() {
                     ? 'bg-emerald-600 text-white shadow-2xs'
                     : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200'
                 }`}
-                title="Aタイプのみで全データを集計"
+                title="Aタイプのみで集計"
               >
                 <Target className="w-3 h-3 text-emerald-400 shrink-0" />
                 Aタイプ ({modelPresetCounts.a_type})
@@ -783,7 +783,7 @@ export default function App() {
                     ? 'bg-amber-500 text-slate-950 font-black shadow-2xs'
                     : 'bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-200'
                 }`}
-                title="ジャグラーシリーズのみで全データを集計"
+                title="ジャグラーシリーズのみで集計"
               >
                 <Sparkles className="w-3 h-3 text-amber-600 shrink-0" />
                 ジャグラー ({modelPresetCounts.juggler})
@@ -798,10 +798,10 @@ export default function App() {
                     ? 'bg-amber-400 text-slate-950 font-black ring-1 ring-amber-500'
                     : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
                 }`}
-                title="機種を個別に指定して絞り込み（複数選択可）"
+                title="機種を個別に指定して絞り込み"
               >
                 <SlidersHorizontal className="w-3 h-3 text-slate-600 shrink-0" />
-                <span>機種選択...</span>
+                <span>選択...</span>
                 {modelPreset === 'custom' && selectedModelNames.length > 0 && (
                   <span className="bg-slate-950 text-amber-300 px-1 py-0.2 rounded-full text-[10px] font-black">
                     {selectedModelNames.length}
@@ -809,33 +809,36 @@ export default function App() {
                 )}
               </button>
 
-              {/* リセットボタン (絞り込み中のみ表示) */}
+              {/* Compact Inline Active Filter Dismiss Badge (Replaces giant full-screen banner) */}
               {(modelPreset !== 'all' || selectedModelNames.length > 0) && (
                 <button
                   type="button"
                   onClick={() => handleSelectModelPreset('all')}
-                  className="px-1.5 py-0.5 rounded text-[11px] font-bold text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors flex items-center gap-0.5 cursor-pointer whitespace-nowrap"
-                  title="全機種に戻す"
+                  className="px-2 py-0.5 rounded text-[11px] font-bold bg-amber-100 hover:bg-rose-100 text-amber-900 hover:text-rose-700 border border-amber-300 transition-colors flex items-center gap-1 cursor-pointer whitespace-nowrap ml-1"
+                  title="絞り込みを解除して全機種に戻す"
                 >
+                  <span>「{activeFilterLabel}」適用中</span>
                   <RotateCcw className="w-3 h-3" />
-                  解除
                 </button>
               )}
             </div>
           </div>
 
-          {/* Right side: Period & Condition Settings */}
+          {/* Right: Period Dropdown & Rate Settings Button */}
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-2 text-xs text-slate-700 shrink-0 whitespace-nowrap">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-              <span>
-                集計対象:{' '}
-                <span className="text-amber-700 font-bold">
-                  {selectedYear === 'all' ? '全期間' : `${selectedYear}年`}
-                </span>
-                <span className="text-slate-400 mx-1">/</span>
-                {filteredMonthlyStats.length}ヶ月 ({filteredDailyRecords.length}営業日)
-              </span>
+            {/* Period selector dropdown */}
+            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 px-2 py-1 rounded-lg text-xs">
+              <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              <select
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(e.target.value)}
+                className="bg-transparent font-bold text-slate-800 focus:outline-hidden cursor-pointer"
+              >
+                <option value="all">全期間 ({filteredMonthlyStats.length}ヶ月/{filteredDailyRecords.length}日)</option>
+                {years.map((y) => (
+                  <option key={y} value={y}>{y}年分データ</option>
+                ))}
+              </select>
             </div>
 
             <button
@@ -843,42 +846,17 @@ export default function App() {
               onClick={() => setShowSettings(!showSettings)}
               className={`px-2.5 py-1 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 whitespace-nowrap ${
                 showSettings || rateLend !== currentStore.rateLend || rateExchange !== currentStore.rateExchange
-                  ? 'bg-amber-500 text-slate-950 shadow-xs'
+                  ? 'bg-amber-500 text-slate-950 font-bold shadow-xs'
                   : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
               }`}
             >
               <SlidersHorizontal className="w-3.5 h-3.5" />
               <span>
-                換金率・条件調整 ({rateLend}枚貸/{rateExchange}枚交換・比率{cashRatio}%)
+                換金率 ({rateLend}枚貸/{rateExchange}枚交換)
               </span>
             </button>
           </div>
         </div>
-
-        {/* Active Machine Filter Notification Banner */}
-        {(modelPreset !== 'all' || selectedModelNames.length > 0) && (
-          <div className="bg-amber-50 border border-amber-300 px-3.5 py-2 rounded-xl flex flex-wrap items-center justify-between gap-2 text-xs">
-            <div className="flex items-center gap-2 text-slate-800">
-              <span className="bg-amber-400 text-slate-950 font-black px-2 py-0.5 rounded text-[11px] shrink-0">
-                全画面 機種絞り込み中
-              </span>
-              <span className="font-extrabold text-slate-900">
-                「{activeFilterLabel}」
-              </span>
-              <span className="text-slate-600">
-                のデータのみで全画面（月別収支・粗利推移・KPI・カレンダー・グラフ・末尾/曜日/特日分析）を再集計しています。
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => handleSelectModelPreset('all')}
-              className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 font-bold rounded-lg border border-slate-300 text-xs cursor-pointer flex items-center gap-1 shrink-0"
-            >
-              <RotateCcw className="w-3 h-3" />
-              全機種表示に戻す
-            </button>
-          </div>
-        )}
 
         {/* Optional Rate Settings Drawer */}
         {showSettings && (
@@ -964,7 +942,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Dynamic Store Calculation Display (Replaces fixed ModelComparisonBanner) */}
+            {/* Dynamic Store Calculation Display */}
             {(() => {
               const lendUnit = rateLend > 0 ? 1000 / rateLend : 0;
               const exchUnit = rateExchange > 0 ? 1000 / rateExchange : 0;
@@ -995,7 +973,7 @@ export default function App() {
         )}
 
         {/* 6-Tab Navigation Bar */}
-        <div className="flex items-center gap-1 sm:gap-2 border-b border-slate-200 bg-white px-2 sm:px-4 py-2 rounded-xl shadow-2xs overflow-x-auto">
+        <div className="flex items-center gap-1 sm:gap-2 border-b border-slate-200 bg-white px-2 sm:px-3 py-1.5 rounded-xl shadow-2xs overflow-x-auto">
           {[
             { id: 'overview' as const, label: '概要', icon: BarChart3, desc: 'KPIと月別推移' },
             { id: 'forecast' as const, label: '狙い日予測', icon: Target, desc: '機種・末尾ランキング' },
@@ -1011,7 +989,7 @@ export default function App() {
                 key={tab.id}
                 type="button"
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-1.5 px-3 py-2 text-xs sm:text-sm font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap ${
                   isActive
                     ? 'bg-amber-500 text-slate-950 shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -1036,71 +1014,37 @@ export default function App() {
 
         {/* TAB 1: 概要 (KPI と月別推移グラフ) */}
         {activeTab === 'overview' && (
-          <div className="space-y-5 animate-in fade-in duration-150">
-            {/* 1-Line Condensed Perspective Status Bar */}
-            <div
-              className={`px-3.5 py-1.5 rounded-lg border flex items-center justify-between gap-2 text-xs transition-all shadow-2xs ${
-                perspective === 'hall'
-                  ? 'bg-slate-900 border-indigo-500/40 text-white'
-                  : 'bg-emerald-950 border-emerald-500/40 text-white'
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <span
-                  className={`px-2 py-0.5 rounded text-[11px] font-black ${
-                    perspective === 'hall' ? 'bg-amber-400 text-slate-950' : 'bg-emerald-400 text-slate-950'
-                  }`}
-                >
-                  {perspective === 'hall' ? 'ホール経営目線' : 'スロッター収支目線'}
-                </span>
-                <span className="text-slate-300 text-xs hidden sm:inline">
-                  {perspective === 'hall'
-                    ? '「+」黒字＝店舗粗利 (回収) ／「-」赤字＝出玉還元 (客勝ち)'
-                    : '「+」青/緑＝客勝ち (出玉獲得) ／「-」赤字＝客負け'}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setPerspective(perspective === 'hall' ? 'player' : 'hall')}
-                className="text-[11px] underline hover:text-amber-300 font-bold cursor-pointer shrink-0"
-              >
-                {perspective === 'hall' ? 'スロッター目線に切替 →' : 'ホール目線に切替 →'}
-              </button>
+          <div className="space-y-4 animate-in fade-in duration-150">
+            {/* KPI Cards: Full Width 4-Card Responsive Grid */}
+            <div className="w-full">
+              <KpiCards
+                monthlyStats={filteredMonthlyStats}
+                perspective={perspective}
+                unit={unit}
+                profitModel={profitModel}
+              />
             </div>
 
-            {/* TOP Section: Left KPI Cards / Right Monthly Profit Chart */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
-              {/* TOP Left: KPI Cards (2x2 grid) */}
-              <div className="lg:col-span-5 flex flex-col justify-between">
-                <KpiCards
-                  monthlyStats={filteredMonthlyStats}
-                  perspective={perspective}
-                  unit={unit}
-                  profitModel={profitModel}
-                />
-              </div>
-
-              {/* TOP Right: Monthly Profit Chart */}
-              <div className="lg:col-span-7 flex flex-col">
-                <ProfitChart
-                  monthlyStats={filteredMonthlyStats}
-                  perspective={perspective}
-                  unit={unit}
-                  profitModel={profitModel}
-                  onSelectMonth={(ym) => setSelectedMonthModal(ym)}
-                />
-              </div>
+            {/* Monthly Profit Chart: Full Width with High Visibility */}
+            <div className="w-full min-h-[360px]">
+              <ProfitChart
+                monthlyStats={filteredMonthlyStats}
+                perspective={perspective}
+                unit={unit}
+                profitModel={profitModel}
+                onSelectMonth={(ym) => setSelectedMonthModal(ym)}
+              />
             </div>
 
             {/* Footnote / Explanation */}
-            <div className="p-4 bg-white rounded-xl border border-slate-200/80 text-xs text-slate-500 space-y-1.5">
+            <div className="p-3.5 bg-white rounded-xl border border-slate-200/80 text-xs text-slate-500 space-y-1">
               <div className="font-bold text-slate-700 flex items-center gap-1.5">
                 <HelpCircle className="w-4 h-4 text-indigo-500" />
                 G数(IN枚数)連動 利益算出方式について
               </div>
-              <ul className="list-disc list-inside space-y-1 text-slate-600 pl-1">
+              <ul className="list-disc list-inside space-y-0.5 text-slate-600 pl-1 text-[11px]">
                 <li>
-                  <strong>G数(IN枚数)連動モデル (実務ホールコン方式):</strong> IN枚数（平均G数 × 3枚 × 台数）から現金投資売上を推計し、貸出・交換レートによる換金ギャップ（{rateLend}枚貸 / {rateExchange}枚交換＝1枚あたり約{((1000/rateLend) - (1000/rateExchange)).toFixed(2)}円の手数料）を算入した実務粗利です。高稼働な日ほど確定する手数料収益と差枚還元を同時に把握できます。
+                  <strong>G数(IN枚数)連動モデル:</strong> IN枚数（平均G数 × 3枚 × 台数）から現金投資売上を推計し、貸出・交換レートによる換金ギャップ（{rateLend}枚貸 / {rateExchange}枚交換＝1枚あたり約{((1000/rateLend) - (1000/rateExchange)).toFixed(2)}円の手数料）を算入した実務粗利です。
                 </li>
                 <li>
                   <strong>店舗特日ルール ({currentStore.name}):</strong> {currentStore.oldEventDays || '未設定'}

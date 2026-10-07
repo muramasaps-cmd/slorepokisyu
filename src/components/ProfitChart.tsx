@@ -259,7 +259,7 @@ export const ProfitChart: React.FC<ProfitChartProps> = ({
                 }
               }}
             >
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
               <XAxis
                 dataKey="shortLabel"
                 tick={{ fontSize: 11, fill: '#64748b' }}
@@ -273,21 +273,21 @@ export const ProfitChart: React.FC<ProfitChartProps> = ({
                 tickFormatter={(val) => `${val}`}
               />
               <Tooltip content={<CustomTooltip />} />
-              <ReferenceLine y={0} stroke="#94a3b8" strokeWidth={1.5} />
+              <ReferenceLine y={0} stroke="#cbd5e1" strokeWidth={1} />
 
               <Bar
                 dataKey="currentVal"
                 name={perspective === 'hall' ? 'G数連動ホール粗利' : 'G数連動ユーザー収支'}
-                radius={[3, 3, 0, 0]}
+                radius={[4, 4, 0, 0]}
                 cursor="pointer"
               >
                 {chartData.map((entry, index) => {
                   const isPositive = entry.currentVal >= 0;
                   let color = '';
                   if (perspective === 'hall') {
-                    color = isPositive ? '#6366f1' : '#f43f5e';
+                    color = isPositive ? '#1e293b' : '#f43f5e';
                   } else {
-                    color = isPositive ? '#3b82f6' : '#f43f5e';
+                    color = isPositive ? '#10b981' : '#f43f5e';
                   }
                   return <Cell key={`cell-${index}`} fill={color} />;
                 })}
@@ -333,7 +333,7 @@ const AreaChartComponent: React.FC<{
         }
       }}
     >
-      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
       <XAxis
         dataKey="shortLabel"
         tick={{ fontSize: 11, fill: '#64748b' }}
@@ -344,17 +344,17 @@ const AreaChartComponent: React.FC<{
       />
       <YAxis tick={{ fontSize: 11, fill: '#64748b' }} />
       <Tooltip content={<CustomTooltip />} />
-      <ReferenceLine y={0} stroke="#94a3b8" strokeWidth={1.5} />
+      <ReferenceLine y={0} stroke="#cbd5e1" strokeWidth={1} />
 
       <Area
         type="monotone"
         dataKey="currentCumVal"
-        stroke="#6366f1"
-        fill="#6366f1"
-        fillOpacity={0.15}
+        stroke={perspective === 'hall' ? '#1e293b' : '#10b981'}
+        fill={perspective === 'hall' ? '#1e293b' : '#10b981'}
+        fillOpacity={0.12}
         strokeWidth={2.5}
         dot={{ r: 3 }}
-        activeDot={{ r: 6 }}
+        activeDot={{ r: 5 }}
         name={`G数連動累計利益 (${unitLabel})`}
       />
     </ComposedChart>
@@ -377,7 +377,7 @@ const GamesChartComponent: React.FC<{
         }
       }}
     >
-      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
       <XAxis
         dataKey="shortLabel"
         tick={{ fontSize: 11, fill: '#64748b' }}

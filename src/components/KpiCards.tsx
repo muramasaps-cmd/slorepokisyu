@@ -93,164 +93,209 @@ export const KpiCards: React.FC<KpiCardsProps> = ({
     return `${sign}${num}枚/台`;
   };
 
+  const isProfitable = totalPrimary >= 0;
+
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 h-full">
       {/* 1. 期間累計収支 */}
       <div
         id="kpi-card-total"
-        className="bg-white rounded-xl p-4 sm:p-4.5 border border-slate-200/80 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between"
+        className="bg-white rounded-xl p-4 border border-slate-200/80 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between"
       >
         <div className="flex items-center justify-between text-slate-500 text-xs font-semibold">
           <span>
-            {perspective === 'hall' ? '期間累計 ホール粗利 (G数連動)' : '期間累計 ユーザー収支 (G数連動)'}
+            {perspective === 'hall' ? '期間累計 ホール粗利' : '期間累計 スロッター収支'}
           </span>
-          <span
-            className={`p-1.5 rounded-lg ${
-              totalPrimary >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'
-            }`}
-          >
-            <DollarSign className="w-4 h-4" />
+          <span className="text-[11px] font-mono text-slate-400">
+            {monthsCount}ヶ月 ({totalDays}日)
           </span>
         </div>
-        <div className="mt-2">
+
+        <div className="my-2">
           <div
-            className={`text-2xl sm:text-3xl font-extrabold tracking-tight ${
+            className={`text-2xl sm:text-3xl font-black font-mono tabular-nums tracking-tight ${
               totalPrimary > 0
                 ? perspective === 'hall'
-                  ? 'text-emerald-600'
-                  : 'text-blue-600'
+                  ? 'text-slate-900'
+                  : 'text-emerald-600'
                 : totalPrimary < 0
                 ? 'text-rose-600'
-                : 'text-slate-800'
+                : 'text-slate-700'
             }`}
           >
             {formatVal(totalPrimary)}
           </div>
-          <div className="text-xs text-slate-500 mt-1 flex items-center justify-between">
-            <span>
-              {unit === 'yen'
-                ? formatCoins(perspective === 'hall' ? totalHallCoins : totalPlayerCoins)
-                : formatYen(totalPrimaryYen)}
-            </span>
-            <span className="text-slate-400">{monthsCount}ヶ月 ({totalDays}日)</span>
+          <div className="text-[11px] font-mono tabular-nums text-slate-500 mt-0.5">
+            {unit === 'yen'
+              ? `${formatCoins(perspective === 'hall' ? totalHallCoins : totalPlayerCoins)} (差枚換算)`
+              : `${formatYen(totalPrimaryYen)} (金額換算)`}
           </div>
-          {/* Per Machine Added */}
-          <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
-            <span className="text-slate-500 font-medium">1台あたり累計:</span>
-            <span className="font-bold text-slate-900">
-              {formatVal(perMachineTotal)} / 台
+        </div>
+
+        {/* Micro-stats Divider */}
+        <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-2 text-xs">
+          <div>
+            <span className="text-[11px] text-slate-400 block">1台あたり累計</span>
+            <span className="font-bold font-mono tabular-nums text-slate-800">
+              {formatVal(perMachineTotal)}
+            </span>
+          </div>
+          <div className="text-right">
+            <span className="text-[11px] text-slate-400 block">うち換金ギャップ</span>
+            <span className="font-bold font-mono tabular-nums text-amber-700">
+              +{formatYen(totalGapProfit)}
             </span>
           </div>
         </div>
       </div>
 
-      {/* 2. 月平均収支 */}
+      {/* 2. 台日粗利 / 日当 */}
       <div
         id="kpi-card-monthly-avg"
-        className="bg-white rounded-xl p-4 sm:p-4.5 border border-slate-200/80 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between"
+        className="bg-white rounded-xl p-4 border border-slate-200/80 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between"
       >
         <div className="flex items-center justify-between text-slate-500 text-xs font-semibold">
-          <span>{perspective === 'hall' ? '月平均 ホール粗利' : '月平均 ユーザー収支'}</span>
-          <span className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600">
-            <TrendingUp className="w-4 h-4" />
+          <span>1台・1日平均 ({perspective === 'hall' ? '台日粗利' : '台日収支'})</span>
+          <span className="text-[11px] font-mono text-slate-400">
+            約{avgTotalMachines}台
           </span>
         </div>
-        <div className="mt-2">
+
+        <div className="my-2">
           <div
-            className={`text-2xl sm:text-3xl font-extrabold tracking-tight ${
-              avgMonthlyPrimary > 0
+            className={`text-2xl sm:text-3xl font-black font-mono tabular-nums tracking-tight ${
+              perMachineDaily > 0
                 ? perspective === 'hall'
-                  ? 'text-emerald-600'
-                  : 'text-blue-600'
-                : avgMonthlyPrimary < 0
+                  ? 'text-slate-900'
+                  : 'text-emerald-600'
+                : perMachineDaily < 0
                 ? 'text-rose-600'
-                : 'text-slate-800'
+                : 'text-slate-700'
             }`}
           >
-            {formatVal(avgMonthlyPrimary)}
-            <span className="text-xs font-normal text-slate-400 ml-1">/月</span>
+            {formatVal(perMachineDaily)}
+            <span className="text-xs font-normal text-slate-400 ml-1">/台・日</span>
           </div>
-          <div className="text-xs text-slate-500 mt-1 flex items-center justify-between">
-            <span>1台・月平均: <strong className="text-slate-700">{formatVal(perMachineMonthly)}/台</strong></span>
-            <span className="text-slate-400">平均稼働 {formatNumber(avgGamesWeighted)}G</span>
+          <div className="text-[11px] font-mono tabular-nums text-slate-500 mt-0.5">
+            月平均: <strong className="text-slate-700">{formatVal(avgMonthlyPrimary)}/月</strong>
           </div>
-          {/* Per Machine Daily (台日粗利) Added */}
-          <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
-            <span className="text-slate-500 font-medium">1台・1日平均 (台日粗利):</span>
-            <span className="font-bold text-indigo-700">
-              {formatVal(perMachineDaily)} / 台・日
+        </div>
+
+        {/* Micro-stats Divider */}
+        <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-2 text-xs">
+          <div>
+            <span className="text-[11px] text-slate-400 block">1台・月平均</span>
+            <span className="font-bold font-mono tabular-nums text-slate-800">
+              {formatVal(perMachineMonthly)}
+            </span>
+          </div>
+          <div className="text-right">
+            <span className="text-[11px] text-slate-400 block">平均稼働ゲーム</span>
+            <span className="font-bold font-mono tabular-nums text-slate-800">
+              {formatNumber(avgGamesWeighted)} G
             </span>
           </div>
         </div>
       </div>
 
-      {/* 3. 最高利益月 (店黒字No.1 / 客勝ちNo.1) */}
+      {/* 3. 総合出玉率 (機械割) */}
       <div
-        id="kpi-card-best-month"
-        className="bg-white rounded-xl p-4 sm:p-4.5 border border-slate-200/80 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between"
+        id="kpi-card-payout"
+        className="bg-white rounded-xl p-4 border border-slate-200/80 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between"
       >
         <div className="flex items-center justify-between text-slate-500 text-xs font-semibold">
-          <span>{perspective === 'hall' ? '最高利益月 (店黒字No.1)' : '最高出玉月 (客勝ちNo.1)'}</span>
-          <span className="p-1.5 rounded-lg bg-amber-50 text-amber-600">
-            <Award className="w-4 h-4" />
-          </span>
+          <span>総合出玉率 (機械割)</span>
+          <span className="text-[11px] font-mono text-slate-400">IN / OUT 連動</span>
         </div>
-        <div className="mt-2">
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl sm:text-3xl font-extrabold text-slate-900">
-              {bestMonth.label}
+
+        <div className="my-2">
+          <div
+            className={`text-2xl sm:text-3xl font-black font-mono tabular-nums tracking-tight ${
+              avgPayoutRate >= 100
+                ? perspective === 'player'
+                  ? 'text-emerald-600'
+                  : 'text-rose-600'
+                : perspective === 'hall'
+                ? 'text-slate-900'
+                : 'text-rose-600'
+            }`}
+          >
+            {avgPayoutRate.toFixed(2)}%
+          </div>
+          <div className="text-[11px] text-slate-500 mt-0.5">
+            {avgPayoutRate < 100 ? (
+              <span className="text-slate-600 font-medium">ホール回収設定配分 ({avgPayoutRate.toFixed(2)}%)</span>
+            ) : (
+              <span className="text-emerald-600 font-medium">客勝ち還元配分 (+{(avgPayoutRate - 100).toFixed(2)}%)</span>
+            )}
+          </div>
+        </div>
+
+        {/* Micro-stats Divider */}
+        <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-2 text-xs">
+          <div>
+            <span className="text-[11px] text-slate-400 block">総投入 (IN)</span>
+            <span className="font-bold font-mono tabular-nums text-slate-800">
+              {Math.round(totalInCoins / 10000).toLocaleString()} 万枚
             </span>
           </div>
-          <div className="text-xs mt-1 font-semibold text-emerald-600 flex items-center justify-between">
-            <span>{formatVal(getEffectiveYen(bestMonth))}</span>
-            <span className="text-slate-400 font-normal">
-              客平均 {bestMonth.avgDiffCoins > 0 ? `+${bestMonth.avgDiffCoins}` : bestMonth.avgDiffCoins}枚/台
-            </span>
-          </div>
-          {/* Per Machine Added */}
-          <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
-            <span className="text-slate-500 font-medium">1台あたり月間:</span>
-            <span className="font-bold text-slate-900">
-              {formatVal(bestPerMachine)} / 台
-              <span className="text-[10px] text-slate-400 font-normal ml-1">
-                (日: {formatVal(bestPerMachineDaily)})
-              </span>
+          <div className="text-right">
+            <span className="text-[11px] text-slate-400 block">総払出 (OUT)</span>
+            <span className="font-bold font-mono tabular-nums text-slate-800">
+              {Math.round(totalOutCoins / 10000).toLocaleString()} 万枚
             </span>
           </div>
         </div>
       </div>
 
-      {/* 4. 最大還元月 (店赤字No.1) or 最低収支月 */}
+      {/* 4. 最高月 vs 最低月 */}
       <div
-        id="kpi-card-worst-month"
-        className="bg-white rounded-xl p-4 sm:p-4.5 border border-slate-200/80 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between"
+        id="kpi-card-best-worst"
+        className="bg-white rounded-xl p-4 border border-slate-200/80 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between"
       >
         <div className="flex items-center justify-between text-slate-500 text-xs font-semibold">
-          <span>{perspective === 'hall' ? '最大還元月 (店赤字No.1)' : '最低収支月 (客負けNo.1)'}</span>
-          <span className="p-1.5 rounded-lg bg-rose-50 text-rose-600">
-            <TrendingDown className="w-4 h-4" />
-          </span>
+          <span>{perspective === 'hall' ? '最高粗利月 vs 最大還元月' : '最高収支月 vs 最低収支月'}</span>
+          <span className="text-[11px] text-slate-400">月間比較</span>
         </div>
-        <div className="mt-2">
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl sm:text-3xl font-extrabold text-slate-900">
-              {worstMonth.label}
-            </span>
-          </div>
-          <div className="text-xs mt-1 font-semibold text-rose-600 flex items-center justify-between">
-            <span>{formatVal(getEffectiveYen(worstMonth))}</span>
-            <span className="text-slate-400 font-normal">
-              客平均 {worstMonth.avgDiffCoins > 0 ? `+${worstMonth.avgDiffCoins}` : worstMonth.avgDiffCoins}枚/台
-            </span>
-          </div>
-          {/* Per Machine Added */}
-          <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
-            <span className="text-slate-500 font-medium">1台あたり月間:</span>
-            <span className="font-bold text-slate-900">
-              {formatVal(worstPerMachine)} / 台
-              <span className="text-[10px] text-slate-400 font-normal ml-1">
-                (日: {formatVal(worstPerMachineDaily)})
+
+        <div className="my-2 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] font-bold bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded">
+                最高
               </span>
+              <span className="font-bold text-slate-900 text-sm">{bestMonth.label}</span>
+            </div>
+            <span className="font-black font-mono tabular-nums text-emerald-600 text-sm">
+              {formatVal(getEffectiveYen(bestMonth))}
+            </span>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] font-bold bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded">
+                最低
+              </span>
+              <span className="font-bold text-slate-900 text-sm">{worstMonth.label}</span>
+            </div>
+            <span className="font-black font-mono tabular-nums text-rose-600 text-sm">
+              {formatVal(getEffectiveYen(worstMonth))}
+            </span>
+          </div>
+        </div>
+
+        {/* Micro-stats Divider */}
+        <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-2 text-xs">
+          <div>
+            <span className="text-[11px] text-slate-400 block">最高月 台日平均</span>
+            <span className="font-bold font-mono tabular-nums text-slate-800">
+              {formatVal(bestPerMachineDaily)}
+            </span>
+          </div>
+          <div className="text-right">
+            <span className="text-[11px] text-slate-400 block">最低月 台日平均</span>
+            <span className="font-bold font-mono tabular-nums text-slate-800">
+              {formatVal(worstPerMachineDaily)}
             </span>
           </div>
         </div>

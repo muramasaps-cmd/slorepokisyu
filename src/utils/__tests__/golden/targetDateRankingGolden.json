@@ -1,0 +1,2159 @@
+{
+  "meta": {
+    "seed": 42,
+    "days": 60,
+    "modelsCount": 15,
+    "normalTargetDate": "2024-03-02",
+    "specialTargetDate": "2024-03-07"
+  },
+  "normalForecast": {
+    "targetDate": "2024-03-02",
+    "dayOfWeek": "土",
+    "isHoliday": false,
+    "isSpecialDay": false,
+    "dayTail": 2,
+    "specialDayLabel": "通常営業日",
+    "expectedHallStatus": "好待遇特日",
+    "expectedHallAvgDiffCoins": 109,
+    "expectedHallWinRate": 100,
+    "expectedHallPayoutRate": 100.57,
+    "matchingHistoricalDaysCount": 8,
+    "modelRankings": [
+      {
+        "modelName": "キングハナハナ-30",
+        "rank": 1,
+        "rankGrade": "S",
+        "totalMachines": 9,
+        "expectedDiffCoins": 197,
+        "predictedWinRate": 57.6,
+        "predictedPayoutRate": 101.13,
+        "avgGames": 5794,
+        "compositeScore": 76.8,
+        "sampleDays": 60,
+        "matchingDaysCount": 8,
+        "matchingAvgDiffCoins": 209,
+        "matchingWinRate": 58.4,
+        "allHighDaysCount": 0,
+        "tacticalReason": "店舗全体でベース出率が高め。通常日でも単発高設定に期待。",
+        "tags": [
+          "Aタイプ",
+          "主力機(9台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-24",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 175,
+            "winRate": 55.6,
+            "avgGames": 5560,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-17",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 552,
+            "winRate": 66.7,
+            "avgGames": 6969,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-02-10",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -29,
+            "winRate": 44.4,
+            "avgGames": 5245,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-03",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 31,
+            "winRate": 55.6,
+            "avgGames": 5225,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-27",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 573,
+            "winRate": 77.8,
+            "avgGames": 7202,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-20",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 139,
+            "winRate": 55.6,
+            "avgGames": 5321,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-13",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 193,
+            "winRate": 55.6,
+            "avgGames": 5195,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-06",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 38,
+            "winRate": 55.6,
+            "avgGames": 5633,
+            "isOldEventDay": false
+          }
+        ]
+      },
+      {
+        "modelName": "L からくりサーカス",
+        "rank": 2,
+        "rankGrade": "S",
+        "totalMachines": 7,
+        "expectedDiffCoins": 169,
+        "predictedWinRate": 55.1,
+        "predictedPayoutRate": 101.29,
+        "avgGames": 4362,
+        "compositeScore": 72.1,
+        "sampleDays": 60,
+        "matchingDaysCount": 8,
+        "matchingAvgDiffCoins": 177,
+        "matchingWinRate": 55.3,
+        "allHighDaysCount": 0,
+        "tacticalReason": "店舗全体でベース出率が高め。通常日でも単発高設定に期待。",
+        "tags": [
+          "スマスロ",
+          "主力機(7台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-24",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 85,
+            "winRate": 42.9,
+            "avgGames": 4033,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-17",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 351,
+            "winRate": 57.1,
+            "avgGames": 5672,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-02-10",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 208,
+            "winRate": 57.1,
+            "avgGames": 4120,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-03",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 207,
+            "winRate": 57.1,
+            "avgGames": 4404,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-27",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 364,
+            "winRate": 71.4,
+            "avgGames": 5321,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-20",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -46,
+            "winRate": 42.9,
+            "avgGames": 4007,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-13",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 146,
+            "winRate": 57.1,
+            "avgGames": 3637,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-06",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 97,
+            "winRate": 57.1,
+            "avgGames": 3705,
+            "isOldEventDay": false
+          }
+        ]
+      },
+      {
+        "modelName": "L 戦国乙女4 戦乱に閃く炯眼の軍師",
+        "rank": 3,
+        "rankGrade": "S",
+        "totalMachines": 8,
+        "expectedDiffCoins": 150,
+        "predictedWinRate": 54.2,
+        "predictedPayoutRate": 100.97,
+        "avgGames": 5178,
+        "compositeScore": 71.8,
+        "sampleDays": 60,
+        "matchingDaysCount": 8,
+        "matchingAvgDiffCoins": 165,
+        "matchingWinRate": 54.7,
+        "allHighDaysCount": 0,
+        "tacticalReason": "店舗全体でベース出率が高め。通常日でも単発高設定に期待。",
+        "tags": [
+          "スマスロ",
+          "主力機(8台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-24",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 168,
+            "winRate": 50,
+            "avgGames": 5149,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-17",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 539,
+            "winRate": 75,
+            "avgGames": 6172,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-02-10",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 151,
+            "winRate": 62.5,
+            "avgGames": 4943,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-03",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 64,
+            "winRate": 50,
+            "avgGames": 4323,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-27",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 384,
+            "winRate": 62.5,
+            "avgGames": 6147,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-20",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -44,
+            "winRate": 37.5,
+            "avgGames": 5039,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-13",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 68,
+            "winRate": 50,
+            "avgGames": 4474,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-06",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -9,
+            "winRate": 50,
+            "avgGames": 5180,
+            "isOldEventDay": false
+          }
+        ]
+      },
+      {
+        "modelName": "沖ドキ！GOLD",
+        "rank": 4,
+        "rankGrade": "S",
+        "totalMachines": 3,
+        "expectedDiffCoins": 133,
+        "predictedWinRate": 64.5,
+        "predictedPayoutRate": 101.02,
+        "avgGames": 4363,
+        "compositeScore": 71,
+        "sampleDays": 60,
+        "matchingDaysCount": 8,
+        "matchingAvgDiffCoins": 131,
+        "matchingWinRate": 66.7,
+        "allHighDaysCount": 0,
+        "tacticalReason": "店舗全体でベース出率が高め。通常日でも単発高設定に期待。",
+        "tags": [
+          "少台数(3台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-24",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 20,
+            "winRate": 66.7,
+            "avgGames": 4336,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-17",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 380,
+            "winRate": 66.7,
+            "avgGames": 5762,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-02-10",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 23,
+            "winRate": 66.7,
+            "avgGames": 3797,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-03",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 31,
+            "winRate": 66.7,
+            "avgGames": 3703,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-27",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 542,
+            "winRate": 66.7,
+            "avgGames": 5074,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-20",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 51,
+            "winRate": 66.7,
+            "avgGames": 4135,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-13",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -44,
+            "winRate": 66.7,
+            "avgGames": 3846,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-06",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 44,
+            "winRate": 66.7,
+            "avgGames": 4250,
+            "isOldEventDay": false
+          }
+        ]
+      },
+      {
+        "modelName": "押忍！番長4",
+        "rank": 5,
+        "rankGrade": "A",
+        "totalMachines": 10,
+        "expectedDiffCoins": 93,
+        "predictedWinRate": 52,
+        "predictedPayoutRate": 100.45,
+        "avgGames": 6869,
+        "compositeScore": 69.6,
+        "sampleDays": 60,
+        "matchingDaysCount": 8,
+        "matchingAvgDiffCoins": 105,
+        "matchingWinRate": 52.5,
+        "allHighDaysCount": 0,
+        "tacticalReason": "店舗全体でベース出率が高め。通常日でも単発高設定に期待。",
+        "tags": [
+          "主力機(10台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-24",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 75,
+            "winRate": 50,
+            "avgGames": 6711,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-17",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 391,
+            "winRate": 60,
+            "avgGames": 8396,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-02-10",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -99,
+            "winRate": 50,
+            "avgGames": 6863,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-03",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -1,
+            "winRate": 50,
+            "avgGames": 6035,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-27",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 358,
+            "winRate": 70,
+            "avgGames": 7553,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-20",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 95,
+            "winRate": 50,
+            "avgGames": 5970,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-13",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -4,
+            "winRate": 40,
+            "avgGames": 6716,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-06",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 27,
+            "winRate": 50,
+            "avgGames": 6710,
+            "isOldEventDay": false
+          }
+        ]
+      },
+      {
+        "modelName": "ファンキージャグラー2",
+        "rank": 6,
+        "rankGrade": "S",
+        "totalMachines": 5,
+        "expectedDiffCoins": 128,
+        "predictedWinRate": 54.8,
+        "predictedPayoutRate": 100.73,
+        "avgGames": 5846,
+        "compositeScore": 68,
+        "sampleDays": 60,
+        "matchingDaysCount": 8,
+        "matchingAvgDiffCoins": 138,
+        "matchingWinRate": 55,
+        "allHighDaysCount": 0,
+        "tacticalReason": "店舗全体でベース出率が高め。通常日でも単発高設定に期待。",
+        "tags": [
+          "ジャグラー",
+          "主力機(5台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-24",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -42,
+            "winRate": 40,
+            "avgGames": 5868,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-17",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 376,
+            "winRate": 60,
+            "avgGames": 7211,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-02-10",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 107,
+            "winRate": 60,
+            "avgGames": 5470,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-03",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 126,
+            "winRate": 60,
+            "avgGames": 5131,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-27",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 416,
+            "winRate": 60,
+            "avgGames": 6730,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-20",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 113,
+            "winRate": 60,
+            "avgGames": 6012,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-13",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -138,
+            "winRate": 40,
+            "avgGames": 5225,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-06",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 149,
+            "winRate": 60,
+            "avgGames": 5122,
+            "isOldEventDay": false
+          }
+        ]
+      },
+      {
+        "modelName": "L パチスロ北斗の拳",
+        "rank": 7,
+        "rankGrade": "A",
+        "totalMachines": 6,
+        "expectedDiffCoins": 111,
+        "predictedWinRate": 53.3,
+        "predictedPayoutRate": 100.55,
+        "avgGames": 6753,
+        "compositeScore": 67.7,
+        "sampleDays": 60,
+        "matchingDaysCount": 8,
+        "matchingAvgDiffCoins": 120,
+        "matchingWinRate": 54.2,
+        "allHighDaysCount": 0,
+        "tacticalReason": "店舗全体でベース出率が高め。通常日でも単発高設定に期待。",
+        "tags": [
+          "スマスロ",
+          "主力機(6台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-24",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 127,
+            "winRate": 50,
+            "avgGames": 6149,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-17",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 430,
+            "winRate": 66.7,
+            "avgGames": 8372,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-02-10",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -10,
+            "winRate": 50,
+            "avgGames": 6887,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-03",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 79,
+            "winRate": 50,
+            "avgGames": 6591,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-27",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 205,
+            "winRate": 66.7,
+            "avgGames": 7638,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-20",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 152,
+            "winRate": 50,
+            "avgGames": 6263,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-13",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -20,
+            "winRate": 50,
+            "avgGames": 5943,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-06",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -3,
+            "winRate": 50,
+            "avgGames": 6184,
+            "isOldEventDay": false
+          }
+        ]
+      },
+      {
+        "modelName": "甲鉄城のカバネリ",
+        "rank": 8,
+        "rankGrade": "A",
+        "totalMachines": 6,
+        "expectedDiffCoins": 76,
+        "predictedWinRate": 53.5,
+        "predictedPayoutRate": 100.37,
+        "avgGames": 6861,
+        "compositeScore": 66.6,
+        "sampleDays": 60,
+        "matchingDaysCount": 8,
+        "matchingAvgDiffCoins": 84,
+        "matchingWinRate": 54.2,
+        "allHighDaysCount": 0,
+        "tacticalReason": "店舗全体でベース出率が高め。通常日でも単発高設定に期待。",
+        "tags": [
+          "主力機(6台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-24",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -54,
+            "winRate": 50,
+            "avgGames": 6611,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-17",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 418,
+            "winRate": 66.7,
+            "avgGames": 8118,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-02-10",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 54,
+            "winRate": 50,
+            "avgGames": 6404,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-03",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -54,
+            "winRate": 50,
+            "avgGames": 6056,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-27",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 360,
+            "winRate": 66.7,
+            "avgGames": 7518,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-20",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -4,
+            "winRate": 50,
+            "avgGames": 6805,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-13",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 42,
+            "winRate": 50,
+            "avgGames": 6840,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-06",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -91,
+            "winRate": 50,
+            "avgGames": 6532,
+            "isOldEventDay": false
+          }
+        ]
+      },
+      {
+        "modelName": "L ガールズ＆パンツァー 最終章",
+        "rank": 9,
+        "rankGrade": "A",
+        "totalMachines": 7,
+        "expectedDiffCoins": 76,
+        "predictedWinRate": 51.2,
+        "predictedPayoutRate": 100.62,
+        "avgGames": 4097,
+        "compositeScore": 66,
+        "sampleDays": 60,
+        "matchingDaysCount": 8,
+        "matchingAvgDiffCoins": 90,
+        "matchingWinRate": 51.8,
+        "allHighDaysCount": 0,
+        "tacticalReason": "店舗全体でベース出率が高め。通常日でも単発高設定に期待。",
+        "tags": [
+          "スマスロ",
+          "主力機(7台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-24",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 35,
+            "winRate": 42.9,
+            "avgGames": 3748,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-17",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 326,
+            "winRate": 57.1,
+            "avgGames": 5446,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-02-10",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 58,
+            "winRate": 57.1,
+            "avgGames": 3600,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-03",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -7,
+            "winRate": 42.9,
+            "avgGames": 3585,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-27",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 202,
+            "winRate": 57.1,
+            "avgGames": 5304,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-20",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 23,
+            "winRate": 42.9,
+            "avgGames": 3542,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-13",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -31,
+            "winRate": 57.1,
+            "avgGames": 3662,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-06",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 115,
+            "winRate": 57.1,
+            "avgGames": 3887,
+            "isOldEventDay": false
+          }
+        ]
+      },
+      {
+        "modelName": "L モンキーターンV",
+        "rank": 10,
+        "rankGrade": "A",
+        "totalMachines": 9,
+        "expectedDiffCoins": 52,
+        "predictedWinRate": 49.7,
+        "predictedPayoutRate": 100.3,
+        "avgGames": 5817,
+        "compositeScore": 65.7,
+        "sampleDays": 60,
+        "matchingDaysCount": 8,
+        "matchingAvgDiffCoins": 63,
+        "matchingWinRate": 50,
+        "allHighDaysCount": 0,
+        "tacticalReason": "店舗全体でベース出率が高め。通常日でも単発高設定に期待。",
+        "tags": [
+          "スマスロ",
+          "主力機(9台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-24",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -146,
+            "winRate": 33.3,
+            "avgGames": 5203,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-17",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 362,
+            "winRate": 55.6,
+            "avgGames": 6700,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-02-10",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 105,
+            "winRate": 55.6,
+            "avgGames": 5155,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-03",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -115,
+            "winRate": 44.4,
+            "avgGames": 5182,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-27",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 275,
+            "winRate": 66.7,
+            "avgGames": 6732,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-20",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 33,
+            "winRate": 44.4,
+            "avgGames": 6078,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-13",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -82,
+            "winRate": 44.4,
+            "avgGames": 5450,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-06",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 74,
+            "winRate": 55.6,
+            "avgGames": 6035,
+            "isOldEventDay": false
+          }
+        ]
+      },
+      {
+        "modelName": "L バジリスク〜甲賀忍法帖〜絆2 天膳",
+        "rank": 11,
+        "rankGrade": "A",
+        "totalMachines": 4,
+        "expectedDiffCoins": 145,
+        "predictedWinRate": 50.4,
+        "predictedPayoutRate": 100.92,
+        "avgGames": 5258,
+        "compositeScore": 64,
+        "sampleDays": 60,
+        "matchingDaysCount": 8,
+        "matchingAvgDiffCoins": 151,
+        "matchingWinRate": 50,
+        "allHighDaysCount": 0,
+        "tacticalReason": "店舗全体でベース出率が高め。通常日でも単発高設定に期待。",
+        "tags": [
+          "スマスロ",
+          "少台数(4台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-24",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -13,
+            "winRate": 50,
+            "avgGames": 4840,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-17",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 195,
+            "winRate": 50,
+            "avgGames": 6008,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-02-10",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 196,
+            "winRate": 50,
+            "avgGames": 4784,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-03",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 118,
+            "winRate": 50,
+            "avgGames": 4484,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-27",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 213,
+            "winRate": 50,
+            "avgGames": 6794,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-20",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 164,
+            "winRate": 50,
+            "avgGames": 5048,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-13",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 194,
+            "winRate": 50,
+            "avgGames": 5253,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-06",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 142,
+            "winRate": 50,
+            "avgGames": 4854,
+            "isOldEventDay": false
+          }
+        ]
+      },
+      {
+        "modelName": "L 革命機ヴァルヴレイヴ",
+        "rank": 12,
+        "rankGrade": "A",
+        "totalMachines": 8,
+        "expectedDiffCoins": 19,
+        "predictedWinRate": 49.6,
+        "predictedPayoutRate": 100.12,
+        "avgGames": 5105,
+        "compositeScore": 63.7,
+        "sampleDays": 60,
+        "matchingDaysCount": 8,
+        "matchingAvgDiffCoins": 29,
+        "matchingWinRate": 50,
+        "allHighDaysCount": 0,
+        "tacticalReason": "店舗全体でベース出率が高め。通常日でも単発高設定に期待。",
+        "tags": [
+          "スマスロ",
+          "主力機(8台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-24",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -133,
+            "winRate": 37.5,
+            "avgGames": 4445,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-17",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 441,
+            "winRate": 75,
+            "avgGames": 6321,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-02-10",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -196,
+            "winRate": 37.5,
+            "avgGames": 4329,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-03",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 70,
+            "winRate": 50,
+            "avgGames": 4639,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-27",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 289,
+            "winRate": 62.5,
+            "avgGames": 6693,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-20",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -141,
+            "winRate": 50,
+            "avgGames": 5269,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-13",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -159,
+            "winRate": 37.5,
+            "avgGames": 4579,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-06",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 62,
+            "winRate": 50,
+            "avgGames": 4566,
+            "isOldEventDay": false
+          }
+        ]
+      },
+      {
+        "modelName": "アイムジャグラーEX",
+        "rank": 13,
+        "rankGrade": "A",
+        "totalMachines": 4,
+        "expectedDiffCoins": 85,
+        "predictedWinRate": 50.1,
+        "predictedPayoutRate": 100.54,
+        "avgGames": 5290,
+        "compositeScore": 61.8,
+        "sampleDays": 60,
+        "matchingDaysCount": 8,
+        "matchingAvgDiffCoins": 104,
+        "matchingWinRate": 50,
+        "allHighDaysCount": 0,
+        "tacticalReason": "店舗全体でベース出率が高め。通常日でも単発高設定に期待。",
+        "tags": [
+          "ジャグラー",
+          "少台数(4台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-24",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 90,
+            "winRate": 50,
+            "avgGames": 4663,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-17",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 400,
+            "winRate": 50,
+            "avgGames": 5998,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-02-10",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -5,
+            "winRate": 50,
+            "avgGames": 5016,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-03",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 21,
+            "winRate": 50,
+            "avgGames": 4932,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-27",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 246,
+            "winRate": 50,
+            "avgGames": 6794,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-20",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 36,
+            "winRate": 50,
+            "avgGames": 5264,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-13",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 29,
+            "winRate": 50,
+            "avgGames": 4682,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-06",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 18,
+            "winRate": 50,
+            "avgGames": 4968,
+            "isOldEventDay": false
+          }
+        ]
+      },
+      {
+        "modelName": "新ハナビ",
+        "rank": 14,
+        "rankGrade": "A",
+        "totalMachines": 5,
+        "expectedDiffCoins": 18,
+        "predictedWinRate": 51.1,
+        "predictedPayoutRate": 100.1,
+        "avgGames": 6068,
+        "compositeScore": 61.7,
+        "sampleDays": 60,
+        "matchingDaysCount": 8,
+        "matchingAvgDiffCoins": 24,
+        "matchingWinRate": 52.5,
+        "allHighDaysCount": 0,
+        "tacticalReason": "店舗全体でベース出率が高め。通常日でも単発高設定に期待。",
+        "tags": [
+          "Aタイプ",
+          "主力機(5台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-24",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -187,
+            "winRate": 40,
+            "avgGames": 5546,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-17",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 319,
+            "winRate": 60,
+            "avgGames": 6816,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-02-10",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -188,
+            "winRate": 40,
+            "avgGames": 5502,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-03",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 39,
+            "winRate": 60,
+            "avgGames": 5581,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-27",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 238,
+            "winRate": 60,
+            "avgGames": 7349,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-20",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 74,
+            "winRate": 60,
+            "avgGames": 5904,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-13",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -172,
+            "winRate": 40,
+            "avgGames": 5761,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-06",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 66,
+            "winRate": 60,
+            "avgGames": 6084,
+            "isOldEventDay": false
+          }
+        ]
+      },
+      {
+        "modelName": "マイジャグラーV",
+        "rank": 15,
+        "rankGrade": "B",
+        "totalMachines": 3,
+        "expectedDiffCoins": -49,
+        "predictedWinRate": 41.6,
+        "predictedPayoutRate": 99.62,
+        "avgGames": 4328,
+        "compositeScore": 49.9,
+        "sampleDays": 60,
+        "matchingDaysCount": 8,
+        "matchingAvgDiffCoins": -48,
+        "matchingWinRate": 41.7,
+        "allHighDaysCount": 0,
+        "tacticalReason": "通常営業配分。積極的な朝イチ確保は見送り推奨。",
+        "tags": [
+          "ジャグラー",
+          "少台数(3台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-24",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -145,
+            "winRate": 33.3,
+            "avgGames": 4299,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-17",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 246,
+            "winRate": 66.7,
+            "avgGames": 5614,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-02-10",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 0,
+            "winRate": 33.3,
+            "avgGames": 4095,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-02-03",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -170,
+            "winRate": 33.3,
+            "avgGames": 3940,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-27",
+            "dayOfWeek": "土",
+            "avgDiffCoins": 117,
+            "winRate": 66.7,
+            "avgGames": 5321,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-20",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -138,
+            "winRate": 33.3,
+            "avgGames": 4123,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-13",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -101,
+            "winRate": 33.3,
+            "avgGames": 3673,
+            "isOldEventDay": false
+          },
+          {
+            "date": "2024-01-06",
+            "dayOfWeek": "土",
+            "avgDiffCoins": -195,
+            "winRate": 33.3,
+            "avgGames": 3560,
+            "isOldEventDay": false
+          }
+        ]
+      }
+    ],
+    "tailRankings": [
+      {
+        "tailName": "末尾 7",
+        "tailNum": 7,
+        "rank": 1,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": 72.3,
+        "winRate": 50,
+        "sampleDays": 8,
+        "recommendationLevel": "対抗"
+      },
+      {
+        "tailName": "末尾 4",
+        "tailNum": 4,
+        "rank": 2,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": 70.4,
+        "winRate": 50,
+        "sampleDays": 8,
+        "recommendationLevel": "対抗"
+      },
+      {
+        "tailName": "末尾 2",
+        "tailNum": 2,
+        "rank": 3,
+        "isDateTailMatch": true,
+        "expectedDiffCoins": 1.5,
+        "winRate": 50,
+        "sampleDays": 8,
+        "recommendationLevel": "対抗"
+      },
+      {
+        "tailName": "末尾 9",
+        "tailNum": 9,
+        "rank": 4,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": 37.6,
+        "winRate": 50,
+        "sampleDays": 8,
+        "recommendationLevel": "対抗"
+      },
+      {
+        "tailName": "末尾 6",
+        "tailNum": 6,
+        "rank": 5,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": 35.3,
+        "winRate": 50,
+        "sampleDays": 8,
+        "recommendationLevel": "対抗"
+      },
+      {
+        "tailName": "末尾 0",
+        "tailNum": 0,
+        "rank": 6,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": 17.1,
+        "winRate": 50,
+        "sampleDays": 8,
+        "recommendationLevel": "対抗"
+      },
+      {
+        "tailName": "末尾 5",
+        "tailNum": 5,
+        "rank": 7,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": 15.5,
+        "winRate": 50,
+        "sampleDays": 8,
+        "recommendationLevel": "対抗"
+      },
+      {
+        "tailName": "末尾 8",
+        "tailNum": 8,
+        "rank": 8,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": 15.5,
+        "winRate": 50,
+        "sampleDays": 8,
+        "recommendationLevel": "対抗"
+      },
+      {
+        "tailName": "末尾 ゾロ目",
+        "tailNum": null,
+        "rank": 9,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": 0,
+        "winRate": 48,
+        "sampleDays": 0,
+        "recommendationLevel": "通常"
+      },
+      {
+        "tailName": "末尾 3",
+        "tailNum": 3,
+        "rank": 10,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": -49.9,
+        "winRate": 50,
+        "sampleDays": 8,
+        "recommendationLevel": "通常"
+      },
+      {
+        "tailName": "末尾 1",
+        "tailNum": 1,
+        "rank": 11,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": -65.6,
+        "winRate": 50,
+        "sampleDays": 8,
+        "recommendationLevel": "通常"
+      }
+    ],
+    "tacticalAdvice": {
+      "morningPriority": "【本命最優先】キングハナハナ-30 の確保を最優先に狙う。特に 末尾 7 と重複する台番は激アツ期待度大。",
+      "secondOption": "【対抗候補】抽選番号が振るわない場合は L からくりサーカス または 末尾 4 の主力台番へシフト。",
+      "tailStrategy": "通常営業日のため、全体末尾の過信は禁物。機種単体の過去勝率を最重要視した立ち回りを推奨。",
+      "summary": "2024-03-02（土曜）は通常営業日の配分想定。ピンポイントでの単品高設定投入を狙う慎重な立ち回りが有効です。"
+    }
+  },
+  "specialForecast": {
+    "targetDate": "2024-03-07",
+    "dayOfWeek": "木",
+    "isHoliday": false,
+    "isSpecialDay": true,
+    "dayTail": 7,
+    "specialDayLabel": "7のつく日 (旧イベ特日)",
+    "expectedHallStatus": "激アツ還元",
+    "expectedHallAvgDiffCoins": 397,
+    "expectedHallWinRate": 100,
+    "expectedHallPayoutRate": 101.99,
+    "matchingHistoricalDaysCount": 2,
+    "modelRankings": [
+      {
+        "modelName": "キングハナハナ-30",
+        "rank": 1,
+        "rankGrade": "A",
+        "totalMachines": 9,
+        "expectedDiffCoins": 392,
+        "predictedWinRate": 63.8,
+        "predictedPayoutRate": 101.83,
+        "avgGames": 7138,
+        "compositeScore": 65.4,
+        "sampleDays": 60,
+        "matchingDaysCount": 2,
+        "matchingAvgDiffCoins": 624,
+        "matchingWinRate": 72.3,
+        "allHighDaysCount": 0,
+        "tacticalReason": "特日実績抜群（過去平均+624枚/勝率72.3%）。看板機種として優先度最高。",
+        "tags": [
+          "Aタイプ",
+          "主力機(9台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-22",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 639,
+            "winRate": 77.8,
+            "avgGames": 7023,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-11",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 609,
+            "winRate": 66.7,
+            "avgGames": 7253,
+            "isOldEventDay": true
+          }
+        ]
+      },
+      {
+        "modelName": "L からくりサーカス",
+        "rank": 2,
+        "rankGrade": "A",
+        "totalMachines": 7,
+        "expectedDiffCoins": 297,
+        "predictedWinRate": 62.9,
+        "predictedPayoutRate": 101.78,
+        "avgGames": 5562,
+        "compositeScore": 60.8,
+        "sampleDays": 60,
+        "matchingDaysCount": 2,
+        "matchingAvgDiffCoins": 448,
+        "matchingWinRate": 71.4,
+        "allHighDaysCount": 0,
+        "tacticalReason": "同種特日での安定勝率71.4%。大崩れしにくく堅実な立ち回りに最適。",
+        "tags": [
+          "スマスロ",
+          "主力機(7台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-22",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 480,
+            "winRate": 71.4,
+            "avgGames": 5527,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-11",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 416,
+            "winRate": 71.4,
+            "avgGames": 5596,
+            "isOldEventDay": true
+          }
+        ]
+      },
+      {
+        "modelName": "L 戦国乙女4 戦乱に閃く炯眼の軍師",
+        "rank": 3,
+        "rankGrade": "A",
+        "totalMachines": 8,
+        "expectedDiffCoins": 300,
+        "predictedWinRate": 60.7,
+        "predictedPayoutRate": 101.6,
+        "avgGames": 6261,
+        "compositeScore": 60.5,
+        "sampleDays": 60,
+        "matchingDaysCount": 2,
+        "matchingAvgDiffCoins": 494,
+        "matchingWinRate": 68.8,
+        "allHighDaysCount": 0,
+        "tacticalReason": "同種特日での安定勝率68.8%。大崩れしにくく堅実な立ち回りに最適。",
+        "tags": [
+          "スマスロ",
+          "主力機(8台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-22",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 493,
+            "winRate": 75,
+            "avgGames": 6376,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-11",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 494,
+            "winRate": 62.5,
+            "avgGames": 6146,
+            "isOldEventDay": true
+          }
+        ]
+      },
+      {
+        "modelName": "ファンキージャグラー2",
+        "rank": 4,
+        "rankGrade": "A",
+        "totalMachines": 5,
+        "expectedDiffCoins": 323,
+        "predictedWinRate": 62,
+        "predictedPayoutRate": 101.54,
+        "avgGames": 6981,
+        "compositeScore": 58.9,
+        "sampleDays": 60,
+        "matchingDaysCount": 2,
+        "matchingAvgDiffCoins": 548,
+        "matchingWinRate": 70,
+        "allHighDaysCount": 0,
+        "tacticalReason": "特日実績抜群（過去平均+548枚/勝率70%）。看板機種として優先度最高。",
+        "tags": [
+          "ジャグラー",
+          "主力機(5台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-22",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 490,
+            "winRate": 60,
+            "avgGames": 7188,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-11",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 605,
+            "winRate": 80,
+            "avgGames": 6773,
+            "isOldEventDay": true
+          }
+        ]
+      },
+      {
+        "modelName": "押忍！番長4",
+        "rank": 5,
+        "rankGrade": "A",
+        "totalMachines": 10,
+        "expectedDiffCoins": 216,
+        "predictedWinRate": 57.8,
+        "predictedPayoutRate": 100.89,
+        "avgGames": 8076,
+        "compositeScore": 58,
+        "sampleDays": 60,
+        "matchingDaysCount": 2,
+        "matchingAvgDiffCoins": 377,
+        "matchingWinRate": 65,
+        "allHighDaysCount": 0,
+        "tacticalReason": "同種特日での安定勝率65%。大崩れしにくく堅実な立ち回りに最適。",
+        "tags": [
+          "主力機(10台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-22",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 336,
+            "winRate": 60,
+            "avgGames": 8184,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-11",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 418,
+            "winRate": 70,
+            "avgGames": 7967,
+            "isOldEventDay": true
+          }
+        ]
+      },
+      {
+        "modelName": "甲鉄城のカバネリ",
+        "rank": 6,
+        "rankGrade": "A",
+        "totalMachines": 6,
+        "expectedDiffCoins": 235,
+        "predictedWinRate": 59.1,
+        "predictedPayoutRate": 101.02,
+        "avgGames": 7695,
+        "compositeScore": 56.3,
+        "sampleDays": 60,
+        "matchingDaysCount": 2,
+        "matchingAvgDiffCoins": 418,
+        "matchingWinRate": 66.7,
+        "allHighDaysCount": 0,
+        "tacticalReason": "同種特日での安定勝率66.7%。大崩れしにくく堅実な立ち回りに最適。",
+        "tags": [
+          "主力機(6台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-22",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 413,
+            "winRate": 66.7,
+            "avgGames": 7932,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-11",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 423,
+            "winRate": 66.7,
+            "avgGames": 7457,
+            "isOldEventDay": true
+          }
+        ]
+      },
+      {
+        "modelName": "沖ドキ！GOLD",
+        "rank": 7,
+        "rankGrade": "A",
+        "totalMachines": 3,
+        "expectedDiffCoins": 330,
+        "predictedWinRate": 62.3,
+        "predictedPayoutRate": 101.96,
+        "avgGames": 5605,
+        "compositeScore": 56,
+        "sampleDays": 60,
+        "matchingDaysCount": 2,
+        "matchingAvgDiffCoins": 522,
+        "matchingWinRate": 66.7,
+        "allHighDaysCount": 0,
+        "tacticalReason": "特日実績抜群（過去平均+522枚/勝率66.7%）。看板機種として優先度最高。",
+        "tags": [
+          "少台数(3台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-22",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 509,
+            "winRate": 66.7,
+            "avgGames": 5313,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-11",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 535,
+            "winRate": 66.7,
+            "avgGames": 5896,
+            "isOldEventDay": true
+          }
+        ]
+      },
+      {
+        "modelName": "L モンキーターンV",
+        "rank": 8,
+        "rankGrade": "B",
+        "totalMachines": 9,
+        "expectedDiffCoins": 186,
+        "predictedWinRate": 55.1,
+        "predictedPayoutRate": 100.92,
+        "avgGames": 6758,
+        "compositeScore": 55.1,
+        "sampleDays": 60,
+        "matchingDaysCount": 2,
+        "matchingAvgDiffCoins": 351,
+        "matchingWinRate": 61.2,
+        "allHighDaysCount": 0,
+        "tacticalReason": "同種特日での安定勝率61.2%。大崩れしにくく堅実な立ち回りに最適。",
+        "tags": [
+          "スマスロ",
+          "主力機(9台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-22",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 342,
+            "winRate": 55.6,
+            "avgGames": 6734,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-11",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 359,
+            "winRate": 66.7,
+            "avgGames": 6781,
+            "isOldEventDay": true
+          }
+        ]
+      },
+      {
+        "modelName": "L 革命機ヴァルヴレイヴ",
+        "rank": 9,
+        "rankGrade": "B",
+        "totalMachines": 8,
+        "expectedDiffCoins": 169,
+        "predictedWinRate": 55.4,
+        "predictedPayoutRate": 100.9,
+        "avgGames": 6228,
+        "compositeScore": 54.2,
+        "sampleDays": 60,
+        "matchingDaysCount": 2,
+        "matchingAvgDiffCoins": 349,
+        "matchingWinRate": 62.5,
+        "allHighDaysCount": 0,
+        "tacticalReason": "同種特日での安定勝率62.5%。大崩れしにくく堅実な立ち回りに最適。",
+        "tags": [
+          "スマスロ",
+          "主力機(8台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-22",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 354,
+            "winRate": 62.5,
+            "avgGames": 6067,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-11",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 344,
+            "winRate": 62.5,
+            "avgGames": 6389,
+            "isOldEventDay": true
+          }
+        ]
+      },
+      {
+        "modelName": "L ガールズ＆パンツァー 最終章",
+        "rank": 10,
+        "rankGrade": "B",
+        "totalMachines": 7,
+        "expectedDiffCoins": 164,
+        "predictedWinRate": 53.2,
+        "predictedPayoutRate": 101.08,
+        "avgGames": 5082,
+        "compositeScore": 52.1,
+        "sampleDays": 60,
+        "matchingDaysCount": 2,
+        "matchingAvgDiffCoins": 293,
+        "matchingWinRate": 57.1,
+        "allHighDaysCount": 0,
+        "tacticalReason": "特日平均差枚プラス圏。安定して高設定が配分される傾向あり。",
+        "tags": [
+          "スマスロ",
+          "主力機(7台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-22",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 289,
+            "winRate": 57.1,
+            "avgGames": 5162,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-11",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 296,
+            "winRate": 57.1,
+            "avgGames": 5002,
+            "isOldEventDay": true
+          }
+        ]
+      },
+      {
+        "modelName": "L バジリスク〜甲賀忍法帖〜絆2 天膳",
+        "rank": 11,
+        "rankGrade": "B",
+        "totalMachines": 4,
+        "expectedDiffCoins": 184,
+        "predictedWinRate": 57.1,
+        "predictedPayoutRate": 101.02,
+        "avgGames": 5990,
+        "compositeScore": 51.6,
+        "sampleDays": 60,
+        "matchingDaysCount": 2,
+        "matchingAvgDiffCoins": 239,
+        "matchingWinRate": 62.5,
+        "allHighDaysCount": 0,
+        "tacticalReason": "同種特日での安定勝率62.5%。大崩れしにくく堅実な立ち回りに最適。",
+        "tags": [
+          "スマスロ",
+          "少台数(4台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-22",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 291,
+            "winRate": 75,
+            "avgGames": 6119,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-11",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 186,
+            "winRate": 50,
+            "avgGames": 5860,
+            "isOldEventDay": true
+          }
+        ]
+      },
+      {
+        "modelName": "新ハナビ",
+        "rank": 12,
+        "rankGrade": "B",
+        "totalMachines": 5,
+        "expectedDiffCoins": 204,
+        "predictedWinRate": 53.5,
+        "predictedPayoutRate": 101.02,
+        "avgGames": 6664,
+        "compositeScore": 51.5,
+        "sampleDays": 60,
+        "matchingDaysCount": 2,
+        "matchingAvgDiffCoins": 406,
+        "matchingWinRate": 60,
+        "allHighDaysCount": 0,
+        "tacticalReason": "同種特日での安定勝率60%。大崩れしにくく堅実な立ち回りに最適。",
+        "tags": [
+          "Aタイプ",
+          "主力機(5台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-22",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 412,
+            "winRate": 60,
+            "avgGames": 6727,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-11",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 399,
+            "winRate": 60,
+            "avgGames": 6600,
+            "isOldEventDay": true
+          }
+        ]
+      },
+      {
+        "modelName": "L パチスロ北斗の拳",
+        "rank": 13,
+        "rankGrade": "B",
+        "totalMachines": 6,
+        "expectedDiffCoins": 148,
+        "predictedWinRate": 50.3,
+        "predictedPayoutRate": 100.63,
+        "avgGames": 7834,
+        "compositeScore": 49.4,
+        "sampleDays": 60,
+        "matchingDaysCount": 2,
+        "matchingAvgDiffCoins": 212,
+        "matchingWinRate": 50,
+        "allHighDaysCount": 0,
+        "tacticalReason": "特日平均差枚プラス圏。安定して高設定が配分される傾向あり。",
+        "tags": [
+          "スマスロ",
+          "主力機(6台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-22",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 256,
+            "winRate": 50,
+            "avgGames": 7623,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-11",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 168,
+            "winRate": 50,
+            "avgGames": 8044,
+            "isOldEventDay": true
+          }
+        ]
+      },
+      {
+        "modelName": "アイムジャグラーEX",
+        "rank": 14,
+        "rankGrade": "B",
+        "totalMachines": 4,
+        "expectedDiffCoins": 150,
+        "predictedWinRate": 50.2,
+        "predictedPayoutRate": 100.8,
+        "avgGames": 6219,
+        "compositeScore": 47.3,
+        "sampleDays": 60,
+        "matchingDaysCount": 2,
+        "matchingAvgDiffCoins": 273,
+        "matchingWinRate": 50,
+        "allHighDaysCount": 0,
+        "tacticalReason": "特日平均差枚プラス圏。安定して高設定が配分される傾向あり。",
+        "tags": [
+          "ジャグラー",
+          "少台数(4台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-22",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 284,
+            "winRate": 50,
+            "avgGames": 6172,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-11",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 261,
+            "winRate": 50,
+            "avgGames": 6265,
+            "isOldEventDay": true
+          }
+        ]
+      },
+      {
+        "modelName": "マイジャグラーV",
+        "rank": 15,
+        "rankGrade": "B",
+        "totalMachines": 3,
+        "expectedDiffCoins": 88,
+        "predictedWinRate": 53.9,
+        "predictedPayoutRate": 100.51,
+        "avgGames": 5760,
+        "compositeScore": 46.2,
+        "sampleDays": 60,
+        "matchingDaysCount": 2,
+        "matchingAvgDiffCoins": 227,
+        "matchingWinRate": 66.7,
+        "allHighDaysCount": 0,
+        "tacticalReason": "同種特日での安定勝率66.7%。大崩れしにくく堅実な立ち回りに最適。",
+        "tags": [
+          "ジャグラー",
+          "少台数(3台)"
+        ],
+        "sampleRecords": [
+          {
+            "date": "2024-02-22",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 314,
+            "winRate": 66.7,
+            "avgGames": 5678,
+            "isOldEventDay": true
+          },
+          {
+            "date": "2024-01-11",
+            "dayOfWeek": "木",
+            "avgDiffCoins": 140,
+            "winRate": 66.7,
+            "avgGames": 5842,
+            "isOldEventDay": true
+          }
+        ]
+      }
+    ],
+    "tailRankings": [
+      {
+        "tailName": "末尾 7",
+        "tailNum": 7,
+        "rank": 1,
+        "isDateTailMatch": true,
+        "expectedDiffCoins": 48.7,
+        "winRate": 50,
+        "sampleDays": 60,
+        "recommendationLevel": "対抗"
+      },
+      {
+        "tailName": "末尾 9",
+        "tailNum": 9,
+        "rank": 2,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": 24.7,
+        "winRate": 50,
+        "sampleDays": 60,
+        "recommendationLevel": "対抗"
+      },
+      {
+        "tailName": "末尾 0",
+        "tailNum": 0,
+        "rank": 3,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": 17.7,
+        "winRate": 50,
+        "sampleDays": 60,
+        "recommendationLevel": "対抗"
+      },
+      {
+        "tailName": "末尾 2",
+        "tailNum": 2,
+        "rank": 4,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": 10.3,
+        "winRate": 50,
+        "sampleDays": 60,
+        "recommendationLevel": "対抗"
+      },
+      {
+        "tailName": "末尾 5",
+        "tailNum": 5,
+        "rank": 5,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": 4.6,
+        "winRate": 50,
+        "sampleDays": 60,
+        "recommendationLevel": "対抗"
+      },
+      {
+        "tailName": "末尾 1",
+        "tailNum": 1,
+        "rank": 6,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": 0.8,
+        "winRate": 50,
+        "sampleDays": 60,
+        "recommendationLevel": "対抗"
+      },
+      {
+        "tailName": "末尾 ゾロ目",
+        "tailNum": null,
+        "rank": 7,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": 0,
+        "winRate": 48,
+        "sampleDays": 0,
+        "recommendationLevel": "通常"
+      },
+      {
+        "tailName": "末尾 4",
+        "tailNum": 4,
+        "rank": 8,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": -1.1,
+        "winRate": 50,
+        "sampleDays": 60,
+        "recommendationLevel": "通常"
+      },
+      {
+        "tailName": "末尾 8",
+        "tailNum": 8,
+        "rank": 9,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": -4.6,
+        "winRate": 50,
+        "sampleDays": 60,
+        "recommendationLevel": "通常"
+      },
+      {
+        "tailName": "末尾 3",
+        "tailNum": 3,
+        "rank": 10,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": -8.2,
+        "winRate": 50,
+        "sampleDays": 60,
+        "recommendationLevel": "通常"
+      },
+      {
+        "tailName": "末尾 6",
+        "tailNum": 6,
+        "rank": 11,
+        "isDateTailMatch": false,
+        "expectedDiffCoins": -9.9,
+        "winRate": 50,
+        "sampleDays": 60,
+        "recommendationLevel": "通常"
+      }
+    ],
+    "tacticalAdvice": {
+      "morningPriority": "【本命最優先】キングハナハナ-30 の確保を最優先に狙う。特に 末尾 7 と重複する台番は激アツ期待度大。",
+      "secondOption": "【対抗候補】抽選番号が振るわない場合は L からくりサーカス または 末尾 9 の主力台番へシフト。",
+      "tailStrategy": "日付末尾 (7日) と過去実績首位の「末尾 7」の合致率に注目。良番時はこの2つの末尾を優先選択。",
+      "summary": "7のつく日 (旧イベ特日) はホール全体での還元期待度が極めて高い勝負日。過去実績トップの「キングハナハナ-30」を中心とした多台数メイン機種を攻めるのがセオリーです。"
+    }
+  }
+}

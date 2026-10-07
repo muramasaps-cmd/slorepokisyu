@@ -129,7 +129,7 @@ export function getJapaneseHoliday(dateStr: string): HolidayInfo {
   // 祝日法第3条第2項: 国民の祝日が日曜日に当たるときは、その日後においてその日に最も近い国民の祝日でない日を休日とする
   // If today is NOT Sunday (0) and NOT a base holiday, check previous consecutive days:
   if (dayOfWeek !== 0) {
-    let checkDate = new Date(year, month - 1, day - 1);
+    const checkDate = new Date(year, month - 1, day - 1);
     let isSubstitute = false;
     while (true) {
       const cY = checkDate.getFullYear();

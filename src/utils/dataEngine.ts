@@ -9,17 +9,25 @@ import {
 
 export const JAPANESE_DAYS = ['日', '月', '火', '水', '木', '金', '土'];
 
-export function calculateDayOfWeek(dateStr: string): string {
+export function calculateDayOfWeek(dateStr: string): string | null {
+  if (!dateStr || typeof dateStr !== 'string') return null;
   // Parse YYYY-MM-DD safely
-  const parts = dateStr.split(/[-/.]/);
+  const parts = dateStr.trim().split(/[-/.]/);
   if (parts.length === 3) {
     const y = parseInt(parts[0], 10);
     const m = parseInt(parts[1], 10) - 1;
     const d = parseInt(parts[2], 10);
+    if (isNaN(y) || isNaN(m) || isNaN(d) || y < 1900 || m < 0 || m > 11 || d < 1 || d > 31) {
+      return null;
+    }
     const date = new Date(y, m, d);
-    return JAPANESE_DAYS[date.getDay()] || '月';
+    if (isNaN(date.getTime()) || date.getFullYear() !== y || date.getMonth() !== m || date.getDate() !== d) {
+      return null;
+    }
+    const day = date.getDay();
+    return JAPANESE_DAYS[day] ?? null;
   }
-  return '月';
+  return null;
 }
 
 export function isDateSpecialDay(dateStr: string, rules?: SpecialDayRules): boolean {
@@ -56,7 +64,7 @@ export function isDateSpecialDay(dateStr: string, rules?: SpecialDayRules): bool
   }
 
   // 5. Day of week: e.g. '土', '日'
-  if (rules.daysOfWeek && rules.daysOfWeek.includes(dow)) {
+  if (rules.daysOfWeek && dow && rules.daysOfWeek.includes(dow)) {
     return true;
   }
 
@@ -498,6 +506,7 @@ export function parseSlotDataInput(
     }
 
     const dayOfWeek = calculateDayOfWeek(formattedDate);
+    if (!dayOfWeek) continue;
     let isOldEventDay = rules ? isDateSpecialDay(formattedDate, rules) : false;
 
     if (isEventIdx !== -1 && cols[isEventIdx]) {

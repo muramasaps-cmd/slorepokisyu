@@ -408,7 +408,7 @@ export function upsertStore(store: StoreProfile): StoreProfile[] {
  * Upsert multiple stores in batch
  */
 export function upsertStores(newStores: StoreProfile[]): StoreProfile[] {
-  let stores = getSavedStores();
+  const stores = getSavedStores();
   for (const store of newStores) {
     const index = stores.findIndex((s) => s.id === store.id || areStoresSame(s.name, store.name));
     const { rateLend, rateExchange } = parseRatesFromExchangeRate(store.exchangeRate || '');

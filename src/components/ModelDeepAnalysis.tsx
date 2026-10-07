@@ -996,15 +996,15 @@ export const ModelDeepAnalysis: React.FC<ModelDeepAnalysisProps> = ({
                           </td>
 
                           {/* Machines */}
-                          <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                          <td className="py-2.5 px-3 text-right whitespace-nowrap font-mono tabular-nums">
                             <span className="font-bold text-slate-800">{m.avgMachinesPerDay}台</span>
                             {m.daysCount > 1 && (
-                              <span className="text-[10px] text-slate-400 ml-1">({m.daysCount}日)</span>
+                              <span className="text-[10px] text-slate-400 ml-1 font-sans">({m.daysCount}日)</span>
                             )}
                           </td>
 
                           {/* Avg Diff */}
-                          <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                          <td className="py-2.5 px-3 text-right whitespace-nowrap font-mono tabular-nums">
                             <span
                               className={`font-black ${
                                 m.avgDiffCoinsPerMachine > 0
@@ -1022,7 +1022,7 @@ export const ModelDeepAnalysis: React.FC<ModelDeepAnalysisProps> = ({
                           </td>
 
                           {/* Total Diff */}
-                          <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                          <td className="py-2.5 px-3 text-right whitespace-nowrap font-mono tabular-nums">
                             <span
                               className={`font-black ${
                                 totalDiffDisplay > 0
@@ -1042,7 +1042,7 @@ export const ModelDeepAnalysis: React.FC<ModelDeepAnalysisProps> = ({
                           </td>
 
                           {/* Hall Yen */}
-                          <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                          <td className="py-2.5 px-3 text-right whitespace-nowrap font-mono tabular-nums">
                             <span
                               className={`font-bold ${
                                 yenDisplay > 0
@@ -1059,9 +1059,9 @@ export const ModelDeepAnalysis: React.FC<ModelDeepAnalysisProps> = ({
                           </td>
 
                           {/* Avg Games */}
-                          <td className="py-2.5 px-3 text-right whitespace-nowrap text-slate-700">
+                          <td className="py-2.5 px-3 text-right whitespace-nowrap text-slate-700 font-mono tabular-nums">
                             <div className="flex items-center justify-end gap-1.5">
-                              <span>{formatNumber(m.avgGames)}G</span>
+                              <span>{formatNumber(m.avgGames)} G</span>
                               <div className="w-12 bg-slate-200 h-1.5 rounded-full overflow-hidden hidden sm:block">
                                 <div
                                   className="bg-amber-500 h-full rounded-full"
@@ -1072,10 +1072,10 @@ export const ModelDeepAnalysis: React.FC<ModelDeepAnalysisProps> = ({
                           </td>
 
                           {/* Win Rate */}
-                          <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                          <td className="py-2.5 px-3 text-right whitespace-nowrap font-mono tabular-nums">
                             <div className="flex items-center justify-end gap-1.5">
                               <span className="font-extrabold text-slate-800">{m.winRate}%</span>
-                              <span className="text-[11px] text-slate-500 font-normal">
+                              <span className="text-[11px] text-slate-500 font-normal font-sans">
                                 ({m.winMachines}/{m.totalMachines}台)
                               </span>
                             </div>

@@ -481,7 +481,10 @@ export function parseAnaSloDailyHtml(
     };
   }
 
-  dayOfWeek = calculateDayOfWeek(dateStr);
+  const calcDow = calculateDayOfWeek(dateStr);
+  if (calcDow) {
+    dayOfWeek = calcDow;
+  }
   const dowMatch = dateSearchText.match(/[\(（]([日月火水木金土])[\)）]/);
   if (dowMatch) {
     dayOfWeek = dowMatch[1];
@@ -731,7 +734,7 @@ export function parseAnaSloDailyHtml(
   // Zoro tail (ゾロ目)
   // Check if h4#last_digit_section10 (末尾ゾロ目) is present with specific machine numbers
   const zoroH4 = Array.from(doc.querySelectorAll('h4[id*="last_digit"], h4')).find((h) => h.textContent?.includes('ゾロ目'));
-  let zoroMachNums: number[] = [];
+  const zoroMachNums: number[] = [];
   if (zoroH4) {
     let curr = zoroH4.nextElementSibling;
     while (curr && curr.tagName !== 'H4' && curr.tagName !== 'H2') {
@@ -861,7 +864,7 @@ export function parseAnaSloDailyHtml(
     oldEventDays = '8のつく日';
   }
 
-  let exchangeRateStr = '46枚貸/52枚交換';
+  const exchangeRateStr = '46枚貸/52枚交換';
   const { rateLend, rateExchange } = parseRatesFromExchangeRate(exchangeRateStr);
   const specialDayRules: SpecialDayRules = parseSpecialDayRulesFromText(oldEventDays);
 
@@ -1043,19 +1046,22 @@ export function parseSlorepoDailyHtml(doc: Document, rawHtml: string, fileName: 
     const m = parseInt(dateMatch1[2], 10);
     const d = parseInt(dateMatch1[3], 10);
     dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    dayOfWeek = calculateDayOfWeek(dateStr);
+    const cdow = calculateDayOfWeek(dateStr);
+    if (cdow) dayOfWeek = cdow;
   } else if (dateMatch2) {
     const y = parseInt(dateMatch2[1], 10);
     const m = parseInt(dateMatch2[2], 10);
     const d = parseInt(dateMatch2[3], 10);
     dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    dayOfWeek = calculateDayOfWeek(dateStr);
+    const cdow = calculateDayOfWeek(dateStr);
+    if (cdow) dayOfWeek = cdow;
   } else if (dateMatch3) {
     const y = parseInt(dateMatch3[1], 10);
     const m = parseInt(dateMatch3[2], 10);
     const d = parseInt(dateMatch3[3], 10);
     dateStr = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    dayOfWeek = calculateDayOfWeek(dateStr);
+    const cdow = calculateDayOfWeek(dateStr);
+    if (cdow) dayOfWeek = cdow;
   }
 
   // Also check <meta> time or <time> tag
@@ -1065,7 +1071,8 @@ export function parseSlorepoDailyHtml(doc: Document, rawHtml: string, fileName: 
     const m = attr.match(/(202\d)[-_.]?(\d{2})[-_.]?(\d{2})/);
     if (m) {
       dateStr = `${m[1]}-${m[2]}-${m[3]}`;
-      dayOfWeek = calculateDayOfWeek(dateStr);
+      const cdow = calculateDayOfWeek(dateStr);
+      if (cdow) dayOfWeek = cdow;
     }
   }
 
@@ -1654,13 +1661,16 @@ export function parseSlorepoHtml(htmlContent: string, fileName: string = ''): Pa
           const [y, m, d] = dateStr.split('-');
           const isOldEvent = isDateSpecialDay(dateStr, specialDayRules);
 
+          const dow = calculateDayOfWeek(dateStr);
+          if (!dow) return;
+
           allExtractedDailyRecords.push({
             date: dateStr,
             yearMonth: `${y}-${m}`,
             year: parseInt(y, 10),
             month: parseInt(m, 10),
             day: parseInt(d, 10),
-            dayOfWeek: calculateDayOfWeek(dateStr),
+            dayOfWeek: dow,
             avgDiffCoins: Math.round(totD / machines.length),
             avgGames: Math.round(totG / machines.length),
             winRate: Math.round((wins / machines.length) * 1000) / 10,
@@ -2019,13 +2029,14 @@ export function parseSlorepoHtml(htmlContent: string, fileName: string = ''): Pa
     // Convert to DailyRecord
     // 台数がブランクの日は他の日で台数表示されてる台数を流用する
     const defaultCashRatio = 35;
-    const tempDaily: DailyRecord[] = sortedRows.map((r, index) => {
+    const validRows = sortedRows.filter((r) => calculateDayOfWeek(r.date) !== null);
+    const tempDaily: DailyRecord[] = validRows.map((r, index) => {
       const parts = r.date.split('-');
       const y = parseInt(parts[0], 10);
       const m = parseInt(parts[1], 10);
       const d = parseInt(parts[2], 10);
       const ym = `${parts[0]}-${parts[1]}`;
-      const dow = calculateDayOfWeek(r.date);
+      const dow = calculateDayOfWeek(r.date)!;
       const isOldEvent = isDateSpecialDay(r.date, specialDayRules);
 
       // Check if machine count is blank for this day

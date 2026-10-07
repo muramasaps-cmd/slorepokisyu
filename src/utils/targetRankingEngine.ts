@@ -76,17 +76,111 @@ export interface TargetDateForecast {
   };
 }
 
+export interface IndexedDailyModel {
+  modelName: string;
+  totalMachines: number;
+  avgDiffCoins: number;
+  avgGames: number;
+  winRate: number | null;
+  isAllHigh: boolean;
+}
+
+export interface IndexedDailyRecord {
+  date: string;
+  year: number;
+  month: number;
+  day: number;
+  dayOfWeek: string;
+  dayTail: number;
+  isHoliday: boolean;
+  isOldEventDay: boolean;
+  avgDiffCoins: number;
+  payoutRate: number;
+  models: IndexedDailyModel[];
+  tails?: DailyTailRecord[];
+}
+
+export interface FeatureIndex {
+  records: IndexedDailyRecord[];
+  specialDayRules?: SpecialDayRules;
+  oldEventDays?: string;
+}
+
 /**
- * Calculates a complete prediction and ranking for a given target date based on store historical data.
+ * Precomputes weight-independent aggregations across historical records:
+ * (date attributes, holiday/special-day status, model name trimming, isAllHigh check).
+ * Run once so multi-step backtests and auto-tuning do not repeat scans and slicing.
  */
-export function calculateTargetDateRanking(
-  targetDate: string,
+export function buildFeatureIndex(
   dailyRecords: DailyRecord[],
   specialDayRules?: SpecialDayRules,
-  oldEventDays: string = '',
+  oldEventDays: string = ''
+): FeatureIndex {
+  if (!dailyRecords || dailyRecords.length === 0) {
+    return { records: [], specialDayRules, oldEventDays };
+  }
+
+  const records: IndexedDailyRecord[] = dailyRecords.map((r) => {
+    const isSpecial = specialDayRules
+      ? isDateSpecialDay(r.date, specialDayRules)
+      : r.isOldEventDay;
+    const isHoliday = isJapaneseHoliday(r.date);
+    const dayTail = r.day % 10;
+
+    const indexedModels: IndexedDailyModel[] = [];
+    if (r.models && r.models.length > 0) {
+      for (let i = 0; i < r.models.length; i++) {
+        const m = r.models[i];
+        const name = m.modelName.trim();
+        if (!name) continue;
+
+        const isAllHigh =
+          m.avgDiffCoins >= 800 && (m.winRate === null || m.winRate >= 60);
+
+        indexedModels.push({
+          modelName: name,
+          totalMachines: m.totalMachines || 1,
+          avgDiffCoins: m.avgDiffCoins,
+          avgGames: m.avgGames,
+          winRate: m.winRate,
+          isAllHigh,
+        });
+      }
+    }
+
+    return {
+      date: r.date,
+      year: r.year,
+      month: r.month,
+      day: r.day,
+      dayOfWeek: r.dayOfWeek,
+      dayTail,
+      isHoliday,
+      isOldEventDay: isSpecial,
+      avgDiffCoins: r.avgDiffCoins,
+      payoutRate: r.payoutRate || 100,
+      models: indexedModels,
+      tails: r.tails,
+    };
+  });
+
+  return {
+    records,
+    specialDayRules,
+    oldEventDays,
+  };
+}
+
+/**
+ * Calculates complete forecast from pre-indexed feature structures.
+ */
+export function calculateTargetDateRankingFromIndex(
+  targetDate: string,
+  featureIndex: FeatureIndex,
+  priorDaysCount?: number,
   weights: RankingWeights = DEFAULT_RANKING_WEIGHTS
 ): TargetDateForecast | null {
-  if (!targetDate || !dailyRecords || dailyRecords.length === 0) return null;
+  if (!targetDate || !featureIndex || featureIndex.records.length === 0) return null;
 
   const parts = targetDate.split(/[-/.]/);
   if (parts.length < 3) return null;
@@ -97,7 +191,9 @@ export function calculateTargetDateRanking(
   if (isNaN(year) || isNaN(month) || isNaN(day)) return null;
 
   const dow = calculateDayOfWeek(targetDate);
+  if (!dow) return null;
   const isHoliday = isJapaneseHoliday(targetDate);
+  const specialDayRules = featureIndex.specialDayRules;
   const isSpecial = specialDayRules
     ? isDateSpecialDay(targetDate, specialDayRules)
     : (day % 10 === 7);
@@ -117,29 +213,27 @@ export function calculateTargetDateRanking(
     }
   }
 
+  const recordsToUse =
+    priorDaysCount !== undefined
+      ? featureIndex.records.slice(0, priorDaysCount)
+      : featureIndex.records;
+
+  if (recordsToUse.length === 0) return null;
+
   // Segment historical records
-  // 1. Same special day status (e.g. all special days if target is special)
-  const specialRecords = dailyRecords.filter((r) => {
-    return specialDayRules ? isDateSpecialDay(r.date, specialDayRules) : r.isOldEventDay;
-  });
-
-  // 2. Same day of week (or holidays)
+  const specialRecords = recordsToUse.filter((r) => r.isOldEventDay);
   const sameDowRecords = isHoliday
-    ? dailyRecords.filter((r) => isJapaneseHoliday(r.date))
-    : dailyRecords.filter((r) => r.dayOfWeek === dow);
-
-  // 3. Same tail days (e.g. 7, 17, 27)
-  const sameTailRecords = dailyRecords.filter((r) => r.day % 10 === dayTail);
-
-  // 4. Exact combo: Special Day + Same Day of Week
+    ? recordsToUse.filter((r) => r.isHoliday)
+    : recordsToUse.filter((r) => r.dayOfWeek === dow);
+  const sameTailRecords = recordsToUse.filter((r) => r.dayTail === dayTail);
   const exactComboRecords = specialRecords.filter((r) =>
-    isHoliday ? isJapaneseHoliday(r.date) : r.dayOfWeek === dow
+    isHoliday ? r.isHoliday : r.dayOfWeek === dow
   );
 
   // 5. Relevant primary cohort for target day evaluation
   const primaryCohort = isSpecial
-    ? (exactComboRecords.length >= 2 ? exactComboRecords : specialRecords.length > 0 ? specialRecords : dailyRecords)
-    : (sameDowRecords.length > 0 ? sameDowRecords : dailyRecords);
+    ? (exactComboRecords.length >= 2 ? exactComboRecords : specialRecords.length > 0 ? specialRecords : recordsToUse)
+    : (sameDowRecords.length > 0 ? sameDowRecords : recordsToUse);
 
   // Calculate Overall Hall Expected Output
   const hallAvgDiff = primaryCohort.length > 0
@@ -174,8 +268,13 @@ export function calculateTargetDateRanking(
     }
   }
 
+  // Fast Set lookup for primary cohort (O(1) instead of linear scan)
+  const primaryDateSet = new Set<string>();
+  for (let i = 0; i < primaryCohort.length; i++) {
+    primaryDateSet.add(primaryCohort[i].date);
+  }
+
   // --- MODEL RANKING CALCULATION ---
-  // Gather all unique models and their statistics
   interface ModelCollector {
     modelName: string;
     totalMachinesMax: number;
@@ -198,15 +297,14 @@ export function calculateTargetDateRanking(
 
   const modelMap = new Map<string, ModelCollector>();
 
-  // Process all daily records
-  dailyRecords.forEach((rec) => {
+  recordsToUse.forEach((rec) => {
     if (!rec.models || rec.models.length === 0) return;
 
-    const isRecInPrimary = primaryCohort.some((p) => p.date === rec.date);
-    const isRecSpecial = specialDayRules ? isDateSpecialDay(rec.date, specialDayRules) : rec.isOldEventDay;
+    const isRecInPrimary = primaryDateSet.has(rec.date);
+    const isRecSpecial = rec.isOldEventDay;
 
     rec.models.forEach((m) => {
-      const name = m.modelName.trim();
+      const name = m.modelName;
       if (!name) return;
 
       if (!modelMap.has(name)) {
@@ -235,8 +333,7 @@ export function calculateTargetDateRanking(
         entry.allWins.push(m.winRate);
       }
 
-      // Check for all-high day: avg diff >= 1000 and win rate >= 60%
-      if (m.avgDiffCoins >= 800 && (m.winRate === null || m.winRate >= 60)) {
+      if (m.isAllHigh) {
         entry.allHighCount += 1;
       }
 
@@ -294,9 +391,6 @@ export function calculateTargetDateRanking(
     const useScaleFactor = weights?.scaleFactorEnabled ?? true;
 
     // Blended Expected Diff Coins:
-    // If matchingDays >= 3, rely matchingBlendWeight on matching days, (1 - matchingBlendWeight) on overall.
-    // If matchingDays 1..2, rely 50% on matching, 50% on overall.
-    // If matchingDays 0, rely on overall with slight dampening.
     let expectedDiffCoins = allAvgDiff;
     if (matchingDays >= 3) {
       expectedDiffCoins = Math.round(matchingAvgDiff * blendWeight + allAvgDiff * (1 - blendWeight));
@@ -314,14 +408,11 @@ export function calculateTargetDateRanking(
     }
 
     // Estimate Payout Rate:
-    // inCoins = avgGames * 3
-    // outCoins = inCoins + expectedDiffCoins
     const inCoins = Math.max(1500, avgGames * 3);
     const outCoins = inCoins + expectedDiffCoins;
     const predictedPayoutRate = Math.round((outCoins / inCoins) * 10000) / 100;
 
     // Reliability & Machine Scale Multiplier
-    // Prevents a 1-machine 1-day fluke from dominating
     const scaleFactor = Math.min(1.2, 0.85 + Math.log10(Math.max(1, machines)) * 0.25);
     const sampleFactor = Math.min(1.15, 0.75 + Math.min(matchingDays, 8) * 0.05);
 
@@ -419,7 +510,6 @@ export function calculateTargetDateRanking(
   }
 
   const tailMap = new Map<string, TailCollector>();
-  // Initialize tails 0..9 and zoro
   for (let t = 0; t <= 9; t++) {
     tailMap.set(`末尾${t}`, {
       tailName: `末尾 ${t}`,
@@ -435,9 +525,9 @@ export function calculateTargetDateRanking(
     wins: [],
   });
 
-  dailyRecords.forEach((rec) => {
+  recordsToUse.forEach((rec) => {
     if (!rec.tails || rec.tails.length === 0) return;
-    const isRecInPrimary = primaryCohort.some((p) => p.date === rec.date);
+    const isRecInPrimary = primaryDateSet.has(rec.date);
     if (!isRecInPrimary && primaryCohort.length >= 3) return; // focus on matching days
 
     rec.tails.forEach((tailRec) => {
@@ -494,7 +584,6 @@ export function calculateTargetDateRanking(
 
   // Sort tails by expectedDiffCoins descending
   tailRankings.sort((a, b) => {
-    // If date-tail matches, give slight priority if close
     const scoreA = a.expectedDiffCoins + (a.isDateTailMatch ? 50 : 0);
     const scoreB = b.expectedDiffCoins + (b.isDateTailMatch ? 50 : 0);
     return scoreB - scoreA;
@@ -540,4 +629,20 @@ export function calculateTargetDateRanking(
       summary,
     },
   };
+}
+
+/**
+ * Calculates a complete prediction and ranking for a given target date based on store historical data.
+ * Public wrapper preserving signature and exact output.
+ */
+export function calculateTargetDateRanking(
+  targetDate: string,
+  dailyRecords: DailyRecord[],
+  specialDayRules?: SpecialDayRules,
+  oldEventDays: string = '',
+  weights: RankingWeights = DEFAULT_RANKING_WEIGHTS
+): TargetDateForecast | null {
+  if (!targetDate || !dailyRecords || dailyRecords.length === 0) return null;
+  const featureIndex = buildFeatureIndex(dailyRecords, specialDayRules, oldEventDays);
+  return calculateTargetDateRankingFromIndex(targetDate, featureIndex, undefined, weights);
 }

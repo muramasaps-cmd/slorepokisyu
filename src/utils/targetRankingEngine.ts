@@ -171,6 +171,88 @@ export function buildFeatureIndex(
   };
 }
 
+export interface CohortExtractionResult<T> {
+  targetDate: string;
+  dow: string;
+  isHoliday: boolean;
+  isSpecial: boolean;
+  dayTail: number;
+  specialRecords: T[];
+  sameDowRecords: T[];
+  sameTailRecords: T[];
+  exactComboRecords: T[];
+  primaryCohort: T[];
+}
+
+/**
+ * Shared cohort segmentation for target date evaluation.
+ * Classifies past records into special event, same day-of-week, same tail, and primary cohorts.
+ */
+export function extractTargetCohorts<T extends {
+  date: string;
+  day?: number;
+  dayOfWeek?: string;
+  isHoliday?: boolean;
+  isOldEventDay?: boolean;
+  dayTail?: number;
+}>(
+  targetDate: string,
+  records: T[],
+  specialDayRules?: SpecialDayRules
+): CohortExtractionResult<T> | null {
+  if (!targetDate || !records || records.length === 0) return null;
+  const parts = targetDate.split(/[-/.]/);
+  if (parts.length < 3) return null;
+  const year = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10);
+  const day = parseInt(parts[2], 10);
+  if (isNaN(year) || isNaN(month) || isNaN(day)) return null;
+
+  const dow = calculateDayOfWeek(targetDate);
+  if (!dow) return null;
+  const isHoliday = isJapaneseHoliday(targetDate);
+  const isSpecial = specialDayRules
+    ? isDateSpecialDay(targetDate, specialDayRules)
+    : (day % 10 === 7);
+  const dayTail = day % 10;
+
+  const specialRecords = records.filter((r) =>
+    r.isOldEventDay !== undefined
+      ? r.isOldEventDay
+      : (specialDayRules ? isDateSpecialDay(r.date, specialDayRules) : (parseInt(r.date.split(/[-/.]/)[2] || '0', 10) % 10 === 7))
+  );
+  const sameDowRecords = isHoliday
+    ? records.filter((r) => (r.isHoliday !== undefined ? r.isHoliday : isJapaneseHoliday(r.date)))
+    : records.filter((r) => (r.dayOfWeek !== undefined ? r.dayOfWeek : calculateDayOfWeek(r.date)) === dow);
+  const sameTailRecords = records.filter((r) => {
+    if (r.dayTail !== undefined) return r.dayTail === dayTail;
+    const d = r.day !== undefined ? r.day : parseInt(r.date.split(/[-/.]/)[2] || '0', 10);
+    return (d % 10) === dayTail;
+  });
+  const exactComboRecords = specialRecords.filter((r) =>
+    isHoliday
+      ? (r.isHoliday !== undefined ? r.isHoliday : isJapaneseHoliday(r.date))
+      : ((r.dayOfWeek !== undefined ? r.dayOfWeek : calculateDayOfWeek(r.date)) === dow)
+  );
+
+  const primaryCohort = isSpecial
+    ? (exactComboRecords.length >= 2 ? exactComboRecords : specialRecords.length > 0 ? specialRecords : records)
+    : (sameDowRecords.length > 0 ? sameDowRecords : records);
+
+  return {
+    targetDate,
+    dow,
+    isHoliday,
+    isSpecial,
+    dayTail,
+    specialRecords,
+    sameDowRecords,
+    sameTailRecords,
+    exactComboRecords,
+    primaryCohort,
+  };
+}
+
 /**
  * Calculates complete forecast from pre-indexed feature structures.
  */
@@ -182,37 +264,6 @@ export function calculateTargetDateRankingFromIndex(
 ): TargetDateForecast | null {
   if (!targetDate || !featureIndex || featureIndex.records.length === 0) return null;
 
-  const parts = targetDate.split(/[-/.]/);
-  if (parts.length < 3) return null;
-
-  const year = parseInt(parts[0], 10);
-  const month = parseInt(parts[1], 10);
-  const day = parseInt(parts[2], 10);
-  if (isNaN(year) || isNaN(month) || isNaN(day)) return null;
-
-  const dow = calculateDayOfWeek(targetDate);
-  if (!dow) return null;
-  const isHoliday = isJapaneseHoliday(targetDate);
-  const specialDayRules = featureIndex.specialDayRules;
-  const isSpecial = specialDayRules
-    ? isDateSpecialDay(targetDate, specialDayRules)
-    : (day % 10 === 7);
-  const dayTail = day % 10;
-
-  // Determine special day label
-  let specialDayLabel = '通常営業日';
-  if (isSpecial) {
-    if (specialDayRules?.customDescription) {
-      specialDayLabel = specialDayRules.customDescription;
-    } else if (day % 10 === 7) {
-      specialDayLabel = '7のつく日 (旧イベ特日)';
-    } else if (day === 11 || day === 22 || month === day) {
-      specialDayLabel = 'ゾロ目の日 (特日)';
-    } else {
-      specialDayLabel = '店舗特定日 (特日)';
-    }
-  }
-
   const recordsToUse =
     priorDaysCount !== undefined
       ? featureIndex.records.slice(0, priorDaysCount)
@@ -220,20 +271,29 @@ export function calculateTargetDateRankingFromIndex(
 
   if (recordsToUse.length === 0) return null;
 
-  // Segment historical records
-  const specialRecords = recordsToUse.filter((r) => r.isOldEventDay);
-  const sameDowRecords = isHoliday
-    ? recordsToUse.filter((r) => r.isHoliday)
-    : recordsToUse.filter((r) => r.dayOfWeek === dow);
-  const sameTailRecords = recordsToUse.filter((r) => r.dayTail === dayTail);
-  const exactComboRecords = specialRecords.filter((r) =>
-    isHoliday ? r.isHoliday : r.dayOfWeek === dow
-  );
+  const cohorts = extractTargetCohorts(targetDate, recordsToUse, featureIndex.specialDayRules);
+  if (!cohorts) return null;
 
-  // 5. Relevant primary cohort for target day evaluation
-  const primaryCohort = isSpecial
-    ? (exactComboRecords.length >= 2 ? exactComboRecords : specialRecords.length > 0 ? specialRecords : recordsToUse)
-    : (sameDowRecords.length > 0 ? sameDowRecords : recordsToUse);
+  const { dow, isHoliday, isSpecial, dayTail, primaryCohort } = cohorts;
+
+  // Determine special day label
+  let specialDayLabel = '通常営業日';
+  if (isSpecial) {
+    if (featureIndex.specialDayRules?.customDescription) {
+      specialDayLabel = featureIndex.specialDayRules.customDescription;
+    } else if (dayTail === 7) {
+      specialDayLabel = '7のつく日 (旧イベ特日)';
+    } else {
+      const parts = targetDate.split(/[-/.]/);
+      const m = parseInt(parts[1], 10);
+      const d = parseInt(parts[2], 10);
+      if (d === 11 || d === 22 || m === d) {
+        specialDayLabel = 'ゾロ目の日 (特日)';
+      } else {
+        specialDayLabel = '店舗特定日 (特日)';
+      }
+    }
+  }
 
   // Calculate Overall Hall Expected Output
   const hallAvgDiff = primaryCohort.length > 0

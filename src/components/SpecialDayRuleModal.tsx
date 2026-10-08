@@ -10,18 +10,21 @@ interface SpecialDayRuleModalProps {
   isOpen: boolean;
   storeName: string;
   currentRuleText: string;
+  currentIslandConfig?: string;
   onClose: () => void;
-  onSave: (newRuleText: string) => void;
+  onSave: (newRuleText: string, newIslandConfig?: string) => void;
 }
 
 export const SpecialDayRuleModal: React.FC<SpecialDayRuleModalProps> = ({
   isOpen,
   storeName,
   currentRuleText,
+  currentIslandConfig = '',
   onClose,
   onSave,
 }) => {
   const [inputText, setInputText] = useState(currentRuleText);
+  const [islandText, setIslandText] = useState(currentIslandConfig);
 
   if (!isOpen) return null;
 
@@ -34,8 +37,8 @@ export const SpecialDayRuleModal: React.FC<SpecialDayRuleModalProps> = ({
   };
 
   const handleApply = () => {
-    if (!inputText.trim()) return;
-    onSave(inputText.trim());
+    if (!inputText.trim() && !islandText.trim()) return;
+    onSave(inputText.trim(), islandText.trim());
     onClose();
   };
 
@@ -145,6 +148,29 @@ export const SpecialDayRuleModal: React.FC<SpecialDayRuleModalProps> = ({
                 );
               })}
             </div>
+          </div>
+
+          {/* Island / Machine Zone Configuration (任意入力欄) */}
+          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                <Target className="w-4 h-4 text-indigo-600" />
+                台番の区切り・島設定 (任意入力)
+              </label>
+              <span className="text-[10px] text-slate-400 font-medium">
+                未設定なら全台まとめて表示
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-500">
+              ホール内の島やエリアごとに台番範囲を登録すると、狙い台ランキングで島ごとの絞り込みが可能になります。
+            </p>
+            <input
+              type="text"
+              value={islandText}
+              onChange={(e) => setIslandText(e.target.value)}
+              placeholder="例: A島: 101-120, B島: 121-140, ジャグラー島: 151-180"
+              className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-indigo-500 text-slate-900 font-medium"
+            />
           </div>
 
           {/* Explanation note */}

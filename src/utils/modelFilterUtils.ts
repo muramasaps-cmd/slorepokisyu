@@ -157,7 +157,30 @@ export function filterDailyRecordsByModels(
 
   for (const r of records) {
     if (!r.models || r.models.length === 0) {
-      // Record without model breakdown cannot be filtered by model
+      if (r.machines && r.machines.length > 0) {
+        const matchedMachines = r.machines.filter((m) =>
+          isModelMatchingFilter(m.modelName, preset, selectedModelNames)
+        );
+        if (matchedMachines.length === 0) continue;
+        const totalMachines = matchedMachines.length;
+        const totalDiffCoins = matchedMachines.reduce((acc, m) => acc + (m.diff || 0), 0);
+        const winMachines = matchedMachines.filter((m) => (m.diff || 0) > 0).length;
+        const winRate = Math.round((winMachines / totalMachines) * 1000) / 10;
+        const totalGames = matchedMachines.reduce((acc, m) => acc + (m.games || 0), 0);
+        const avgGames = Math.round(totalGames / totalMachines);
+        const avgDiffCoins = Math.round(totalDiffCoins / totalMachines);
+
+        result.push({
+          ...r,
+          totalMachines,
+          totalDiffCoins,
+          avgDiffCoins,
+          avgGames,
+          winMachines,
+          winRate,
+          machines: matchedMachines,
+        });
+      }
       continue;
     }
 
@@ -191,6 +214,10 @@ export function filterDailyRecordsByModels(
     const avgGames = totalMachines > 0 ? Math.round(totalGames / totalMachines) : 0;
     const avgDiffCoins = totalMachines > 0 ? Math.round(totalDiffCoins / totalMachines) : 0;
 
+    const matchedMachines = r.machines
+      ? r.machines.filter((m) => isModelMatchingFilter(m.modelName, preset, selectedModelNames))
+      : undefined;
+
     result.push({
       ...r,
       totalMachines,
@@ -200,6 +227,7 @@ export function filterDailyRecordsByModels(
       winMachines,
       winRate,
       models: matchedModels,
+      machines: matchedMachines,
     });
   }
 

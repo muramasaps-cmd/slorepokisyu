@@ -26,7 +26,11 @@ import {
   RefreshCw,
   Layers,
   ArrowRight,
+  Edit3,
+  Save,
 } from 'lucide-react';
+import { parseSpecialDayRulesFromText } from '../utils/specialDayRules';
+import { parseIslandConfig } from '../utils/islandUtils';
 
 interface StoreManagerModalProps {
   isOpen: boolean;
@@ -36,6 +40,7 @@ interface StoreManagerModalProps {
   onSelectStore: (id: string) => void;
   onSaveStore: (store: StoreProfile) => void;
   onSaveStores?: (stores: StoreProfile[], preferActiveId?: string) => void;
+  onUpdateStore?: (store: StoreProfile) => void;
   onDeleteStore: (id: string) => void;
   onResetAllStores: () => void;
 }
@@ -48,6 +53,7 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
   onSelectStore,
   onSaveStore,
   onSaveStores,
+  onUpdateStore,
   onDeleteStore,
   onResetAllStores,
 }) => {
@@ -67,6 +73,10 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
   const [parseErrors, setParseErrors] = useState<string[]>([]);
   const [parseSuccessMsg, setParseSuccessMsg] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Store editing states (in list tab)
+  const [editingStoreId, setEditingStoreId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<Partial<StoreProfile> | null>(null);
 
   // In-app confirmation dialog states
   const [confirmResetOpen, setConfirmResetOpen] = useState<boolean>(false);
@@ -731,12 +741,13 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
                     return (
                       <div
                         key={store.id}
-                        className={`p-4 rounded-xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                        className={`p-4 rounded-xl border transition-all flex flex-col justify-between gap-3 ${
                           isActive
                             ? 'bg-amber-50/60 border-amber-400 shadow-2xs ring-1 ring-amber-400'
                             : 'bg-white border-slate-200 hover:border-slate-300 hover:shadow-2xs'
                         }`}
                       >
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                         <div className="space-y-1">
                           <div className="flex items-center gap-2">
                             <h4 className="text-sm font-black text-slate-900">{store.name}</h4>
@@ -766,6 +777,24 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
                             <span className="text-slate-600 font-medium">
                               {store.dailyRecords?.length || 0}日分
                             </span>
+                            {store.customRankingWeights && (
+                              <>
+                                <span>•</span>
+                                <span className="inline-flex items-center gap-1 text-emerald-700 font-bold bg-emerald-50 border border-emerald-300 px-1.5 py-0.2 rounded text-[10px]">
+                                  <Check className="w-2.5 h-2.5 text-emerald-600" />
+                                  最適化重み設定済
+                                </span>
+                              </>
+                            )}
+                            {store.islandConfig && (
+                              <>
+                                <span>•</span>
+                                <span className="inline-flex items-center gap-1 text-indigo-700 font-bold bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 rounded text-[10px]">
+                                  <Layers className="w-2.5 h-2.5 text-indigo-600" />
+                                  島設定済
+                                </span>
+                              </>
+                            )}
                           </div>
                         </div>
 
@@ -785,6 +814,34 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
                           <button
                             type="button"
                             onClick={() => {
+                              if (editingStoreId === store.id) {
+                                setEditingStoreId(null);
+                                setEditForm(null);
+                              } else {
+                                setEditingStoreId(store.id);
+                                setEditForm({
+                                  name: store.name,
+                                  address: store.address,
+                                  oldEventDays: store.oldEventDays,
+                                  rateLend: store.rateLend,
+                                  rateExchange: store.rateExchange,
+                                  totalMachinesApprox: store.totalMachinesApprox,
+                                  islandConfig: store.islandConfig || '',
+                                });
+                              }
+                            }}
+                            className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                              editingStoreId === store.id
+                                ? 'bg-indigo-100 text-indigo-700'
+                                : 'text-slate-400 hover:text-indigo-600 hover:bg-indigo-50'
+                            }`}
+                            title="店舗情報・特日・島設定を編集"
+                          >
+                            <Edit3 className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
                               setStoreToDelete({ id: store.id, name: store.name });
                             }}
                             className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
@@ -794,8 +851,155 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
                           </button>
                         </div>
                       </div>
-                    );
-                  })}
+
+                      {/* Inline Store Edit Panel */}
+                      {editingStoreId === store.id && editForm && (
+                        <div className="mt-3 pt-3 border-t border-slate-200 space-y-3 bg-slate-50/70 -mx-4 -mb-4 p-4 rounded-b-xl animate-in fade-in duration-100">
+                          <div className="text-xs font-bold text-slate-800 flex items-center justify-between">
+                            <span className="flex items-center gap-1.5">
+                              <Edit3 className="w-3.5 h-3.5 text-indigo-600" />
+                              店舗情報の編集（{store.name}）
+                            </span>
+                            <span className="text-[11px] text-slate-400 font-normal">
+                              ※ 変更は即座に反映され保存されます
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                            <div>
+                              <label className="text-[11px] font-bold text-slate-600 block mb-1">店舗名</label>
+                              <input
+                                type="text"
+                                value={editForm.name || ''}
+                                onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                                className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 font-bold focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="text-[11px] font-bold text-slate-600 block mb-1">所在地・地域</label>
+                              <input
+                                type="text"
+                                value={editForm.address || ''}
+                                onChange={(e) => setEditForm({ ...editForm, address: e.target.value })}
+                                className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="text-[11px] font-bold text-slate-600 block mb-1">
+                                旧イベント日・特日ルール
+                              </label>
+                              <input
+                                type="text"
+                                value={editForm.oldEventDays || ''}
+                                onChange={(e) => setEditForm({ ...editForm, oldEventDays: e.target.value })}
+                                placeholder="例: 7のつく日, 毎週土曜"
+                                className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+
+                            <div className="grid grid-cols-3 gap-2">
+                              <div>
+                                <label className="text-[11px] font-bold text-slate-600 block mb-1">貸出(枚)</label>
+                                <input
+                                  type="number"
+                                  value={editForm.rateLend ?? 46}
+                                  onChange={(e) => setEditForm({ ...editForm, rateLend: Number(e.target.value) })}
+                                  className="w-full bg-white border border-slate-300 rounded-lg px-2 py-1.5 text-xs text-slate-900 font-mono focus:ring-2 focus:ring-indigo-500"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[11px] font-bold text-slate-600 block mb-1">交換(枚)</label>
+                                <input
+                                  type="number"
+                                  value={editForm.rateExchange ?? 52}
+                                  onChange={(e) => setEditForm({ ...editForm, rateExchange: Number(e.target.value) })}
+                                  className="w-full bg-white border border-slate-300 rounded-lg px-2 py-1.5 text-xs text-slate-900 font-mono focus:ring-2 focus:ring-indigo-500"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[11px] font-bold text-slate-600 block mb-1">総台数</label>
+                                <input
+                                  type="number"
+                                  value={editForm.totalMachinesApprox ?? 0}
+                                  onChange={(e) => setEditForm({ ...editForm, totalMachinesApprox: Number(e.target.value) })}
+                                  className="w-full bg-white border border-slate-300 rounded-lg px-2 py-1.5 text-xs text-slate-900 font-mono focus:ring-2 focus:ring-indigo-500"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="sm:col-span-2">
+                              <label className="text-[11px] font-bold text-slate-600 block mb-1">
+                                島・台番区切り設定（任意）
+                              </label>
+                              <input
+                                type="text"
+                                value={editForm.islandConfig || ''}
+                                onChange={(e) => setEditForm({ ...editForm, islandConfig: e.target.value })}
+                                placeholder="例: A島: 101-120, B島: 121-140 / 201-220: ジャグラー島"
+                                className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 focus:ring-2 focus:ring-indigo-500 font-mono"
+                              />
+                              <span className="text-[10px] text-slate-400 block mt-0.5">
+                                カンマまたはスラッシュ区切りで島名と台番範囲を指定。台番ランキングの絞り込み・角台判定に活用されます。
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-end gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingStoreId(null);
+                                setEditForm(null);
+                              }}
+                              className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                            >
+                              キャンセル
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!editForm) return;
+                                const oldEventDays = (editForm.oldEventDays || '').trim();
+                                const specialDayRules = parseSpecialDayRulesFromText(oldEventDays);
+                                const islandConfig = (editForm.islandConfig || '').trim();
+                                const islandDefinitions = parseIslandConfig(islandConfig);
+
+                                const updated: StoreProfile = {
+                                  ...store,
+                                  name: (editForm.name || store.name).trim(),
+                                  address: (editForm.address || store.address).trim(),
+                                  oldEventDays,
+                                  specialDayRules,
+                                  rateLend: Number(editForm.rateLend) || store.rateLend || 46,
+                                  rateExchange: Number(editForm.rateExchange) || store.rateExchange || 52,
+                                  exchangeRate: `${Number(editForm.rateLend) || 46}枚貸/${Number(editForm.rateExchange) || 52}枚交換`,
+                                  totalMachinesApprox: Number(editForm.totalMachinesApprox) || store.totalMachinesApprox || 0,
+                                  islandConfig,
+                                  islandDefinitions,
+                                  updatedAt: new Date().toISOString(),
+                                };
+
+                                if (onUpdateStore) {
+                                  onUpdateStore(updated);
+                                } else {
+                                  onSaveStore(updated);
+                                }
+                                setEditingStoreId(null);
+                                setEditForm(null);
+                              }}
+                              className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer shadow-2xs"
+                            >
+                              <Save className="w-3.5 h-3.5" />
+                              変更を保存
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
                 </div>
               )}
             </div>

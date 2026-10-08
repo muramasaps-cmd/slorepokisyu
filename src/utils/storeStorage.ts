@@ -238,6 +238,8 @@ export function getSavedStores(): StoreProfile[] {
                 rateLend: existing.rateLend || s.rateLend || 46,
                 rateExchange: existing.rateExchange || s.rateExchange || 52,
                 totalMachinesApprox: Math.max(existing.totalMachinesApprox || 0, s.totalMachinesApprox || 0),
+                islandConfig: existing.islandConfig || s.islandConfig || '',
+                islandDefinitions: existing.islandDefinitions || s.islandDefinitions,
                 dailyRecords: mergedDaily,
                 dataRange:
                   mergedDaily.length > 0 && mergedDaily[0]?.date && mergedDaily[mergedDaily.length - 1]?.date
@@ -381,13 +383,19 @@ export function upsertStore(store: StoreProfile): StoreProfile[] {
   if (index >= 0) {
     const existing = stores[index];
     const mergedDaily = mergeDailyRecords(existing.dailyRecords || [], store.dailyRecords || []);
+    const resolvedWeights =
+      'customRankingWeights' in store
+        ? store.customRankingWeights
+        : existing.customRankingWeights;
+
     stores[index] = {
       ...existing,
       ...store,
       id: existing.id, // keep canonical id
-      name: existing.name || store.name,
+      name: store.name || existing.name,
       rateLend: rateLend || store.rateLend || existing.rateLend || 46,
       rateExchange: rateExchange || store.rateExchange || existing.rateExchange || 52,
+      customRankingWeights: resolvedWeights,
       dailyRecords: mergedDaily,
       updatedAt: new Date().toISOString(),
     };
@@ -415,13 +423,19 @@ export function upsertStores(newStores: StoreProfile[]): StoreProfile[] {
     if (index >= 0) {
       const existing = stores[index];
       const mergedDaily = mergeDailyRecords(existing.dailyRecords || [], store.dailyRecords || []);
+      const resolvedWeights =
+        'customRankingWeights' in store
+          ? store.customRankingWeights
+          : existing.customRankingWeights;
+
       stores[index] = {
         ...existing,
         ...store,
         id: existing.id, // keep canonical id
-        name: existing.name || store.name,
+        name: store.name || existing.name,
         rateLend: rateLend || store.rateLend || existing.rateLend || 46,
         rateExchange: rateExchange || store.rateExchange || existing.rateExchange || 52,
+        customRankingWeights: resolvedWeights,
         dailyRecords: mergedDaily,
         updatedAt: new Date().toISOString(),
       };

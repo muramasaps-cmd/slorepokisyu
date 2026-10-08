@@ -7,6 +7,7 @@ import {
 } from '../utils/targetRankingEngine';
 import { formatYen, formatCoins, formatNumber } from '../utils/formatters';
 import { UnitMode } from './Header';
+import { TargetMachineRanking } from './TargetMachineRanking';
 import {
   Target,
   Trophy,
@@ -40,6 +41,9 @@ interface TargetDateRankingProps {
   specialDayRules?: SpecialDayRules;
   oldEventDays?: string;
   customWeights?: RankingWeights;
+  islandConfig?: string;
+  onNavigateToValidation?: () => void;
+  onOpenStoreManager?: () => void;
 }
 
 type ModelFilterType = 'all' | 'main' | 'smart_slot' | 'juggler_a' | 'small';
@@ -56,6 +60,9 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
   specialDayRules,
   oldEventDays = '',
   customWeights,
+  islandConfig,
+  onNavigateToValidation,
+  onOpenStoreManager,
 }) => {
   const [modelFilter, setModelFilter] = useState<ModelFilterType>('all');
   const [modelSort, setModelSort] = useState<ModelSortType>('score');
@@ -185,6 +192,29 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
               <span className="inline-flex items-center gap-1 bg-slate-800/80 text-cyan-300 text-xs px-2 py-1 rounded-md border border-slate-700">
                 日付末尾: <strong>末尾 {forecast.dayTail}</strong>
               </span>
+              {customWeights ? (
+                <button
+                  type="button"
+                  onClick={onNavigateToValidation}
+                  className="inline-flex items-center gap-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-400/40 text-xs px-2.5 py-1 rounded-md font-bold transition-colors cursor-pointer"
+                  title="クリックして精度検証タブでパラメータを確認"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  店舗最適化モデル適用中
+                  {onNavigateToValidation && <ArrowRight className="w-3 h-3 text-emerald-300" />}
+                </button>
+              ) : onNavigateToValidation ? (
+                <button
+                  type="button"
+                  onClick={onNavigateToValidation}
+                  className="inline-flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 hover:border-slate-600 text-xs px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer"
+                  title="クリックして精度検証タブでバックテスト・自動調整を実行"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                  標準モデル (精度検証・自動調整へ)
+                  <ArrowRight className="w-3 h-3 text-slate-400" />
+                </button>
+              ) : null}
             </div>
 
             <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2.5">
@@ -634,6 +664,16 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
           </tbody>
         </table>
       </div>
+
+      {/* Target Machine Ranking Component (台番号別 狙い台ランキング) */}
+      <TargetMachineRanking
+        targetDate={targetDate}
+        dailyRecords={dailyRecords}
+        specialDayRules={specialDayRules}
+        customWeights={customWeights}
+        islandConfig={islandConfig}
+        onOpenStoreManager={onOpenStoreManager}
+      />
 
       {/* Footer Disclaimer */}
       <div className="p-3.5 bg-slate-50 border-t border-slate-200 text-[11px] text-slate-500 flex flex-col sm:flex-row sm:items-center justify-between gap-2">

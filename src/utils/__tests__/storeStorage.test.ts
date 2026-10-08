@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { normalizeStoreNameKey, areStoresSame, mergeDailyRecords } from '../storeStorage';
-import { DailyRecord, DailyMachineRecord, DailyModelRecord } from '../../data/types';
+import { DailyRecord, DailyMachineRecord, DailyModelRecord, StoreProfile } from '../../data/types';
 
 function createDummyRecord(date: string, overrides: Partial<DailyRecord> = {}): DailyRecord {
   return {
@@ -163,6 +163,129 @@ describe('storeStorage utils', () => {
       // Because withMachines had machines (weight 20) vs withModels (weight 10),
       // the machine detail is preserved
       expect(merged[0].machines?.length).toBe(1);
+    });
+  });
+
+  describe('customRankingWeights preservation in upsertStore', () => {
+    it('preserves existing customRankingWeights when new store data does not specify customRankingWeights', async () => {
+      const storageMap = new Map<string, string>();
+      const mockStorage = {
+        getItem: (k: string) => storageMap.get(k) ?? null,
+        setItem: (k: string, v: string) => storageMap.set(k, v),
+        removeItem: (k: string) => storageMap.delete(k),
+        clear: () => storageMap.clear(),
+        length: 0,
+        key: () => null,
+      };
+      Object.defineProperty(globalThis, 'localStorage', {
+        value: mockStorage,
+        configurable: true,
+        writable: true,
+      });
+
+      const { upsertStore, getSavedStores, resetAllStores } = await import('../storeStorage');
+      resetAllStores();
+
+      const initialStore = {
+        id: 'test-store-weights',
+        name: 'テスト店舗',
+        address: '東京都',
+        exchangeRate: '46枚貸/52枚交換',
+        oldEventDays: '7のつく日',
+        rateLend: 46,
+        rateExchange: 52,
+        dataRange: '2024-01-01',
+        totalMachinesApprox: 200,
+        dailyRecords: [createDummyRecord('2024-01-01')],
+        customRankingWeights: {
+          diffCoinDivisor: 25,
+          winRateMultiplier: 0.8,
+          allHighMultiplier: 6.0,
+          matchingBlendWeight: 0.85,
+          scaleFactorEnabled: true,
+        },
+      };
+
+      upsertStore(initialStore);
+      let stores = getSavedStores();
+      expect(stores[0].customRankingWeights).toEqual(initialStore.customRankingWeights);
+
+      // Now update store with new daily record, without providing customRankingWeights property
+      const storeUpdate = {
+        id: 'test-store-weights',
+        name: 'テスト店舗',
+        address: '東京都',
+        exchangeRate: '46枚貸/52枚交換',
+        oldEventDays: '7のつく日',
+        rateLend: 46,
+        rateExchange: 52,
+        dataRange: '2024-01-01 - 2024-01-02',
+        totalMachinesApprox: 200,
+        dailyRecords: [createDummyRecord('2024-01-02')],
+      };
+
+      upsertStore(storeUpdate);
+      stores = getSavedStores();
+      expect(stores.length).toBe(1);
+      // customRankingWeights must NOT be lost!
+      expect(stores[0].customRankingWeights).toEqual(initialStore.customRankingWeights);
+      expect(stores[0].dailyRecords.length).toBe(2);
+
+      resetAllStores();
+    });
+
+    it('updates store name and islandConfig when store with same id is upserted', async () => {
+      const storageMap = new Map<string, string>();
+      const mockStorage = {
+        getItem: (k: string) => storageMap.get(k) ?? null,
+        setItem: (k: string, v: string) => storageMap.set(k, v),
+        removeItem: (k: string) => storageMap.delete(k),
+        clear: () => storageMap.clear(),
+        length: 0,
+        key: () => null,
+      };
+      Object.defineProperty(globalThis, 'localStorage', {
+        value: mockStorage,
+        configurable: true,
+        writable: true,
+      });
+
+      const { upsertStore, getSavedStores, resetAllStores } = await import('../storeStorage');
+      resetAllStores();
+
+      const initialStore: StoreProfile = {
+        id: 'test-store-rename',
+        name: '変更前店舗名',
+        address: '東京都新宿区',
+        exchangeRate: '46枚貸/52枚交換',
+        oldEventDays: '7のつく日',
+        rateLend: 46,
+        rateExchange: 52,
+        dataRange: '2024-01-01',
+        totalMachinesApprox: 300,
+        islandConfig: 'A島: 101-120',
+        dailyRecords: [createDummyRecord('2024-01-01')],
+      };
+
+      upsertStore(initialStore);
+      let stores = getSavedStores();
+      expect(stores[0].name).toBe('変更前店舗名');
+      expect(stores[0].islandConfig).toBe('A島: 101-120');
+
+      // Update name and islandConfig
+      const updatedStore: StoreProfile = {
+        ...initialStore,
+        name: '変更後店舗名（新装）',
+        islandConfig: 'A島: 101-120, B島: 121-140',
+      };
+
+      upsertStore(updatedStore);
+      stores = getSavedStores();
+      expect(stores.length).toBe(1);
+      expect(stores[0].name).toBe('変更後店舗名（新装）');
+      expect(stores[0].islandConfig).toBe('A島: 101-120, B島: 121-140');
+
+      resetAllStores();
     });
   });
 });

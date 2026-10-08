@@ -107,4 +107,23 @@ describe('runAutoTuning', () => {
       expect(tuning.verdictMessage).toContain('標準');
     });
   });
+
+  describe('onProgress callback', () => {
+    it('notifies progress increments and reaches 100 on completion', () => {
+      const records = generateSyntheticDailyRecords(888, 15, 6, rules);
+      const progressUpdates: number[] = [];
+
+      const result = runAutoTuning(records, rules, '', 3, (pct) => {
+        progressUpdates.push(pct);
+      });
+
+      expect(result).not.toBeNull();
+      expect(progressUpdates.length).toBeGreaterThan(0);
+      expect(progressUpdates[progressUpdates.length - 1]).toBe(100);
+      // Progress numbers should be non-decreasing
+      for (let i = 1; i < progressUpdates.length; i++) {
+        expect(progressUpdates[i]).toBeGreaterThanOrEqual(progressUpdates[i - 1]);
+      }
+    });
+  });
 });

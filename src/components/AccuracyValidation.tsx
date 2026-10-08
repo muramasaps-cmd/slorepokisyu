@@ -1,13 +1,16 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { DailyRecord, SpecialDayRules, RankingWeights } from '../data/types';
 import {
   runWalkForwardBacktest,
   runAutoTuning,
+  runMachineBacktest,
   BacktestDayEvaluation,
   BacktestSummaryMetrics,
   TuningResult,
+  MachineBacktestResult,
 } from '../utils/backtestEngine';
 import { DEFAULT_RANKING_WEIGHTS } from '../utils/targetRankingEngine';
+import type { TuningWorkerRequest, TuningWorkerResponse } from '../workers/tuningWorker';
 import { formatCoins, formatNumber } from '../utils/formatters';
 import {
   ShieldCheck,
@@ -28,6 +31,7 @@ import {
   Layers,
   Check,
   SlidersHorizontal,
+  XCircle,
 } from 'lucide-react';
 
 interface AccuracyValidationProps {
@@ -51,8 +55,37 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
   const [filterMode, setFilterMode] = useState<'all' | 'special' | 'normal'>('all');
   const [tuningResult, setTuningResult] = useState<TuningResult | null>(null);
   const [isTuningRunning, setIsTuningRunning] = useState<boolean>(false);
+  const [tuningProgress, setTuningProgress] = useState<number>(0);
   const [showAllDays, setShowAllDays] = useState<boolean>(false);
   const [showTuningDetails, setShowTuningDetails] = useState<boolean>(true);
+  const [machineTopN, setMachineTopN] = useState<number>(10);
+  const [machineFilterMode, setMachineFilterMode] = useState<'withFilter' | 'withoutFilter'>('withFilter');
+  const [showAllMachineDays, setShowAllMachineDays] = useState<boolean>(false);
+  const workerRef = useRef<Worker | null>(null);
+
+  const hasMachineData = useMemo(
+    () => dailyRecords.some((d) => d.machines && d.machines.length > 0),
+    [dailyRecords]
+  );
+
+  const machineBacktestResult: MachineBacktestResult | null = useMemo(() => {
+    if (!hasMachineData) return null;
+    return runMachineBacktest(dailyRecords, specialDayRules, {
+      topN: machineTopN,
+      minEvidenceDays: 3,
+      blockLength: 7,
+      bootstrapIterations: 2000,
+    });
+  }, [dailyRecords, specialDayRules, machineTopN, hasMachineData]);
+
+  useEffect(() => {
+    return () => {
+      if (workerRef.current) {
+        workerRef.current.terminate();
+        workerRef.current = null;
+      }
+    };
+  }, []);
 
   const activeWeights = currentWeights || DEFAULT_RANKING_WEIGHTS;
   const isCustomApplied = Boolean(
@@ -82,14 +115,95 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
     return evaluations;
   }, [evaluations, filterMode]);
 
-  // Trigger auto-tuning
+  // Trigger auto-tuning via Web Worker
   const handleRunTuning = () => {
+    if (isTuningRunning) return;
     setIsTuningRunning(true);
-    setTimeout(() => {
-      const res = runAutoTuning(dailyRecords, specialDayRules, oldEventDays, topK);
-      setTuningResult(res);
-      setIsTuningRunning(false);
-    }, 100);
+    setTuningProgress(0);
+
+    // Cancel any previous worker
+    if (workerRef.current) {
+      workerRef.current.terminate();
+      workerRef.current = null;
+    }
+
+    try {
+      const worker = new Worker(
+        new URL('../workers/tuningWorker.ts', import.meta.url),
+        { type: 'module' }
+      );
+      workerRef.current = worker;
+
+      worker.onmessage = (event: MessageEvent<TuningWorkerResponse>) => {
+        const data = event.data;
+        if (data.type === 'PROGRESS') {
+          setTuningProgress(data.progress);
+        } else if (data.type === 'RESULT') {
+          setTuningResult(data.result);
+          setIsTuningRunning(false);
+          setTuningProgress(100);
+          worker.terminate();
+          workerRef.current = null;
+        } else if (data.type === 'ERROR') {
+          console.warn('Tuning worker error, falling back to sync execution:', data.error);
+          worker.terminate();
+          workerRef.current = null;
+          setTimeout(() => {
+            const res = runAutoTuning(dailyRecords, specialDayRules, oldEventDays, topK, (pct) => {
+              setTuningProgress(pct);
+            });
+            setTuningResult(res);
+            setIsTuningRunning(false);
+            setTuningProgress(100);
+          }, 50);
+        }
+      };
+
+      worker.onerror = (err) => {
+        console.warn('Tuning worker fatal error, falling back to sync execution:', err);
+        worker.terminate();
+        workerRef.current = null;
+        setTimeout(() => {
+          const res = runAutoTuning(dailyRecords, specialDayRules, oldEventDays, topK, (pct) => {
+            setTuningProgress(pct);
+          });
+          setTuningResult(res);
+          setIsTuningRunning(false);
+          setTuningProgress(100);
+        }, 50);
+      };
+
+      const request: TuningWorkerRequest = {
+        type: 'START_TUNING',
+        dailyRecords,
+        specialDayRules,
+        oldEventDays,
+        k: topK,
+      };
+
+      worker.postMessage(request);
+    } catch (e) {
+      // Fallback to sync run if Worker fails to initialize
+      console.warn('Worker instantiation failed, falling back to sync execution:', e);
+      setTimeout(() => {
+        const res = runAutoTuning(dailyRecords, specialDayRules, oldEventDays, topK, (pct) => {
+          setTuningProgress(pct);
+        });
+        setTuningResult(res);
+        setIsTuningRunning(false);
+        setTuningProgress(100);
+      }, 50);
+    }
+  };
+
+  // Abort running auto-tuning
+  const handleCancelTuning = () => {
+    if (workerRef.current) {
+      workerRef.current.terminate();
+      workerRef.current = null;
+    }
+    setIsTuningRunning(false);
+    setTuningProgress(0);
   };
 
   // Apply candidate weights
@@ -486,21 +600,42 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
           </div>
 
           <div className="flex items-center gap-2 self-start md:self-auto">
-            <button
-              type="button"
-              onClick={handleRunTuning}
-              disabled={isTuningRunning || dailyRecords.length < 8}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs ${
-                isTuningRunning
-                  ? 'bg-amber-400/50 text-slate-950 cursor-wait'
-                  : 'bg-amber-400 hover:bg-amber-300 text-slate-950'
-              }`}
-            >
-              <Sparkles className="w-4 h-4 text-slate-950" />
-              <span>{isTuningRunning ? '探索・検定中...' : '重みを自動探索＆検証'}</span>
-            </button>
+            {isTuningRunning ? (
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 bg-indigo-900/80 px-3 py-1.5 rounded-xl border border-indigo-700/50">
+                  <div className="w-16 bg-indigo-950 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-amber-400 h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${Math.max(5, tuningProgress)}%` }}
+                    />
+                  </div>
+                  <span className="text-xs font-mono font-bold text-amber-300 min-w-[36px]">
+                    {tuningProgress}%
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCancelTuning}
+                  className="px-3 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white transition-all cursor-pointer flex items-center gap-1 shadow-xs"
+                  title="処理を中止"
+                >
+                  <XCircle className="w-4 h-4 text-white" />
+                  <span>中止</span>
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={handleRunTuning}
+                disabled={dailyRecords.length < 8}
+                className="px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs bg-amber-400 hover:bg-amber-300 text-slate-950"
+              >
+                <Sparkles className="w-4 h-4 text-slate-950" />
+                <span>重みを自動探索＆検証</span>
+              </button>
+            )}
 
-            {isCustomApplied && (
+            {isCustomApplied && !isTuningRunning && (
               <button
                 type="button"
                 onClick={handleResetWeights}
@@ -674,6 +809,489 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
                 </div>
               </div>
             </div>
+          )}
+        </div>
+      </div>
+
+      {/* Machine Number Ranking Backtest Section (台番ランキングの検証) */}
+      <div className="bg-white rounded-2xl border border-amber-200 overflow-hidden shadow-2xs space-y-4">
+        <div className="px-5 py-4 bg-gradient-to-r from-slate-900 via-amber-950/70 to-slate-900 text-white flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="bg-amber-400 text-slate-950 text-[11px] font-black px-2 py-0.5 rounded flex items-center gap-1">
+                <Target className="w-3 h-3 text-slate-950" />
+                台番ランキングの予測力検証
+              </span>
+              <span className="text-amber-200 text-xs font-medium">
+                ブロックブートストラップ (7日ブロック / 2,000回反復)
+              </span>
+            </div>
+            <h3 className="text-base sm:text-lg font-bold text-white mt-1">
+              台番単位の狙い台予測に統計的優位性はあるか？
+            </h3>
+          </div>
+
+          {hasMachineData && (
+            <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
+              {/* Top-N selector */}
+              <div className="flex items-center gap-1 bg-white/10 px-2 py-1 rounded-xl border border-white/20 text-xs">
+                <span className="text-slate-300 text-[11px]">対象台数:</span>
+                {[5, 10, 20].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setMachineTopN(n)}
+                    className={`px-2 py-0.5 rounded font-bold cursor-pointer transition-colors ${
+                      machineTopN === n
+                        ? 'bg-amber-400 text-slate-950'
+                        : 'text-slate-300 hover:text-white'
+                    }`}
+                  >
+                    上位{n}台
+                  </button>
+                ))}
+              </div>
+
+              {/* Filter mode selector */}
+              <div className="flex items-center bg-white/10 p-0.5 rounded-xl border border-white/20 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setMachineFilterMode('withFilter')}
+                  className={`px-2.5 py-1 rounded-lg font-bold cursor-pointer transition-colors ${
+                    machineFilterMode === 'withFilter'
+                      ? 'bg-amber-400 text-slate-950'
+                      : 'text-slate-300 hover:text-white'
+                  }`}
+                  title="根拠日数が3日未満の台をTop-N候補から除外"
+                >
+                  除外あり (根拠3日以上)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMachineFilterMode('withoutFilter')}
+                  className={`px-2.5 py-1 rounded-lg font-bold cursor-pointer transition-colors ${
+                    machineFilterMode === 'withoutFilter'
+                      ? 'bg-amber-400 text-slate-950'
+                      : 'text-slate-300 hover:text-white'
+                  }`}
+                  title="全台を候補対象として評価"
+                >
+                  除外なし (全台)
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="p-5 space-y-4">
+          {!hasMachineData ? (
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex items-start gap-3">
+              <Info className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <h4 className="text-xs font-bold text-slate-800">
+                  台番別データ未取り込み
+                </h4>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                  この店舗には台番別の実績データ（各台の差枚数・G数など）が取り込まれていません。店舗管理画面から台番別データ（HTML / CSV）を取り込むと、台番単位の予測力検証（Top-Nリフト、ベースライン対比、ブートストラップ優位性検定）が有効になります。
+                </p>
+              </div>
+            </div>
+          ) : !machineBacktestResult || machineBacktestResult.evaluatedDaysCount === 0 ? (
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                評価に必要な過去の営業日データが不足しています（台番データを含む営業日が4日以上必要です）。
+              </span>
+            </div>
+          ) : (
+            (() => {
+              const activeEval =
+                machineFilterMode === 'withFilter'
+                  ? machineBacktestResult.withFilter
+                  : machineBacktestResult.withoutFilter;
+
+              return (
+                <div className="space-y-4">
+                  {/* Verdict Banner */}
+                  <div
+                    className={`p-4 rounded-xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
+                      activeEval.hasEdge
+                        ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                        : 'bg-amber-50/90 border-amber-300 text-amber-950'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      {activeEval.hasEdge ? (
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                      ) : (
+                        <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                      )}
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span
+                            className={`font-black text-xs px-2 py-0.5 rounded ${
+                              activeEval.hasEdge
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-amber-600 text-white'
+                            }`}
+                          >
+                            判定結果: {activeEval.hasEdge ? '統計的優位性あり' : '優位性なし（偶然の範囲内）'}
+                          </span>
+                          <span className="text-xs font-bold text-slate-700">
+                            95%信頼区間: [{activeEval.ci95[0] >= 0 ? `+${activeEval.ci95[0]}` : activeEval.ci95[0]}枚 〜 {activeEval.ci95[1] >= 0 ? `+${activeEval.ci95[1]}` : activeEval.ci95[1]}枚]
+                          </span>
+                        </div>
+                        <p className="text-xs mt-1.5 leading-relaxed text-slate-800">
+                          {activeEval.verdictMessage}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 4 KPI Cards */}
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                      <span className="text-[11px] font-bold text-slate-500 block">
+                        上位{machineTopN}台 実績平均差枚
+                      </span>
+                      <div className="text-xl font-black mt-1">
+                        <span
+                          className={
+                            activeEval.avgActualDiff >= 0 ? 'text-emerald-600' : 'text-rose-600'
+                          }
+                        >
+                          {activeEval.avgActualDiff >= 0
+                            ? `+${activeEval.avgActualDiff}`
+                            : activeEval.avgActualDiff}
+                          枚/台
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-slate-400">
+                        ホール平均: {activeEval.hallAvgDiff >= 0 ? `+${activeEval.hallAvgDiff}` : activeEval.hallAvgDiff}枚
+                      </span>
+                    </div>
+
+                    <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                      <span className="text-[11px] font-bold text-slate-500 block">
+                        平均リフト (対ホール差)
+                      </span>
+                      <div className="text-xl font-black mt-1">
+                        <span
+                          className={
+                            activeEval.avgLift >= 0 ? 'text-emerald-600' : 'text-rose-600'
+                          }
+                        >
+                          {activeEval.avgLift >= 0
+                            ? `+${activeEval.avgLift}`
+                            : activeEval.avgLift}
+                          枚
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-slate-400">
+                        95%区間: [{activeEval.ci95[0]}, {activeEval.ci95[1]}]
+                      </span>
+                    </div>
+
+                    <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                      <span className="text-[11px] font-bold text-slate-500 block">
+                        上位{machineTopN}台 勝率
+                      </span>
+                      <div className="text-xl font-black text-slate-900 mt-1">
+                        {activeEval.avgWinRate}%
+                      </div>
+                      <span className="text-[11px] text-slate-400">
+                        ホール平均勝率: {activeEval.hallAvgWinRate}%
+                      </span>
+                    </div>
+
+                    <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                      <span className="text-[11px] font-bold text-slate-500 block">
+                        評価対象営業日数
+                      </span>
+                      <div className="text-xl font-black text-slate-900 mt-1">
+                        {activeEval.evaluatedDaysCount}日
+                      </div>
+                      <span className="text-[11px] text-slate-400">
+                        {machineFilterMode === 'withFilter' ? '根拠3日以上除外あり' : '除外なし全台'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Baseline Comparison Table */}
+                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+                    <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                        <Trophy className="w-3.5 h-3.5 text-amber-500" />
+                        台番ランキング vs 各ベースライン比較（Top-{machineTopN}台）
+                      </span>
+                      <span className="text-[11px] text-slate-500">
+                        同機種内ランダムはシード固定100回シミュレーション平均
+                      </span>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs text-left">
+                        <thead className="bg-slate-100/70 text-slate-600 font-bold border-b border-slate-200">
+                          <tr>
+                            <th className="py-2 px-3">予測手法</th>
+                            <th className="py-2 px-3 text-right">実績平均差枚</th>
+                            <th className="py-2 px-3 text-right">対ホール平均リフト</th>
+                            <th className="py-2 px-3 text-right">勝率</th>
+                            <th className="py-2 px-3">手法の説明</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {/* 1. Target Machine Ranking */}
+                          <tr className="bg-amber-50/50 font-bold">
+                            <td className="py-2.5 px-3 text-amber-950 flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-amber-500" />
+                              当システム 台番ランキング
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-black">
+                              <span
+                                className={
+                                  activeEval.avgActualDiff >= 0
+                                    ? 'text-emerald-600'
+                                    : 'text-rose-600'
+                                }
+                              >
+                                {activeEval.avgActualDiff >= 0
+                                  ? `+${activeEval.avgActualDiff}`
+                                  : activeEval.avgActualDiff}
+                                枚
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-black">
+                              <span
+                                className={
+                                  activeEval.avgLift >= 0
+                                    ? 'text-emerald-700'
+                                    : 'text-rose-600'
+                                }
+                              >
+                                {activeEval.avgLift >= 0
+                                  ? `+${activeEval.avgLift}`
+                                  : activeEval.avgLift}
+                                枚
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-bold text-slate-800">
+                              {activeEval.avgWinRate}%
+                            </td>
+                            <td className="py-2.5 px-3 text-slate-600 font-normal text-[11px]">
+                              機種スコア・縮小推定差枚・高設定挙動・末尾/ゾロ目による加算複合スコア
+                            </td>
+                          </tr>
+
+                          {/* 2. Random within Model */}
+                          <tr>
+                            <td className="py-2.5 px-3 text-slate-800 font-bold">
+                              同機種内ランダム (100回平均)
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-bold">
+                              {activeEval.baselines.randomWithinModel.avgDiff >= 0
+                                ? `+${activeEval.baselines.randomWithinModel.avgDiff}`
+                                : activeEval.baselines.randomWithinModel.avgDiff}
+                              枚
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-bold">
+                              <span
+                                className={
+                                  activeEval.baselines.randomWithinModel.avgLift >= 0
+                                    ? 'text-slate-800'
+                                    : 'text-slate-400'
+                                }
+                              >
+                                {activeEval.baselines.randomWithinModel.avgLift >= 0
+                                  ? `+${activeEval.baselines.randomWithinModel.avgLift}`
+                                  : activeEval.baselines.randomWithinModel.avgLift}
+                                枚
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-right text-slate-700">
+                              {activeEval.baselines.randomWithinModel.avgWinRate}%
+                            </td>
+                            <td className="py-2.5 px-3 text-slate-500 text-[11px]">
+                              選定機種と同一機種の中から無作為に台番を選んだ場合の実績
+                            </td>
+                          </tr>
+
+                          {/* 3. Model Average */}
+                          <tr>
+                            <td className="py-2.5 px-3 text-slate-800 font-bold">
+                              同機種の台平均
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-bold">
+                              {activeEval.baselines.modelAverage.avgDiff >= 0
+                                ? `+${activeEval.baselines.modelAverage.avgDiff}`
+                                : activeEval.baselines.modelAverage.avgDiff}
+                              枚
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-bold">
+                              <span
+                                className={
+                                  activeEval.baselines.modelAverage.avgLift >= 0
+                                    ? 'text-slate-800'
+                                    : 'text-slate-400'
+                                }
+                              >
+                                {activeEval.baselines.modelAverage.avgLift >= 0
+                                  ? `+${activeEval.baselines.modelAverage.avgLift}`
+                                  : activeEval.baselines.modelAverage.avgLift}
+                                枚
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-right text-slate-700">
+                              {activeEval.baselines.modelAverage.avgWinRate}%
+                            </td>
+                            <td className="py-2.5 px-3 text-slate-500 text-[11px]">
+                              選定機種の当日全台平均（機種選びの良さのみを反映）
+                            </td>
+                          </tr>
+
+                          {/* 4. Prior Day Diff */}
+                          <tr>
+                            <td className="py-2.5 px-3 text-slate-800 font-bold">
+                              前日差枚順 (据え置き狙い)
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-bold">
+                              {activeEval.baselines.priorDayDiff.avgDiff >= 0
+                                ? `+${activeEval.baselines.priorDayDiff.avgDiff}`
+                                : activeEval.baselines.priorDayDiff.avgDiff}
+                              枚
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-bold">
+                              <span
+                                className={
+                                  activeEval.baselines.priorDayDiff.avgLift >= 0
+                                    ? 'text-slate-800'
+                                    : 'text-slate-400'
+                                }
+                              >
+                                {activeEval.baselines.priorDayDiff.avgLift >= 0
+                                  ? `+${activeEval.baselines.priorDayDiff.avgLift}`
+                                  : activeEval.baselines.priorDayDiff.avgLift}
+                                枚
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-right text-slate-700">
+                              {activeEval.baselines.priorDayDiff.avgWinRate}%
+                            </td>
+                            <td className="py-2.5 px-3 text-slate-500 text-[11px]">
+                              前日の差枚数が最も高かった上位{machineTopN}台を選んだ場合の実績
+                            </td>
+                          </tr>
+
+                          {/* 5. Random Machine */}
+                          <tr>
+                            <td className="py-2.5 px-3 text-slate-800 font-bold">
+                              ホール全体ランダム
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-bold">
+                              {activeEval.baselines.randomMachine.avgDiff >= 0
+                                ? `+${activeEval.baselines.randomMachine.avgDiff}`
+                                : activeEval.baselines.randomMachine.avgDiff}
+                              枚
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-bold">
+                              <span className="text-slate-400">
+                                {activeEval.baselines.randomMachine.avgLift >= 0
+                                  ? `+${activeEval.baselines.randomMachine.avgLift}`
+                                  : activeEval.baselines.randomMachine.avgLift}
+                                枚
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-right text-slate-700">
+                              {activeEval.baselines.randomMachine.avgWinRate}%
+                            </td>
+                            <td className="py-2.5 px-3 text-slate-500 text-[11px]">
+                              当日ホール全台から無作為に{machineTopN}台を選んだ場合の実績
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Daily Machine Log */}
+                  {activeEval.dailyEvaluations.length > 0 && (
+                    <div className="bg-slate-50 rounded-xl border border-slate-200 p-3.5 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-700">
+                          日次実績ログ (直近{Math.min(10, activeEval.dailyEvaluations.length)}日)
+                        </span>
+                        {activeEval.dailyEvaluations.length > 10 && (
+                          <button
+                            type="button"
+                            onClick={() => setShowAllMachineDays(!showAllMachineDays)}
+                            className="text-[11px] font-bold text-amber-700 hover:text-amber-800 cursor-pointer flex items-center gap-0.5"
+                          >
+                            {showAllMachineDays ? '直近10日に戻す' : `全${activeEval.dailyEvaluations.length}日を展開`}
+                          </button>
+                        )}
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-[11px] text-left">
+                          <thead className="bg-slate-200/60 text-slate-600 font-bold">
+                            <tr>
+                              <th className="py-1.5 px-2">日付</th>
+                              <th className="py-1.5 px-2">ホール平均</th>
+                              <th className="py-1.5 px-2">選出台番</th>
+                              <th className="py-1.5 px-2 text-right">Top-{machineTopN}平均</th>
+                              <th className="py-1.5 px-2 text-right">リフト</th>
+                              <th className="py-1.5 px-2 text-right">勝率</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200/60 bg-white">
+                            {(showAllMachineDays
+                              ? activeEval.dailyEvaluations
+                              : activeEval.dailyEvaluations.slice(-10)
+                            ).map((de) => (
+                              <tr key={de.date} className="hover:bg-slate-50">
+                                <td className="py-1.5 px-2 whitespace-nowrap font-medium text-slate-800">
+                                  {de.date} ({de.dayOfWeek})
+                                  {de.isSpecialDay && (
+                                    <span className="ml-1 text-[10px] bg-amber-100 text-amber-800 px-1 py-0.2 rounded font-bold">
+                                      特日
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-1.5 px-2 text-slate-600">
+                                  {de.hallAvgDiff >= 0 ? `+${de.hallAvgDiff}` : de.hallAvgDiff}枚
+                                </td>
+                                <td className="py-1.5 px-2 text-slate-600 font-mono text-[10px] max-w-[200px] truncate">
+                                  {de.selectedMachineNums.join(', ')}
+                                </td>
+                                <td className="py-1.5 px-2 text-right font-bold">
+                                  <span
+                                    className={
+                                      de.actualAvgDiff >= 0 ? 'text-emerald-600' : 'text-rose-600'
+                                    }
+                                  >
+                                    {de.actualAvgDiff >= 0 ? `+${de.actualAvgDiff}` : de.actualAvgDiff}枚
+                                  </span>
+                                </td>
+                                <td className="py-1.5 px-2 text-right font-bold">
+                                  <span
+                                    className={
+                                      de.actualLift >= 0 ? 'text-emerald-700' : 'text-rose-600'
+                                    }
+                                  >
+                                    {de.actualLift >= 0 ? `+${de.actualLift}` : de.actualLift}枚
+                                  </span>
+                                </td>
+                                <td className="py-1.5 px-2 text-right text-slate-700">
+                                  {de.actualWinRate}%
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()
           )}
         </div>
       </div>

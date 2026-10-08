@@ -7,6 +7,12 @@ export interface SpecialDayRules {
   customDescription?: string;
 }
 
+export interface IslandDefinition {
+  name: string;
+  startNum: number;
+  endNum: number;
+}
+
 export interface StoreInfo {
   id?: string;
   name: string;
@@ -21,6 +27,8 @@ export interface StoreInfo {
   dataRange: string;
   specialDayRules?: SpecialDayRules;
   isPreset?: boolean;
+  islandConfig?: string; // e.g. "A島: 101-120, B島: 121-140" or "101-120:メイン島"
+  islandDefinitions?: IslandDefinition[];
 }
 
 export interface RankingWeights {

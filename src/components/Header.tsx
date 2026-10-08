@@ -38,7 +38,7 @@ interface HeaderProps {
   totalDays: number;
   totalMonths?: number;
   onOpenStoreManager?: () => void;
-  onChangeOldEventDays?: (newRuleText: string) => void;
+  onChangeOldEventDays?: (newRuleText: string, newIslandConfig?: string) => void;
   targetDate?: string;
   setTargetDate?: (d: string) => void;
   latestDataDate?: string;
@@ -292,14 +292,15 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Special Day Rule Edit Modal */}
+      {/* Special Day Rule & Island Config Edit Modal */}
       <SpecialDayRuleModal
         isOpen={isRuleModalOpen}
         storeName={storeInfo.name}
         currentRuleText={storeInfo.oldEventDays || ''}
+        currentIslandConfig={storeInfo.islandConfig || ''}
         onClose={() => setIsRuleModalOpen(false)}
-        onSave={(newRuleText) => {
-          onChangeOldEventDays?.(newRuleText);
+        onSave={(newRuleText, newIslandConfig) => {
+          onChangeOldEventDays?.(newRuleText, newIslandConfig);
         }}
       />
     </header>

@@ -347,49 +347,194 @@ export function exportSettingSpecsAsJson(specs: ModelSettingSpec[]): string {
 }
 
 /**
+ * 設定行のフィールド名・型を柔軟に正規化
+ */
+function normalizeSettingRow(row: any, index: number): SettingLevelSpec {
+  const label = typeof row.label === 'string' && row.label.trim() ? row.label.trim() : `設定${index + 1}`;
+  const settingNum =
+    typeof row.settingNum === 'number'
+      ? row.settingNum
+      : typeof row.setting === 'number'
+      ? row.setting
+      : undefined;
+
+  let payoutRate = 0;
+  const rawPayout = row.payoutRate ?? row.payout ?? row.rate ?? row.payout_rate ?? row.war;
+  if (typeof rawPayout === 'number') {
+    payoutRate = rawPayout;
+  } else if (typeof rawPayout === 'string') {
+    payoutRate = parseFloat(rawPayout.replace(/%/g, '')) || 0;
+  }
+
+  let bbDenom: number | undefined = undefined;
+  const rawBb = row.bbDenom ?? row.bb ?? row.bb_denom ?? row.bbDenominator;
+  if (typeof rawBb === 'number') {
+    bbDenom = rawBb;
+  } else if (typeof rawBb === 'string') {
+    const parsed = parseFloat(rawBb.replace(/^1\//, ''));
+    if (!Number.isNaN(parsed) && parsed > 0) bbDenom = parsed;
+  }
+
+  let rbDenom: number | undefined = undefined;
+  const rawRb = row.rbDenom ?? row.rb ?? row.reg ?? row.rb_denom ?? row.rbDenominator;
+  if (typeof rawRb === 'number') {
+    rbDenom = rawRb;
+  } else if (typeof rawRb === 'string') {
+    const parsed = parseFloat(rawRb.replace(/^1\//, ''));
+    if (!Number.isNaN(parsed) && parsed > 0) rbDenom = parsed;
+  }
+
+  return {
+    label,
+    settingNum,
+    payoutRate,
+    bbDenom,
+    rbDenom,
+  };
+}
+
+/**
+ * 様々なデータ構造から機種仕様の候補リストを抽出
+ */
+function extractCandidateSpecs(parsed: unknown): unknown[] {
+  if (!parsed || typeof parsed !== 'object') return [];
+
+  // Case 1: 配列
+  if (Array.isArray(parsed)) {
+    return parsed;
+  }
+
+  const obj = parsed as Record<string, unknown>;
+
+  // Case 2: 単一機種オブジェクト ({ modelName: "...", settings: [...] })
+  if (obj.modelName && (Array.isArray(obj.settings) || typeof obj.settings === 'object')) {
+    return [obj];
+  }
+
+  // Case 3: ラッパープロパティ (specs, models, list, data, settingSpecs)
+  for (const key of ['specs', 'models', 'list', 'data', 'settingSpecs']) {
+    if (Array.isArray(obj[key])) {
+      return obj[key] as unknown[];
+    }
+  }
+
+  // Case 4: キー名が機種名のマップ (例: { "マイジャグラーV": { settings: [...] }, "アイムEX": [...] })
+  const candidateFromEntries: unknown[] = [];
+  for (const [key, val] of Object.entries(obj)) {
+    if (!val || typeof val !== 'object') continue;
+    if (Array.isArray(val)) {
+      candidateFromEntries.push({
+        modelName: key,
+        settings: val,
+      });
+    } else {
+      const valObj = val as Record<string, unknown>;
+      if (Array.isArray(valObj.settings)) {
+        candidateFromEntries.push({
+          modelName: valObj.modelName || key,
+          ...valObj,
+        });
+      }
+    }
+  }
+  if (candidateFromEntries.length > 0) {
+    return candidateFromEntries;
+  }
+
+  return [];
+}
+
+/**
  * Import specs from JSON string
+ * - 単一機種のJSONオブジェクト
+ * - 複数機種の配列 JSON
+ * - { specs: [...] } や { models: [...] } などのラッパー形式
+ * - { "機種名": { settings: [...] } } 形式
+ * - カンマ区切りで連続した複数オブジェクト形式
  */
 export function importSettingSpecsFromJson(jsonStr: string): {
   imported: ModelSettingSpec[];
   errors: string[];
 } {
   const errors: string[] = [];
-  try {
-    const parsed = JSON.parse(jsonStr);
-    const candidateList: unknown = Array.isArray(parsed)
-      ? parsed
-      : parsed?.specs && Array.isArray(parsed.specs)
-      ? parsed.specs
-      : null;
-
-    if (!Array.isArray(candidateList)) {
-      return { imported: [], errors: ['JSON形式が無効です（仕様配列が見つかりません）。'] };
-    }
-
-    const imported: ModelSettingSpec[] = [];
-    for (const item of candidateList) {
-      if (!item || typeof item !== 'object') continue;
-      const candidate = item as Partial<ModelSettingSpec>;
-      if (!candidate.modelName || !candidate.settings) {
-        errors.push(`スキップ: 不正なエントリ (${candidate.modelName || '無名'})`);
-        continue;
-      }
-      const val = validateModelSettingSpec(candidate as ModelSettingSpec);
-      if (!val.isValid) {
-        errors.push(`スキップ (${candidate.modelName}): ${val.errors.join(', ')}`);
-        continue;
-      }
-      imported.push({
-        modelName: normalizeModelName(candidate.modelName),
-        aliases: candidate.aliases || [],
-        source: candidate.source || '',
-        settings: candidate.settings,
-        updatedAt: new Date().toISOString(),
-      });
-    }
-
-    return { imported, errors };
-  } catch (err: any) {
-    return { imported: [], errors: [`JSON解析エラー: ${err?.message || String(err)}`] };
+  if (!jsonStr || !jsonStr.trim()) {
+    return { imported: [], errors: ['JSONデータが空です。'] };
   }
+
+  let parsed: unknown = null;
+  const trimmed = jsonStr.trim();
+
+  // 1. 標準 JSON パース試行
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (primaryErr: any) {
+    // 2. カンマ区切りなどで囲みカッコがない複数オブジェクトの救済 (例: {...}, {...})
+    try {
+      const wrapped = trimmed.startsWith('[') ? trimmed : `[${trimmed.replace(/^[,\s]+|[,\s]+$/g, '')}]`;
+      parsed = JSON.parse(wrapped);
+    } catch {
+      // 3. 改行区切りの個別JSONオブジェクト救済
+      const objects: any[] = [];
+      const regex = /\{[\s\S]*?\}(?=(?:\s*\{|\s*$))/g;
+      let match;
+      while ((match = regex.exec(trimmed)) !== null) {
+        try {
+          const item = JSON.parse(match[0]);
+          if (item && typeof item === 'object') objects.push(item);
+        } catch {
+          // ignore individual chunk parse failure
+        }
+      }
+      if (objects.length > 0) {
+        parsed = objects;
+      } else {
+        return { imported: [], errors: [`JSON解析エラー: 正しいJSON形式ではありません (${primaryErr?.message || primaryErr})`] };
+      }
+    }
+  }
+
+  const candidateList = extractCandidateSpecs(parsed);
+  if (!Array.isArray(candidateList) || candidateList.length === 0) {
+    return { imported: [], errors: ['JSON形式が無効です（機種名や設定配列が見つかりません）。'] };
+  }
+
+  const imported: ModelSettingSpec[] = [];
+  for (const item of candidateList) {
+    if (!item || typeof item !== 'object') continue;
+    const candidate = item as any;
+    const modelName = candidate.modelName || candidate.name || candidate.title;
+    if (!modelName || !candidate.settings) {
+      errors.push(`スキップ: 不正なエントリ (${modelName || '無名'})`);
+      continue;
+    }
+
+    // 設定配列を正規化
+    const rawSettings = Array.isArray(candidate.settings)
+      ? candidate.settings
+      : Object.entries(candidate.settings).map(([label, val]: [string, any]) => ({
+          label,
+          ...(typeof val === 'number' ? { payoutRate: val } : val),
+        }));
+
+    const normalizedSettings: SettingLevelSpec[] = rawSettings.map(normalizeSettingRow);
+
+    const candidateSpec: ModelSettingSpec = {
+      modelName: normalizeModelName(String(modelName)),
+      aliases: Array.isArray(candidate.aliases) ? candidate.aliases.map(String) : [],
+      source: candidate.source ? String(candidate.source) : '',
+      settings: normalizedSettings,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const val = validateModelSettingSpec(candidateSpec);
+    if (!val.isValid) {
+      errors.push(`スキップ (${candidateSpec.modelName}): ${val.errors.join(', ')}`);
+      continue;
+    }
+
+    imported.push(candidateSpec);
+  }
+
+  return { imported, errors };
 }
+

@@ -51,6 +51,9 @@ import {
   SlidersHorizontal,
   ChevronRight,
   ExternalLink,
+  FileText,
+  Copy,
+  Check,
 } from 'lucide-react';
 
 interface SettingDistributionPanelProps {
@@ -123,6 +126,7 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
   const [allSpecs, setAllSpecs] = useState<ModelSettingSpec[]>(() => loadAllSettingSpecsSync());
   const [isSpecModalOpen, setIsSpecModalOpen] = useState<boolean>(false);
   const [editingSpec, setEditingSpec] = useState<ModelSettingSpec | null>(null);
+  const [isPasteJsonModalOpen, setIsPasteJsonModalOpen] = useState<boolean>(false);
 
   // 初回マウント時に非同期IndexedDBからリフレッシュ
   useEffect(() => {
@@ -284,27 +288,52 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
     URL.revokeObjectURL(url);
   };
 
-  const handleImportJsonFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
-      const text = evt.target?.result as string;
-      const { imported, errors } = importSettingSpecsFromJson(text);
-      if (errors.length > 0) {
-        alert(`インポート結果:\n${errors.join('\n')}`);
-      }
-      if (imported.length > 0) {
+  const handleImportJsonFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    let totalImported = 0;
+    const allErrors: string[] = [];
+    const importedNames: string[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      try {
+        const text = await file.text();
+        const { imported, errors } = importSettingSpecsFromJson(text);
+        if (errors.length > 0) {
+          allErrors.push(`[${file.name}] ${errors.join(', ')}`);
+        }
         for (const sp of imported) {
           await saveModelSettingSpec(sp);
+          totalImported++;
+          if (!importedNames.includes(sp.modelName)) {
+            importedNames.push(sp.modelName);
+          }
         }
-        const refreshed = await loadAllSettingSpecs();
-        setAllSpecs(refreshed);
-        alert(`${imported.length}件の機種仕様を取り込みました。`);
+      } catch (err: any) {
+        allErrors.push(`[${file.name}] 読み込み失敗: ${err.message || String(err)}`);
       }
-    };
-    reader.readAsText(file);
-    e.target.value = '';
+    }
+
+    const refreshed = await loadAllSettingSpecs();
+    setAllSpecs(refreshed);
+
+    if (totalImported > 0) {
+      alert(`合計 ${totalImported}件の機種仕様を取り込みました:\n${importedNames.join(', ')}${allErrors.length > 0 ? `\n\n一部スキップ:\n${allErrors.join('\n')}` : ''}`);
+    } else if (allErrors.length > 0) {
+      alert(`取り込みに失敗しました:\n${allErrors.join('\n')}`);
+    }
+  };
+
+  const handleImportJsonText = async (text: string) => {
+    const { imported, errors } = importSettingSpecsFromJson(text);
+    if (imported.length > 0) {
+      for (const sp of imported) {
+        await saveModelSettingSpec(sp);
+      }
+      const refreshed = await loadAllSettingSpecs();
+      setAllSpecs(refreshed);
+    }
+    return { imported, errors };
   };
 
   return (
@@ -330,6 +359,15 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
           </div>
 
           <div className="flex items-center gap-2 self-start sm:self-auto">
+            <button
+              type="button"
+              onClick={() => setIsPasteJsonModalOpen(true)}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 transition-colors cursor-pointer flex items-center gap-1.5"
+              title="JSONテキスト直接貼り付けまたは複数機種一括インポート"
+            >
+              <Upload className="w-3.5 h-3.5 text-emerald-700" />
+              <span>JSON一括取り込み</span>
+            </button>
             <button
               type="button"
               onClick={handleOpenEditSpec}
@@ -515,13 +553,25 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
               <Plus className="w-4 h-4" />
               <span>「{activeModelName}」の仕様値を登録する</span>
             </button>
+            <button
+              type="button"
+              onClick={() => setIsPasteJsonModalOpen(true)}
+              className="px-4 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-bold text-xs rounded-lg transition-colors cursor-pointer flex items-center gap-2 border border-emerald-300 shadow-2xs"
+            >
+              <FileText className="w-4 h-4 text-emerald-700" />
+              <span>JSONを貼り付けて取り込む（複数機種対応）</span>
+            </button>
             <label className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-lg transition-colors cursor-pointer flex items-center gap-2 border border-slate-300">
               <Upload className="w-4 h-4 text-slate-600" />
-              <span>JSON仕様を取り込む</span>
+              <span>ファイル選択 (複数可)</span>
               <input
                 type="file"
                 accept=".json"
-                onChange={handleImportJsonFile}
+                multiple
+                onChange={(e) => {
+                  handleImportJsonFiles(e.target.files);
+                  e.target.value = '';
+                }}
                 className="hidden"
               />
             </label>
@@ -1065,9 +1115,25 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
             setEditingSpec(null);
           }}
           onExportJson={handleExportJson}
-          onImportJson={handleImportJsonFile}
+          onImportJson={(e) => {
+            handleImportJsonFiles(e.target.files);
+            e.target.value = '';
+          }}
+          onOpenPasteModal={() => {
+            setIsSpecModalOpen(false);
+            setIsPasteJsonModalOpen(true);
+          }}
         />
       )}
+
+      {/* JSON直接貼り付け・一括インポートモーダル */}
+      <PasteJsonModal
+        isOpen={isPasteJsonModalOpen}
+        onClose={() => setIsPasteJsonModalOpen(false)}
+        onImportText={handleImportJsonText}
+        onImportFiles={handleImportJsonFiles}
+        existingSpecs={allSpecs}
+      />
     </div>
   );
 };
@@ -1084,6 +1150,7 @@ interface SettingSpecEditorModalProps {
   onClose: () => void;
   onExportJson: () => void;
   onImportJson: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onOpenPasteModal: () => void;
 }
 
 const SettingSpecEditorModal: React.FC<SettingSpecEditorModalProps> = ({
@@ -1094,6 +1161,7 @@ const SettingSpecEditorModal: React.FC<SettingSpecEditorModalProps> = ({
   onClose,
   onExportJson,
   onImportJson,
+  onOpenPasteModal,
 }) => {
   const [currentSpec, setCurrentSpec] = useState<ModelSettingSpec>(() =>
     JSON.parse(JSON.stringify(initialSpec))
@@ -1354,7 +1422,16 @@ const SettingSpecEditorModal: React.FC<SettingSpecEditorModalProps> = ({
 
           {/* JSON 取り込み / 書き出し */}
           <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={onOpenPasteModal}
+                className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold rounded flex items-center gap-1 cursor-pointer"
+                title="JSONテキストを直接貼り付けて複数機種を一括取り込み"
+              >
+                <FileText className="w-3.5 h-3.5 text-emerald-700" />
+                <span>JSON直接貼り付け / 一括</span>
+              </button>
               <button
                 type="button"
                 onClick={onExportJson}
@@ -1365,10 +1442,11 @@ const SettingSpecEditorModal: React.FC<SettingSpecEditorModalProps> = ({
               </button>
               <label className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded flex items-center gap-1 cursor-pointer">
                 <Upload className="w-3.5 h-3.5" />
-                <span>JSONを取り込む</span>
+                <span>ファイルから取り込む</span>
                 <input
                   type="file"
                   accept=".json"
+                  multiple
                   onChange={onImportJson}
                   className="hidden"
                 />
@@ -1414,3 +1492,298 @@ const SettingSpecEditorModal: React.FC<SettingSpecEditorModalProps> = ({
     </div>
   );
 };
+
+/* =====================================================================
+ * Paste JSON Modal Component (JSONテキスト直接貼り付け・一括インポート画面)
+ * ===================================================================== */
+
+interface PasteJsonModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onImportText: (text: string) => Promise<{ imported: ModelSettingSpec[]; errors: string[] }>;
+  onImportFiles: (files: FileList | null) => Promise<void>;
+  existingSpecs: ModelSettingSpec[];
+}
+
+const SAMPLE_MULTI_MODEL_JSON = JSON.stringify(
+  [
+    {
+      modelName: 'マイジャグラーV',
+      aliases: ['マイジャグ5', 'SマイジャグラーVKD'],
+      source: 'メーカー公表値',
+      settings: [
+        { label: '設定1', settingNum: 1, payoutRate: 97.0, bbDenom: 273.1, rbDenom: 409.6 },
+        { label: '設定2', settingNum: 2, payoutRate: 98.0, bbDenom: 270.8, rbDenom: 385.5 },
+        { label: '設定3', settingNum: 3, payoutRate: 99.9, bbDenom: 266.4, rbDenom: 336.1 },
+        { label: '設定4', settingNum: 4, payoutRate: 102.8, bbDenom: 254.0, rbDenom: 290.0 },
+        { label: '設定5', settingNum: 5, payoutRate: 105.3, bbDenom: 240.1, rbDenom: 268.6 },
+        { label: '設定6', settingNum: 6, payoutRate: 109.4, bbDenom: 229.1, rbDenom: 229.1 },
+      ],
+    },
+    {
+      modelName: 'アイムジャグラーEX',
+      aliases: ['アイムEX', 'SアイムジャグラーEX'],
+      source: 'メーカー公表値',
+      settings: [
+        { label: '設定1', settingNum: 1, payoutRate: 97.0, bbDenom: 273.1, rbDenom: 439.8 },
+        { label: '設定2', settingNum: 2, payoutRate: 98.0, bbDenom: 269.7, rbDenom: 399.6 },
+        { label: '設定3', settingNum: 3, payoutRate: 99.5, bbDenom: 269.7, rbDenom: 330.9 },
+        { label: '設定4', settingNum: 4, payoutRate: 101.1, bbDenom: 259.0, rbDenom: 315.1 },
+        { label: '設定5', settingNum: 5, payoutRate: 102.8, bbDenom: 259.0, rbDenom: 255.0 },
+        { label: '設定6', settingNum: 6, payoutRate: 105.5, bbDenom: 255.0, rbDenom: 255.0 },
+      ],
+    },
+  ],
+  null,
+  2
+);
+
+const SAMPLE_SINGLE_MODEL_JSON = JSON.stringify(
+  {
+    modelName: 'マイジャグラーV',
+    aliases: ['マイジャグ5', 'SマイジャグラーVKD'],
+    source: 'メーカー公表値',
+    settings: [
+      { label: '設定1', settingNum: 1, payoutRate: 97.0, bbDenom: 273.1, rbDenom: 409.6 },
+      { label: '設定2', settingNum: 2, payoutRate: 98.0, bbDenom: 270.8, rbDenom: 385.5 },
+      { label: '設定3', settingNum: 3, payoutRate: 99.9, bbDenom: 266.4, rbDenom: 336.1 },
+      { label: '設定4', settingNum: 4, payoutRate: 102.8, bbDenom: 254.0, rbDenom: 290.0 },
+      { label: '設定5', settingNum: 5, payoutRate: 105.3, bbDenom: 240.1, rbDenom: 268.6 },
+      { label: '設定6', settingNum: 6, payoutRate: 109.4, bbDenom: 229.1, rbDenom: 229.1 },
+    ],
+  },
+  null,
+  2
+);
+
+const PasteJsonModal: React.FC<PasteJsonModalProps> = ({
+  isOpen,
+  onClose,
+  onImportText,
+  onImportFiles,
+  existingSpecs,
+}) => {
+  const [jsonText, setJsonText] = useState<string>('');
+  const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [status, setStatus] = useState<{
+    type: 'idle' | 'success' | 'error';
+    message: string;
+    importedCount?: number;
+    importedNames?: string[];
+    errors?: string[];
+  }>({ type: 'idle', message: '' });
+
+  if (!isOpen) return null;
+
+  const handleExecuteImport = async () => {
+    if (!jsonText.trim()) {
+      setStatus({
+        type: 'error',
+        message: 'JSONテキストを入力または貼り付けてください。',
+      });
+      return;
+    }
+
+    setIsProcessing(true);
+    setStatus({ type: 'idle', message: '' });
+
+    try {
+      const { imported, errors } = await onImportText(jsonText);
+      if (imported.length > 0) {
+        setStatus({
+          type: 'success',
+          message: `${imported.length}件の機種仕様を正常に取り込みました！`,
+          importedCount: imported.length,
+          importedNames: imported.map((s) => s.modelName),
+          errors: errors.length > 0 ? errors : undefined,
+        });
+      } else {
+        setStatus({
+          type: 'error',
+          message: '取り込み可能な仕様が見つかりませんでした。形式をご確認ください。',
+          errors,
+        });
+      }
+    } catch (err: any) {
+      setStatus({
+        type: 'error',
+        message: `取り込み処理中にエラーが発生しました: ${err?.message || String(err)}`,
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/70 backdrop-blur-xs">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-3xl max-h-[92vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        {/* Header */}
+        <div className="p-4 sm:p-5 border-b border-slate-200 flex items-center justify-between bg-slate-50 shrink-0">
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-lg bg-emerald-600 text-white font-bold shadow-2xs">
+              <FileText className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+                機種仕様 JSON 直接貼り付け / 一括インポート
+                <span className="text-[10px] font-normal px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                  複数機種対応
+                </span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                単一機種オブジェクト、複数機種の配列（[...]）、または全仕様エクスポート形式をそのまま貼り付けられます
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200 transition-colors cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="p-4 sm:p-6 overflow-y-auto space-y-4 text-xs">
+          {/* Quick presets */}
+          <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-slate-50 rounded-xl border border-slate-200">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-bold text-slate-700">テンプレート挿入:</span>
+              <button
+                type="button"
+                onClick={() => setJsonText(SAMPLE_MULTI_MODEL_JSON)}
+                className="px-2.5 py-1 bg-white hover:bg-emerald-50 text-emerald-800 font-bold border border-slate-200 hover:border-emerald-300 rounded shadow-2xs cursor-pointer flex items-center gap-1"
+              >
+                <span>複数機種の雛形 (2機種)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setJsonText(SAMPLE_SINGLE_MODEL_JSON)}
+                className="px-2.5 py-1 bg-white hover:bg-emerald-50 text-emerald-800 font-bold border border-slate-200 hover:border-emerald-300 rounded shadow-2xs cursor-pointer flex items-center gap-1"
+              >
+                <span>単一機種の雛形 (1機種)</span>
+              </button>
+            </div>
+            {jsonText && (
+              <button
+                type="button"
+                onClick={() => setJsonText('')}
+                className="text-slate-500 hover:text-slate-800 font-bold cursor-pointer"
+              >
+                クリア
+              </button>
+            )}
+          </div>
+
+          {/* Textarea */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="font-bold text-slate-800">
+                JSONテキスト貼り付けエリア:
+              </label>
+              <span className="text-[11px] text-slate-500">
+                現在登録済み: {existingSpecs.length}機種
+              </span>
+            </div>
+            <textarea
+              value={jsonText}
+              onChange={(e) => setJsonText(e.target.value)}
+              placeholder="ここに機種仕様のJSONを貼り付けてください...&#10;&#10;例 (単一機種):&#10;{&#10;  &quot;modelName&quot;: &quot;マイジャグラーV&quot;,&#10;  &quot;settings&quot;: [&#10;    { &quot;label&quot;: &quot;設定1&quot;, &quot;payoutRate&quot;: 97.0 },&#10;    { &quot;label&quot;: &quot;設定6&quot;, &quot;payoutRate&quot;: 109.4 }&#10;  ]&#10;}&#10;&#10;例 (複数機種):&#10;[&#10;  { &quot;modelName&quot;: &quot;マイジャグラーV&quot;, ... },&#10;  { &quot;modelName&quot;: &quot;アイムジャグラーEX&quot;, ... }&#10;]"
+              rows={12}
+              className="w-full p-3 font-mono text-xs bg-slate-900 text-slate-100 rounded-xl border border-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            />
+          </div>
+
+          {/* Status Message */}
+          {status.type === 'success' && (
+            <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl space-y-1.5">
+              <div className="flex items-center gap-2 text-emerald-800 font-bold">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{status.message}</span>
+              </div>
+              {status.importedNames && (
+                <div className="text-[11px] text-emerald-700 pl-6 flex flex-wrap gap-1">
+                  <span className="font-bold">取り込み機種:</span>
+                  {status.importedNames.map((name) => (
+                    <span key={name} className="px-1.5 py-0.5 bg-emerald-100 rounded font-bold">
+                      {name}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {status.errors && status.errors.length > 0 && (
+                <div className="text-[11px] text-amber-700 pl-6 mt-1 space-y-0.5">
+                  <span className="font-bold">一部スキップされた項目:</span>
+                  {status.errors.map((e, idx) => (
+                    <div key={idx}>・{e}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {status.type === 'error' && (
+            <div className="p-3 bg-rose-50 border border-rose-300 rounded-xl space-y-1">
+              <div className="flex items-center gap-2 text-rose-800 font-bold">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>{status.message}</span>
+              </div>
+              {status.errors && status.errors.length > 0 && (
+                <div className="text-[11px] text-rose-700 pl-6 space-y-0.5">
+                  {status.errors.map((e, idx) => (
+                    <div key={idx}>・{e}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="p-4 border-t border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-3 shrink-0">
+          <div>
+            <label className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 font-bold text-xs rounded-lg border border-slate-300 flex items-center gap-1.5 cursor-pointer shadow-2xs">
+              <Upload className="w-3.5 h-3.5 text-slate-600" />
+              <span>ファイルから読み込み (複数選択可)</span>
+              <input
+                type="file"
+                accept=".json"
+                multiple
+                onChange={async (e) => {
+                  await onImportFiles(e.target.files);
+                  e.target.value = '';
+                }}
+                className="hidden"
+              />
+            </label>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 rounded-lg text-slate-600 hover:text-slate-800 font-bold text-xs cursor-pointer"
+            >
+              閉じる
+            </button>
+            <button
+              type="button"
+              disabled={isProcessing || !jsonText.trim()}
+              onClick={handleExecuteImport}
+              className={`px-5 py-2 rounded-lg font-bold text-xs text-white transition-all cursor-pointer flex items-center gap-1.5 ${
+                !isProcessing && jsonText.trim()
+                  ? 'bg-emerald-600 hover:bg-emerald-700 shadow-2xs'
+                  : 'bg-slate-300 cursor-not-allowed'
+              }`}
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>{isProcessing ? '処理中...' : '取り込み実行'}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+

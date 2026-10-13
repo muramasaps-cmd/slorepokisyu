@@ -96,6 +96,8 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
   customWeights,
   islandConfig,
   onOpenStoreManager,
+  includeReusedMachines = false,
+  aliasDictionary,
 }) => {
   const [selectedModel, setSelectedModel] = useState<string>('all');
   const [selectedTail, setSelectedTail] = useState<string>('all');
@@ -128,8 +130,10 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
     if (!hasMachineData || !targetDate) return null;
     return calculateTargetMachineRanking(targetDate, dailyRecords, specialDayRules, undefined, {
       rankingWeights: customWeights,
+      includeReusedMachines,
+      aliasDictionary,
     });
-  }, [targetDate, dailyRecords, specialDayRules, customWeights, hasMachineData]);
+  }, [targetDate, dailyRecords, specialDayRules, customWeights, hasMachineData, includeReusedMachines, aliasDictionary]);
 
   // Extract unique models & tails from ranking results
   const availableModels = useMemo(() => {

@@ -217,5 +217,51 @@ describe('processStoreData', () => {
       expect(monthlyStats[1].daysCount).toBe(1);
       expect(monthlyStats[1].totalDiffCoins).toBe(3000);
     });
+
+    it('calculates monthly avgDiffCoins using the exact sum of daily machines as denominator', () => {
+      // Day 1: 100 machines, +10,000 diff coins (+100.0/台)
+      // Day 2: 300 machines, -6,000 diff coins (-20.0/台)
+      // Sum of daily machines = 100 + 300 = 400台
+      // Total diff coins = +10,000 - 6,000 = +4,000枚
+      // Correct weighted average: +4,000 / 400 = +10.0 枚/台
+      //
+      // Legacy unweighted or rounded calculation comparison:
+      // avgMachines = Math.round((100 + 300) / 2) = 200台
+      // Simple daily average: (+100 + (-20)) / 2 = +40.0 枚/台 (distorted by +30枚!)
+      const records: DailyRecord[] = [
+        createMinimalRecord({ date: '2024-01-01', totalMachines: 100, totalDiffCoins: 10000, avgDiffCoins: 100 }),
+        createMinimalRecord({ date: '2024-01-02', totalMachines: 300, totalDiffCoins: -6000, avgDiffCoins: -20 }),
+      ];
+
+      const { monthlyStats } = processStoreData(records, 46, 50, 70);
+      expect(monthlyStats.length).toBe(1);
+      expect(monthlyStats[0].avgMachines).toBe(200);
+      expect(monthlyStats[0].totalDiffCoins).toBe(4000);
+      // Correct sum of daily machines denominator: 4000 / 400 = 10.0
+      expect(monthlyStats[0].avgDiffCoins).toBe(10);
+    });
+
+    it('calculates eventAvgDiff and normalAvgDiff using exact respective daily machine sums', () => {
+      // Event Day: 200 machines, +8000 coins (+40/台)
+      // Normal Day 1: 100 machines, -1000 coins (-10/台)
+      // Normal Day 2: 150 machines, -2000 coins (-13.3/台)
+      const records: DailyRecord[] = [
+        createMinimalRecord({ date: '2024-01-07', totalMachines: 200, totalDiffCoins: 8000, isOldEventDay: true }),
+        createMinimalRecord({ date: '2024-01-08', totalMachines: 100, totalDiffCoins: -1000, isOldEventDay: false }),
+        createMinimalRecord({ date: '2024-01-09', totalMachines: 150, totalDiffCoins: -2000, isOldEventDay: false }),
+      ];
+
+      const { monthlyStats } = processStoreData(records, 46, 50, 70);
+      expect(monthlyStats.length).toBe(1);
+      const m = monthlyStats[0];
+
+      // Event day: 8000 / 200 = 40.0
+      expect(m.eventDaysCount).toBe(1);
+      expect(m.eventAvgDiff).toBe(40);
+
+      // Normal days: -3000 / (100 + 150) = -3000 / 250 = -12.0
+      expect(m.normalDaysCount).toBe(2);
+      expect(m.normalAvgDiff).toBe(-12);
+    });
   });
 });

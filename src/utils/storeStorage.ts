@@ -1,7 +1,14 @@
 import { DailyRecord, StoreProfile } from '../data/types';
 import { parseRatesFromExchangeRate } from './htmlParser';
 import { parseSpecialDayRulesFromText } from './specialDayRules';
-import { saveStoresToIdb, loadStoresFromIdb, clearStoresFromIdb } from './indexedDb';
+import {
+  saveStoresToIdb,
+  loadStoresFromIdb,
+  clearStoresFromIdb,
+  putStoreToIdb,
+  deleteStoreFromIdb,
+} from './indexedDb';
+import { notifyStorageEvent } from './storageNotifier';
 
 const STORAGE_KEY_STORES = 'SLOT_ANALYZER_HTML_STORES_V2';
 const STORAGE_KEY_ACTIVE_ID = 'SLOT_ANALYZER_HTML_ACTIVE_ID_V2';
@@ -48,28 +55,33 @@ export function areStoresSame(nameA: string, nameB: string): boolean {
 /**
  * Merges two daily record sets by date, preserving highest quality records
  */
+/**
+ * Calculates a quality score for a DailyRecord based on completeness of its data.
+ * Rich unit-level machine records receive the highest bonus, followed by model breakdowns and win rate data.
+ */
+export function computeDailyRecordQuality(r: DailyRecord): number {
+  if (!r) return 0;
+  return (
+    (r.totalMachines > 0 ? 2 : 0) +
+    (r.winMachines !== null && r.winMachines !== undefined ? 2 : 0) +
+    (r.machines && r.machines.length > 0 ? 20 : 0) +
+    (r.models && r.models.length > 0 ? 10 : 0) +
+    (r.tails && r.tails.length > 0 ? 5 : 0) +
+    (r.notable ? 1 : 0)
+  );
+}
+
 export function mergeDailyRecords(recordsA: DailyRecord[] = [], recordsB: DailyRecord[] = []): DailyRecord[] {
   const dateMap = new Map<string, DailyRecord>();
 
   for (const r of [...recordsA, ...recordsB]) {
+    if (!r || !r.date) continue;
     if (!dateMap.has(r.date)) {
       dateMap.set(r.date, r);
     } else {
       const prev = dateMap.get(r.date)!;
-      const prevQuality =
-        (prev.totalMachines > 0 ? 2 : 0) +
-        (prev.winMachines !== null ? 2 : 0) +
-        (prev.machines && prev.machines.length > 0 ? 20 : 0) +
-        (prev.models && prev.models.length > 0 ? 10 : 0) +
-        (prev.tails && prev.tails.length > 0 ? 5 : 0) +
-        (prev.notable ? 1 : 0);
-      const newQuality =
-        (r.totalMachines > 0 ? 2 : 0) +
-        (r.winMachines !== null ? 2 : 0) +
-        (r.machines && r.machines.length > 0 ? 20 : 0) +
-        (r.models && r.models.length > 0 ? 10 : 0) +
-        (r.tails && r.tails.length > 0 ? 5 : 0) +
-        (r.notable ? 1 : 0);
+      const prevQuality = computeDailyRecordQuality(prev);
+      const newQuality = computeDailyRecordQuality(r);
 
       if (newQuality >= prevQuality) {
         // If the new record lacks machines but previous had machines, retain previous machines
@@ -240,6 +252,10 @@ export function getSavedStores(): StoreProfile[] {
                 totalMachinesApprox: Math.max(existing.totalMachinesApprox || 0, s.totalMachinesApprox || 0),
                 islandConfig: existing.islandConfig || s.islandConfig || '',
                 islandDefinitions: existing.islandDefinitions || s.islandDefinitions,
+                modelAliasDictionary: existing.modelAliasDictionary || s.modelAliasDictionary,
+                categoryRates: existing.categoryRates || s.categoryRates,
+                includeReusedMachinesInStats: existing.includeReusedMachinesInStats ?? s.includeReusedMachinesInStats,
+                customRankingWeights: existing.customRankingWeights || s.customRankingWeights,
                 dailyRecords: mergedDaily,
                 dataRange:
                   mergedDaily.length > 0 && mergedDaily[0]?.date && mergedDaily[mergedDaily.length - 1]?.date
@@ -304,20 +320,58 @@ function stripDerivedForStorage(stores: StoreProfile[]): StoreProfile[] {
 }
 
 /**
- * Save stores array to IndexedDB (full capacity, 100+ files) with LocalStorage companion
+ * Asynchronously save stores array to IndexedDB with LocalStorage fallback and notification
  */
-export function saveStoresToStorage(stores: StoreProfile[]): void {
-  // Always persist to IndexedDB asynchronously (handles 100MB+ with zero quota issues)
-  saveStoresToIdb(stores).catch((err) => {
-    console.warn('IndexedDB save failed, relying on LocalStorage', err);
-  });
+export async function saveStoresToStorageAsync(
+  stores: StoreProfile[]
+): Promise<{ idbSuccess: boolean; lsSuccess: boolean }> {
+  let idbSuccess = false;
+  let lsSuccess = false;
+
+  try {
+    await saveStoresToIdb(stores);
+    idbSuccess = true;
+  } catch (err: any) {
+    console.warn('IndexedDB save failed:', err);
+  }
 
   try {
     const compact = stripDerivedForStorage(stores);
     localStorage.setItem(STORAGE_KEY_STORES, JSON.stringify(compact));
-  } catch (err) {
-    console.warn('LocalStorage quota reached. Full data is safely preserved in IndexedDB.', err);
+    lsSuccess = true;
+  } catch (err: any) {
+    console.warn('LocalStorage save failed:', err);
   }
+
+  // If IndexedDB failed, report to user via toast notification with fallback status
+  if (!idbSuccess) {
+    if (lsSuccess) {
+      notifyStorageEvent({
+        type: 'warning',
+        title: 'IndexedDB保存失敗（自動フォールバック成功）',
+        message: 'ブラウザのIndexedDBへの書き込みに失敗しましたが、localStorageへバックアップ保存しました。',
+        fallbackStatus: 'success',
+      });
+    } else {
+      notifyStorageEvent({
+        type: 'error',
+        title: 'データ保存失敗（フォールバック不可）',
+        message: 'IndexedDBおよびlocalStorageの両方で保存に失敗しました。ブラウザの容量上限に達した可能性があります。',
+        fallbackStatus: 'failed',
+      });
+    }
+  }
+
+  return { idbSuccess, lsSuccess };
+}
+
+/**
+ * Save stores array to storage (invokes saveStoresToStorageAsync in background)
+ */
+export function saveStoresToStorage(stores: StoreProfile[]): void {
+  saveStoresToStorageAsync(stores).catch((err) => {
+    console.warn('saveStoresToStorageAsync caught error:', err);
+  });
 }
 
 /**
@@ -387,6 +441,18 @@ export function upsertStore(store: StoreProfile): StoreProfile[] {
       'customRankingWeights' in store
         ? store.customRankingWeights
         : existing.customRankingWeights;
+    const resolvedAlias =
+      'modelAliasDictionary' in store
+        ? store.modelAliasDictionary
+        : existing.modelAliasDictionary;
+    const resolvedCatRates =
+      'categoryRates' in store
+        ? store.categoryRates
+        : existing.categoryRates;
+    const resolvedReused =
+      'includeReusedMachinesInStats' in store
+        ? store.includeReusedMachinesInStats
+        : existing.includeReusedMachinesInStats;
 
     stores[index] = {
       ...existing,
@@ -396,6 +462,9 @@ export function upsertStore(store: StoreProfile): StoreProfile[] {
       rateLend: rateLend || store.rateLend || existing.rateLend || 46,
       rateExchange: rateExchange || store.rateExchange || existing.rateExchange || 52,
       customRankingWeights: resolvedWeights,
+      modelAliasDictionary: resolvedAlias,
+      categoryRates: resolvedCatRates,
+      includeReusedMachinesInStats: resolvedReused,
       dailyRecords: mergedDaily,
       updatedAt: new Date().toISOString(),
     };
@@ -407,6 +476,11 @@ export function upsertStore(store: StoreProfile): StoreProfile[] {
       createdAt: new Date().toISOString(),
     });
   }
+
+  const savedStore = index >= 0 ? stores[index] : stores[stores.length - 1];
+  putStoreToIdb(savedStore).catch((err) => {
+    console.warn('Individual putStoreToIdb failed:', err);
+  });
 
   saveStoresToStorage(stores);
   return stores;
@@ -427,6 +501,18 @@ export function upsertStores(newStores: StoreProfile[]): StoreProfile[] {
         'customRankingWeights' in store
           ? store.customRankingWeights
           : existing.customRankingWeights;
+      const resolvedAlias =
+        'modelAliasDictionary' in store
+          ? store.modelAliasDictionary
+          : existing.modelAliasDictionary;
+      const resolvedCatRates =
+        'categoryRates' in store
+          ? store.categoryRates
+          : existing.categoryRates;
+      const resolvedReused =
+        'includeReusedMachinesInStats' in store
+          ? store.includeReusedMachinesInStats
+          : existing.includeReusedMachinesInStats;
 
       stores[index] = {
         ...existing,
@@ -436,6 +522,9 @@ export function upsertStores(newStores: StoreProfile[]): StoreProfile[] {
         rateLend: rateLend || store.rateLend || existing.rateLend || 46,
         rateExchange: rateExchange || store.rateExchange || existing.rateExchange || 52,
         customRankingWeights: resolvedWeights,
+        modelAliasDictionary: resolvedAlias,
+        categoryRates: resolvedCatRates,
+        includeReusedMachinesInStats: resolvedReused,
         dailyRecords: mergedDaily,
         updatedAt: new Date().toISOString(),
       };
@@ -457,6 +546,9 @@ export function upsertStores(newStores: StoreProfile[]): StoreProfile[] {
  * Delete a store by ID
  */
 export function deleteStore(id: string): { stores: StoreProfile[]; newActiveId: string } {
+  deleteStoreFromIdb(id).catch((err) => {
+    console.warn('deleteStoreFromIdb failed:', err);
+  });
   let stores = getSavedStores();
   stores = stores.filter((s) => s.id !== id);
   saveStoresToStorage(stores);

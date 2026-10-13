@@ -96,6 +96,63 @@ describe('calculateTargetDateRanking', () => {
       const tail7 = forecast.tailRankings.find((t) => t.tailNum === 7);
       expect(tail7?.isDateTailMatch).toBe(true);
     });
+
+    it('excludes isReusedMachines days by default, and includes them when toggle is true', () => {
+      const records = generateSyntheticDailyRecords(42, 20, 5, specialRules);
+      // Mark half of the records as isReusedMachines
+      const modifiedRecords = records.map((r, idx) => ({
+        ...r,
+        isReusedMachines: idx % 2 === 0,
+      }));
+
+      const defaultForecast = calculateTargetDateRanking(
+        '2024-03-07',
+        modifiedRecords,
+        specialRules,
+        '',
+        DEFAULT_RANKING_WEIGHTS,
+        { includeReusedMachines: false }
+      );
+
+      const includedForecast = calculateTargetDateRanking(
+        '2024-03-07',
+        modifiedRecords,
+        specialRules,
+        '',
+        DEFAULT_RANKING_WEIGHTS,
+        { includeReusedMachines: true }
+      );
+
+      expect(defaultForecast).not.toBeNull();
+      expect(includedForecast).not.toBeNull();
+
+      // includedForecast evaluates twice as many historical sample days
+      const defaultSamples = defaultForecast!.modelRankings[0].sampleDays;
+      const includedSamples = includedForecast!.modelRankings[0].sampleDays;
+      expect(includedSamples).toBeGreaterThan(defaultSamples);
+    });
+
+    it('applies aliasDictionary to unify model names in ranking output', () => {
+      const records = generateSyntheticDailyRecords(42, 10, 5, specialRules);
+      const originalTopModel = records[0].models[0].modelName;
+
+      const aliasForecast = calculateTargetDateRanking(
+        '2024-03-07',
+        records,
+        specialRules,
+        '',
+        DEFAULT_RANKING_WEIGHTS,
+        {
+          aliasDictionary: {
+            [originalTopModel]: '★正規化看板機種★',
+          },
+        }
+      );
+
+      expect(aliasForecast).not.toBeNull();
+      const mapped = aliasForecast!.modelRankings.find((m) => m.modelName === '★正規化看板機種★');
+      expect(mapped).toBeDefined();
+    });
   });
 
   describe('golden snapshot regression baseline (合成データ60日×15機種)', () => {

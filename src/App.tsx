@@ -3,24 +3,41 @@ import { StoreProfile, MonthlyStat, DailyRecord, RankingWeights } from './data/t
 import { Header, ProfitModelType, UnitMode } from './components/Header';
 import { KpiCards } from './components/KpiCards';
 import { ProfitChart } from './components/ProfitChart';
-import { ModelDeepAnalysis } from './components/ModelDeepAnalysis';
 import { HighPayoutAnalysis } from './components/HighPayoutAnalysis';
 import { TailNumberAnalysis } from './components/TailNumberAnalysis';
 import { DayOfWeekAnalysis } from './components/DayOfWeekAnalysis';
 import { SpecialDayPatterns } from './components/SpecialDayPatterns';
 import { MonthlyTable } from './components/MonthlyTable';
-import { HeatmapAnalysis } from './components/HeatmapAnalysis';
 import { DailyModal } from './components/DailyModal';
-import { StoreManagerModal } from './components/StoreManagerModal';
 import { ConfirmModal } from './components/ConfirmModal';
 import { ModelMultiSelectModal } from './components/ModelMultiSelectModal';
-import { TargetDateRanking } from './components/TargetDateRanking';
-import { AccuracyValidation } from './components/AccuracyValidation';
-import { StoreComparison } from './components/StoreComparison';
-import { CrossStoreTarget } from './components/CrossStoreTarget';
+import { StorageToast } from './components/StorageToast';
+
+const StoreManagerModal = React.lazy(() =>
+  import('./components/StoreManagerModal').then((m) => ({ default: m.StoreManagerModal }))
+);
+const TargetDateRanking = React.lazy(() =>
+  import('./components/TargetDateRanking').then((m) => ({ default: m.TargetDateRanking }))
+);
+const AccuracyValidation = React.lazy(() =>
+  import('./components/AccuracyValidation').then((m) => ({ default: m.AccuracyValidation }))
+);
+const StoreComparison = React.lazy(() =>
+  import('./components/StoreComparison').then((m) => ({ default: m.StoreComparison }))
+);
+const CrossStoreTarget = React.lazy(() =>
+  import('./components/CrossStoreTarget').then((m) => ({ default: m.CrossStoreTarget }))
+);
+const ModelDeepAnalysis = React.lazy(() =>
+  import('./components/ModelDeepAnalysis').then((m) => ({ default: m.ModelDeepAnalysis }))
+);
+const HeatmapAnalysis = React.lazy(() =>
+  import('./components/HeatmapAnalysis').then((m) => ({ default: m.HeatmapAnalysis }))
+);
 import { processStoreData, aggregateStoreModels } from './utils/dataEngine';
 import { parseSlorepoHtml, parseRatesFromExchangeRate } from './utils/htmlParser';
 import { parseSpecialDayRulesFromText } from './utils/specialDayRules';
+import { parseStoresFromBackupJson, mergeImportedStores } from './utils/storeBackup';
 import {
   ModelPresetMode,
   filterDailyRecordsByModels,
@@ -94,6 +111,12 @@ export default function App() {
           ...existing,
           dailyRecords: mergedDaily,
           totalMachinesApprox: Math.max(existing.totalMachinesApprox || 0, s.totalMachinesApprox || 0),
+          islandConfig: existing.islandConfig || s.islandConfig,
+          islandDefinitions: existing.islandDefinitions || s.islandDefinitions,
+          modelAliasDictionary: existing.modelAliasDictionary || s.modelAliasDictionary,
+          categoryRates: existing.categoryRates || s.categoryRates,
+          includeReusedMachinesInStats: existing.includeReusedMachinesInStats ?? s.includeReusedMachinesInStats,
+          customRankingWeights: existing.customRankingWeights || s.customRankingWeights,
           updatedAt: new Date().toISOString(),
         };
       }
@@ -493,6 +516,28 @@ export default function App() {
   const handleDirectMultipleHtmlImport = async (files: FileList | File[]) => {
     setEmptyError('');
     if (!files || files.length === 0) return;
+
+    const fileList = Array.from(files);
+    if (fileList.length === 1 && fileList[0].name.toLowerCase().endsWith('.json')) {
+      setEmptyIsLoading(true);
+      setEmptyStatusText('JSONバックアップを解析中...');
+      try {
+        const text = await fileList[0].text();
+        const res = parseStoresFromBackupJson(text);
+        if (!res.success || res.importedStores.length === 0) {
+          setEmptyError(res.error || 'JSONファイルの解析に失敗しました。');
+          return;
+        }
+        const merged = mergeImportedStores(stores, res.importedStores);
+        handleSaveStores(merged, res.importedStores[0]?.id);
+      } catch (err: any) {
+        setEmptyError(`JSON読み込みエラー: ${err?.message || err}`);
+      } finally {
+        setEmptyIsLoading(false);
+      }
+      return;
+    }
+
     setEmptyIsLoading(true);
     setEmptyStatusText(`ファイルを読み込み中... (0/${files.length}件)`);
     setEmptyProgressPercent(5);
@@ -646,7 +691,7 @@ export default function App() {
                     }
                   }}
                   multiple
-                  accept=".csv,.tsv,.txt,.html,.htm,text/csv,text/html,text/plain"
+                  accept=".csv,.tsv,.txt,.html,.htm,.json,text/csv,text/html,text/plain,application/json"
                   className="hidden"
                 />
                 <div className="w-14 h-14 rounded-full bg-amber-100 flex items-center justify-center text-amber-600 shadow-2xs">
@@ -675,10 +720,10 @@ export default function App() {
                   ) : (
                     <>
                       <p className="text-sm font-bold text-slate-800">
-                        ここにみんレポ台番CSVまたはスロレポHTMLファイルをドラッグ＆ドロップ（複数ファイル一括対応）
+                        ここにみんレポ台番CSV・スロレポHTML・JSONバックアップファイルをドラッグ＆ドロップ（複数一括対応）
                       </p>
                       <p className="text-xs text-slate-500 mt-1">
-                        またはクリックしてパソコンからファイルを選択（ShiftやCtrlキーで複数選択可能）
+                        またはクリックしてファイルを選択（ShiftやCtrlキーで複数選択可能・JSON復元にも対応）
                       </p>
                     </>
                   )}
@@ -1093,6 +1138,15 @@ export default function App() {
           })}
         </div>
 
+        {/* Tab Contents with React.Suspense for Code-Split Lazy Loaded Modules */}
+        <React.Suspense
+          fallback={
+            <div className="p-16 flex flex-col items-center justify-center min-h-[360px] text-slate-400 gap-3">
+              <Loader2 className="w-8 h-8 animate-spin text-amber-500" />
+              <p className="text-xs font-semibold text-slate-500">モジュールを読み込み中...</p>
+            </div>
+          }
+        >
         {/* TAB 1: 概要 (KPI と月別推移グラフ) */}
         {activeTab === 'overview' && (
           <div className="space-y-4 animate-in fade-in duration-150">
@@ -1150,6 +1204,8 @@ export default function App() {
               oldEventDays={currentStore.oldEventDays}
               customWeights={currentStore.customRankingWeights}
               islandConfig={currentStore.islandConfig}
+              includeReusedMachines={currentStore.includeReusedMachinesInStats}
+              aliasDictionary={currentStore.modelAliasDictionary}
               onNavigateToValidation={() => setActiveTab('validation')}
               onOpenStoreManager={() => setIsStoreModalOpen(true)}
             />
@@ -1288,6 +1344,7 @@ export default function App() {
             />
           </div>
         )}
+        </React.Suspense>
       </main>
 
       {/* Daily Records Modal */}
@@ -1304,18 +1361,22 @@ export default function App() {
       )}
 
       {/* Store Manager & Data Import Modal */}
-      <StoreManagerModal
-        isOpen={isStoreModalOpen}
-        onClose={() => setIsStoreModalOpen(false)}
-        stores={stores}
-        activeStoreId={activeStoreIdState}
-        onSelectStore={handleSelectStore}
-        onSaveStore={handleSaveStore}
-        onSaveStores={handleSaveStores}
-        onUpdateStore={handleUpdateStore}
-        onDeleteStore={handleDeleteStore}
-        onResetAllStores={handleResetAllStores}
-      />
+      {isStoreModalOpen && (
+        <React.Suspense fallback={null}>
+          <StoreManagerModal
+            isOpen={isStoreModalOpen}
+            onClose={() => setIsStoreModalOpen(false)}
+            stores={stores}
+            activeStoreId={activeStoreIdState}
+            onSelectStore={handleSelectStore}
+            onSaveStore={handleSaveStore}
+            onSaveStores={handleSaveStores}
+            onUpdateStore={handleUpdateStore}
+            onDeleteStore={handleDeleteStore}
+            onResetAllStores={handleResetAllStores}
+          />
+        </React.Suspense>
+      )}
 
       {/* Confirm Reset All Stores Modal */}
       <ConfirmModal
@@ -1360,6 +1421,9 @@ export default function App() {
           }}
         />
       )}
+
+      {/* Persistent Storage Status Toast Notifications */}
+      <StorageToast />
     </div>
   );
 }

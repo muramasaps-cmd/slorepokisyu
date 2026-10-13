@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { DailyRecord, SpecialDayRules, RankingWeights } from '../data/types';
 import {
   calculateTargetDateRanking,
@@ -42,6 +42,8 @@ interface TargetDateRankingProps {
   oldEventDays?: string;
   customWeights?: RankingWeights;
   islandConfig?: string;
+  includeReusedMachines?: boolean;
+  aliasDictionary?: Record<string, string>;
   onNavigateToValidation?: () => void;
   onOpenStoreManager?: () => void;
 }
@@ -61,18 +63,36 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
   oldEventDays = '',
   customWeights,
   islandConfig,
+  includeReusedMachines = false,
+  aliasDictionary,
   onNavigateToValidation,
   onOpenStoreManager,
 }) => {
   const [modelFilter, setModelFilter] = useState<ModelFilterType>('all');
   const [modelSort, setModelSort] = useState<ModelSortType>('score');
   const [expandedModel, setExpandedModel] = useState<string | null>(null);
+  const [includeReusedState, setIncludeReusedState] = useState<boolean>(includeReusedMachines);
+
+  // Sync state if prop changes
+  useEffect(() => {
+    setIncludeReusedState(includeReusedMachines);
+  }, [includeReusedMachines]);
 
   // Compute forecast for target date
   const forecast = useMemo<TargetDateForecast | null>(() => {
     if (!targetDate) return null;
-    return calculateTargetDateRanking(targetDate, dailyRecords, specialDayRules, oldEventDays, customWeights);
-  }, [targetDate, dailyRecords, specialDayRules, oldEventDays, customWeights]);
+    return calculateTargetDateRanking(
+      targetDate,
+      dailyRecords,
+      specialDayRules,
+      oldEventDays,
+      customWeights,
+      {
+        includeReusedMachines: includeReusedState,
+        aliasDictionary,
+      }
+    );
+  }, [targetDate, dailyRecords, specialDayRules, oldEventDays, customWeights, includeReusedState, aliasDictionary]);
 
   if (!targetDate || !forecast) {
     return null;
@@ -215,6 +235,21 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
                   <ArrowRight className="w-3 h-3 text-slate-400" />
                 </button>
               ) : null}
+
+              {/* 台数補完日トグル (isReusedMachines) */}
+              <button
+                type="button"
+                onClick={() => setIncludeReusedState((prev) => !prev)}
+                className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer border ${
+                  includeReusedState
+                    ? 'bg-amber-950/70 text-amber-300 border-amber-600/70 hover:bg-amber-900/80'
+                    : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+                }`}
+                title="台数補完日（isReusedMachines）を予測データに含めるかを切り替え（既定: オフ＝機種別・台番別データがある日のみ使用）"
+              >
+                <span className={`w-2 h-2 rounded-full ${includeReusedState ? 'bg-amber-400' : 'bg-slate-500'}`} />
+                <span>台数補完日: {includeReusedState ? '予測に含める' : '除外（実データ優先）'}</span>
+              </button>
             </div>
 
             <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2.5">
@@ -672,6 +707,8 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
         specialDayRules={specialDayRules}
         customWeights={customWeights}
         islandConfig={islandConfig}
+        includeReusedMachines={includeReusedState}
+        aliasDictionary={aliasDictionary}
         onOpenStoreManager={onOpenStoreManager}
       />
 

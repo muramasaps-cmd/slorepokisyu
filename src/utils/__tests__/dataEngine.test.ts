@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { calculateDayOfWeek, JAPANESE_DAYS } from '../dataEngine';
+import { calculateDayOfWeek, JAPANESE_DAYS, parseSlotDataInput } from '../dataEngine';
 
 describe('calculateDayOfWeek', () => {
   describe('invalid date strings return null', () => {
@@ -45,5 +45,46 @@ describe('calculateDayOfWeek', () => {
       expect(result).not.toBeNull();
       expect(JAPANESE_DAYS).toContain(result);
     });
+  });
+});
+
+describe('parseSlotDataInput duplicate date resolution', () => {
+  it('resolves duplicate dates in CSV using mergeDailyRecords quality score logic', () => {
+    // Two rows with the same date 2024-05-15:
+    // Row 1: date only, minimal fields (quality score is lower)
+    // Row 2: contains win rate and higher machine count and notable memo (higher quality)
+    const csvContent = [
+      '日付,台平均差枚,平均ゲーム数,総台数,勝率(%),特日フラグ,備考',
+      '2024-05-15,+50,3000,100,,,', // lower quality
+      '2024-05-15,+80,6500,200,55.0,特日,良データ取込', // higher quality
+    ].join('\n');
+
+    const { records, errors } = parseSlotDataInput(csvContent);
+    expect(errors).toEqual([]);
+    expect(records.length).toBe(1);
+
+    // Should retain the higher-quality record (Row 2)
+    const r = records[0];
+    expect(r.date).toBe('2024-05-15');
+    expect(r.totalMachines).toBe(200);
+    expect(r.avgDiffCoins).toBe(80);
+    expect(r.avgGames).toBe(6500);
+    expect(r.winRate).toBe(55.0);
+    expect(r.notable).toBe('良データ取込');
+  });
+
+  it('preserves higher quality record regardless of whether it appears first or second', () => {
+    // Reverse order: higher quality appears first, lower quality appears second
+    const csvContent = [
+      '日付,台平均差枚,平均ゲーム数,総台数,勝率(%),特日フラグ,備考',
+      '2024-05-15,+80,6500,200,55.0,特日,良データ取込', // higher quality first
+      '2024-05-15,+50,3000,100,,,', // lower quality second
+    ].join('\n');
+
+    const { records } = parseSlotDataInput(csvContent);
+    expect(records.length).toBe(1);
+    expect(records[0].totalMachines).toBe(200);
+    expect(records[0].avgDiffCoins).toBe(80);
+    expect(records[0].winRate).toBe(55.0);
   });
 });

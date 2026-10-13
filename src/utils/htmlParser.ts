@@ -531,7 +531,7 @@ export function parseAnaSloDailyHtml(
         if (row.querySelector('th')) return;
         const tds = Array.from(row.querySelectorAll('td'));
         if (tds.length >= 4) {
-          const mName = tds[0].textContent?.trim() || '';
+          const mName = normalizeModelName(tds[0].textContent || '');
           if (!mName || mName.includes('機種名') || mName.includes('平均')) return;
 
           const machNum = parseInt(tds[1].textContent?.trim() || '0', 10);
@@ -641,7 +641,7 @@ export function parseAnaSloDailyHtml(
         const tbl = curr.tagName === 'TABLE' ? (curr as HTMLTableElement) : curr.querySelector('table');
         if (pTitle && tbl) {
           const mNameMatch = pTitle.textContent?.match(/(?:\d+位[：:])?\s*(.+)$/);
-          const mName = mNameMatch ? mNameMatch[1].trim() : pTitle.textContent?.trim() || '';
+          const mName = normalizeModelName(mNameMatch ? mNameMatch[1] : pTitle.textContent || '');
           const dataTds = Array.from(tbl.querySelectorAll('tr:nth-child(2) td, tr:not(:has(th)) td'));
           if (dataTds.length >= 4) {
             const totDiff = parseInt(dataTds[0].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
@@ -1944,7 +1944,7 @@ export function parseSlorepoHtml(htmlContent: string, fileName: string = ''): Pa
         if (tr.querySelector('th')) return;
         const tds = Array.from(tr.querySelectorAll('td'));
         if (tds.length >= 3) {
-          const mName = tds[0].textContent?.trim() || '';
+          const mName = normalizeModelName(tds[0].textContent || '');
           if (!mName || mName.includes('機種') || mName.includes('平均') || mName.includes('合計')) return;
           const diff = parseInt(tds[1].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
           const games = parseInt(tds[2].textContent?.replace(/[,+]/g, '').trim() || '0', 10);

@@ -8,6 +8,7 @@ import {
   StoreInfo,
 } from '../data/types';
 import { normalizeModelName, getStoreRatesForModel } from './modelName';
+import { mergeDailyRecords } from './storeStorage';
 
 export const JAPANESE_DAYS = ['日', '月', '火', '水', '木', '金', '土'];
 
@@ -288,14 +289,16 @@ export function processStoreData(
 
     const eventDaysCount = eventRecs.length;
     const eventTotalDiff = eventRecs.reduce((acc, r) => acc + r.totalDiffCoins, 0);
-    const eventAvgDiff = eventDaysCount > 0
-      ? Math.round((eventTotalDiff / (avgMachines * eventDaysCount)) * 10) / 10
+    const eventDailyMachines = eventRecs.reduce((acc, r) => acc + r.totalMachines, 0);
+    const eventAvgDiff = eventDailyMachines > 0
+      ? Math.round((eventTotalDiff / eventDailyMachines) * 10) / 10
       : 0;
 
     const normalDaysCount = normalRecs.length;
     const normalTotalDiff = normalRecs.reduce((acc, r) => acc + r.totalDiffCoins, 0);
-    const normalAvgDiff = normalDaysCount > 0
-      ? Math.round((normalTotalDiff / (avgMachines * normalDaysCount)) * 10) / 10
+    const normalDailyMachines = normalRecs.reduce((acc, r) => acc + r.totalMachines, 0);
+    const normalAvgDiff = normalDailyMachines > 0
+      ? Math.round((normalTotalDiff / normalDailyMachines) * 10) / 10
       : 0;
 
     cumHallCoins += hallCoinProfit;
@@ -417,7 +420,6 @@ export function parseSlotDataInput(
   }
 
   const parsedRecords: DailyRecord[] = [];
-  const dateSet = new Set<string>();
 
   for (let i = 1; i < lines.length; i++) {
     const rawLine = lines[i].trim();
@@ -447,11 +449,6 @@ export function parseSlotDataInput(
     const day = parseInt(dateMatch[3], 10);
     const formattedDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     const yearMonth = `${year}-${String(month).padStart(2, '0')}`;
-
-    if (dateSet.has(formattedDate)) {
-      continue; // skip duplicate dates
-    }
-    dateSet.add(formattedDate);
 
     // Machines
     let totalMachines = defaultMachines;
@@ -553,11 +550,11 @@ export function parseSlotDataInput(
     });
   }
 
-  // Sort chronological
-  parsedRecords.sort((a, b) => a.date.localeCompare(b.date));
+  // Deduplicate and resolve duplicate dates using unified quality score logic
+  const mergedRecords = mergeDailyRecords([], parsedRecords);
 
   return {
-    records: parsedRecords,
+    records: mergedRecords,
     headersFound: headers,
     errors,
   };

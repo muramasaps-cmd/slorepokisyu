@@ -6,15 +6,8 @@ import {
   DEFAULT_RANKING_WEIGHTS,
 } from './targetRankingEngine';
 import { isAType, isJuggler } from './modelFilterUtils';
-
-export const HIGH_SETTING_THRESHOLDS = {
-  MIN_GAMES: 2000,
-  MIN_PAYOUT_RATE: 108.0,
-  MIN_DIFF_COINS: 1500,
-  LARGE_WIN_DIFF_COINS: 2500,
-  A_TYPE_MIN_RB_COUNT: 8,
-  A_TYPE_MAX_RB_DENOMINATOR: 280, // games / rb <= 280
-} as const;
+import { HIGH_SETTING_THRESHOLDS } from './highSettingConfig';
+export { HIGH_SETTING_THRESHOLDS } from './highSettingConfig';
 
 export interface MachineRankingWeights {
   diffWeight: number; // pts per diff coin (default 0.04)
@@ -42,6 +35,8 @@ export interface TargetMachineRankingOptions {
   recentStateWeight?: number; // overrides weights.recentStateWeight (default 0)
   minEvidenceDays?: number; // minimum total evidence days to include in rankings
   rankingWeights?: RankingWeights; // custom weights for underlying model score engine
+  /** 直近N日以内に出現した台も対象にする（既定値: undefined = 基準日当日に存在した台のみ） */
+  activeWithinDays?: number;
 }
 
 export type MachineConfidenceLevel = '高' | '中' | '低';
@@ -101,6 +96,12 @@ export interface TargetMachineRankingResult {
   dayTail: number;
   primaryCohortCount: number;
   rankings: TargetMachineScore[];
+  /** 除外された非現役台（撤去台等）の件数 */
+  excludedInactiveCount?: number;
+  /** 現役判定に用いた直近基準営業日 (YYYY-MM-DD) */
+  referenceDate?: string | null;
+  /** 日付不正等のエラー理由 */
+  errorReason?: string;
 }
 
 /**
@@ -261,25 +262,88 @@ export function calculateTargetMachineRanking(
       ? options.recentStateWeight
       : mergedWeights.recentStateWeight;
 
+  // 0. Validate targetDate format
+  const isValidDateFormat = /^\d{4}-\d{2}-\d{2}$/.test(targetDate);
+  const parsedTargetDate = new Date(targetDate);
+  if (!isValidDateFormat || isNaN(parsedTargetDate.getTime())) {
+    return {
+      targetDate,
+      dayOfWeek: '',
+      isSpecialDay: false,
+      dayTail: 0,
+      primaryCohortCount: 0,
+      rankings: [],
+      excludedInactiveCount: 0,
+      referenceDate: null,
+      errorReason: `無効な日付形式です: "${targetDate}" (YYYY-MM-DD 形式で指定してください)`,
+    };
+  }
+
   // 1. Strictly use historical records strictly before targetDate (NO FUTURE DATA)
   const pastRecords = (dailyRecords || []).filter((r) => r.date < targetDate);
   pastRecords.sort((a, b) => a.date.localeCompare(b.date));
 
   // Determine target date metadata
   const cohortResult = extractTargetCohorts(targetDate, pastRecords, specialDayRules);
-  const dow = cohortResult?.dow || '月';
-  const isSpecial = cohortResult?.isSpecial || false;
-  const dayTail = cohortResult?.dayTail || 0;
-  const primaryCohort = cohortResult?.primaryCohort || [];
+  if (!cohortResult || !cohortResult.dow) {
+    return {
+      targetDate,
+      dayOfWeek: '',
+      isSpecialDay: false,
+      dayTail: 0,
+      primaryCohortCount: 0,
+      rankings: [],
+      excludedInactiveCount: 0,
+      referenceDate: null,
+      errorReason: `コホート抽出に失敗しました (日付: ${targetDate})`,
+    };
+  }
+  const dow = cohortResult.dow;
+  const isSpecial = cohortResult.isSpecial || false;
+  const dayTail = cohortResult.dayTail || 0;
+  const primaryCohort = cohortResult.primaryCohort || [];
 
-  if (pastRecords.length === 0 || primaryCohort.length === 0) {
+  // Determine reference business day (直近の営業日)
+  // 対象日より前で、台番データ(machines)が存在する直近の営業日を探す
+  const daysWithMachines = pastRecords.filter(
+    (r) => r.machines && r.machines.length > 0
+  );
+  const referenceRecord =
+    daysWithMachines.length > 0 ? daysWithMachines[daysWithMachines.length - 1] : null;
+  const referenceDate = referenceRecord?.date ?? null;
+
+  // Active machines determination
+  const activeMachineNums = new Set<number>();
+  const activeWithinDays = options?.activeWithinDays;
+
+  if (activeWithinDays !== undefined && activeWithinDays > 0) {
+    // 直近N日以内に出現した台も対象にする
+    const cutoffDateObj = new Date(parsedTargetDate);
+    cutoffDateObj.setDate(cutoffDateObj.getDate() - activeWithinDays);
+    const cutoffDateStr = cutoffDateObj.toISOString().slice(0, 10);
+
+    for (let i = pastRecords.length - 1; i >= 0; i--) {
+      const rec = pastRecords[i];
+      if (rec.date < cutoffDateStr) break;
+      if (rec.machines) {
+        rec.machines.forEach((m) => activeMachineNums.add(m.machineNum));
+      }
+    }
+  } else if (referenceRecord && referenceRecord.machines) {
+    // 既定: 基準日に存在した台のみ
+    referenceRecord.machines.forEach((m) => activeMachineNums.add(m.machineNum));
+  }
+
+  if (pastRecords.length === 0 || primaryCohort.length === 0 || activeMachineNums.size === 0) {
     return {
       targetDate,
       dayOfWeek: dow,
       isSpecialDay: isSpecial,
       dayTail,
-      primaryCohortCount: 0,
+      primaryCohortCount: primaryCohort.length,
       rankings: [],
+      excludedInactiveCount: 0,
+      referenceDate,
     };
   }
 
@@ -369,9 +433,17 @@ export function calculateTargetMachineRanking(
   // 5. Evaluate each active machine
   const scoredMachines: TargetMachineScore[] = [];
   const minEvidenceDays = options?.minEvidenceDays ?? 1;
+  let excludedInactiveCount = 0;
 
   machineDataMap.forEach(({ machineNum, currentModel, history }) => {
     if (!currentModel || history.length === 0) return;
+
+    // Check if machine is active according to reference date / activeWithinDays
+    if (!activeMachineNums.has(machineNum)) {
+      excludedInactiveCount++;
+      return;
+    }
+
     if (history.length < minEvidenceDays) return;
 
     // Segment machine history into cohort and non-cohort days
@@ -561,5 +633,7 @@ export function calculateTargetMachineRanking(
     dayTail,
     primaryCohortCount: primaryCohort.length,
     rankings: scoredMachines,
+    excludedInactiveCount,
+    referenceDate,
   };
 }

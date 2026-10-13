@@ -223,6 +223,12 @@ describe('targetMachineRanking engine', () => {
           { machineNum: 101, modelName: 'マイジャグラーV', games: 6000, diff: 500 },
           { machineNum: 102, modelName: 'マイジャグラーV', games: 6000, diff: 3000 },
         ], true),
+        // Reference day where 103 is present as an active machine, but not a special day
+        createMockDailyRecord('2026-05-16', [
+          { machineNum: 101, modelName: 'マイジャグラーV', games: 3000, diff: 100 },
+          { machineNum: 102, modelName: 'マイジャグラーV', games: 3000, diff: 100 },
+          { machineNum: 103, modelName: 'マイジャグラーV', games: 3000, diff: 100 },
+        ]),
       ];
 
       const result = calculateTargetMachineRanking(targetDate, records, specialRules);
@@ -301,6 +307,120 @@ describe('targetMachineRanking engine', () => {
       ];
       const res2 = calculateTargetMachineRanking('2026-05-15', emptyMachineRecords);
       expect(res2.rankings).toEqual([]);
+    });
+
+    it('returns empty result with errorReason when date is invalid (no dow || "月")', () => {
+      const records: DailyRecord[] = [
+        createMockDailyRecord('2026-05-14', [
+          { machineNum: 101, modelName: 'マイジャグラーV', games: 5000, diff: 500 },
+        ]),
+      ];
+      const res = calculateTargetMachineRanking('invalid-date', records, specialRules);
+      expect(res.rankings).toEqual([]);
+      expect(res.errorReason).toBeDefined();
+      expect(res.errorReason).toMatch(/(不正|無効)な日付形式/);
+    });
+  });
+
+  describe('8. プロンプト12: 現役台判定・撤去台除外テスト (台99再現テスト)', () => {
+    it('excludes retired machine 99 that only existed in first 8 days and was absent for next 12 days', () => {
+      // 20 days of data (Day 1..20):
+      // Days 1..8: Machine 99 exists with massive positive diff (+4000)
+      // Days 9..20 (12 days): Machine 99 is removed/absent. Machines 101, 102 continue to operate.
+      const records: DailyRecord[] = [];
+      for (let i = 1; i <= 20; i++) {
+        const dStr = `2026-05-${String(i).padStart(2, '0')}`;
+        const machines: DailyMachineRecord[] = [
+          { machineNum: 101, modelName: 'マイジャグラーV', games: 5000, diff: 300 },
+          { machineNum: 102, modelName: 'マイジャグラーV', games: 5000, diff: 200 },
+        ];
+        if (i <= 8) {
+          machines.push({
+            machineNum: 99,
+            modelName: 'マイジャグラーV',
+            games: 7000,
+            diff: 4000,
+          });
+        }
+        records.push(createMockDailyRecord(dStr, machines));
+      }
+
+      const targetDate = '2026-05-21';
+
+      // Default: Only machines present on reference date (2026-05-20) are considered active
+      const resultDefault = calculateTargetMachineRanking(targetDate, records, specialRules);
+      expect(resultDefault.rankings.some((r) => r.machineNum === 99)).toBe(false);
+      expect(resultDefault.excludedInactiveCount).toBeGreaterThanOrEqual(1);
+      expect(resultDefault.referenceDate).toBe('2026-05-20');
+
+      // With activeWithinDays: 15 (machine 99 appeared 13 days ago on May 8th, so within 15 days)
+      const resultWithWindow = calculateTargetMachineRanking(
+        targetDate,
+        records,
+        specialRules,
+        undefined,
+        { activeWithinDays: 15 }
+      );
+      expect(resultWithWindow.rankings.some((r) => r.machineNum === 99)).toBe(true);
+    });
+
+    it('strictly uses only current model history when a machine changed models', () => {
+      // Machine 201 was 'アイムジャグラーEX' with huge diff on Days 1..10
+      // Machine 201 was changed to 'スマスロ北斗の拳' on Days 11..15 with modest diff
+      const records: DailyRecord[] = [];
+      for (let i = 1; i <= 15; i++) {
+        const dStr = `2026-05-${String(i).padStart(2, '0')}`;
+        const isOldModel = i <= 10;
+        records.push(
+          createMockDailyRecord(dStr, [
+            {
+              machineNum: 201,
+              modelName: isOldModel ? 'アイムジャグラーEX' : 'スマスロ北斗の拳',
+              games: 6000,
+              diff: isOldModel ? 3000 : 500,
+            },
+          ])
+        );
+      }
+
+      const historyMap = extractMachineHistoryByModelChange(records);
+      const machine201 = historyMap.get(201);
+      expect(machine201).toBeDefined();
+      expect(machine201?.currentModel).toBe('スマスロ北斗の拳');
+      expect(machine201?.history).toHaveLength(5);
+      expect(machine201?.history.every((h) => h.machine.modelName === 'スマスロ北斗の拳')).toBe(true);
+    });
+
+    it('produces identical rankings even when records on or after evaluation date are drastically tampered', () => {
+      const recordsBefore: DailyRecord[] = [
+        createMockDailyRecord('2026-05-10', [
+          { machineNum: 101, modelName: 'マイジャグラーV', games: 5000, diff: 500 },
+          { machineNum: 102, modelName: 'マイジャグラーV', games: 5000, diff: 300 },
+        ]),
+        createMockDailyRecord('2026-05-11', [
+          { machineNum: 101, modelName: 'マイジャグラーV', games: 5000, diff: 600 },
+          { machineNum: 102, modelName: 'マイジャグラーV', games: 5000, diff: 400 },
+        ]),
+      ];
+
+      const targetDate = '2026-05-12';
+      const originalResult = calculateTargetMachineRanking(targetDate, recordsBefore, specialRules);
+
+      const tamperedRecords: DailyRecord[] = [
+        ...recordsBefore,
+        createMockDailyRecord('2026-05-12', [
+          { machineNum: 102, modelName: 'マイジャグラーV', games: 9000, diff: 20000 },
+        ]),
+        createMockDailyRecord('2026-05-13', [
+          { machineNum: 102, modelName: 'マイジャグラーV', games: 9000, diff: 30000 },
+        ]),
+      ];
+
+      const tamperedResult = calculateTargetMachineRanking(targetDate, tamperedRecords, specialRules);
+      expect(originalResult.rankings.map((r) => r.machineNum)).toEqual(
+        tamperedResult.rankings.map((r) => r.machineNum)
+      );
+      expect(originalResult.rankings[0].totalScore).toBeCloseTo(tamperedResult.rankings[0].totalScore, 4);
     });
   });
 });

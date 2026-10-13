@@ -1012,10 +1012,106 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
                         {activeEval.evaluatedDaysCount}日
                       </div>
                       <span className="text-[11px] text-slate-400">
-                        {machineFilterMode === 'withFilter' ? '根拠3日以上除外あり' : '除外なし全台'}
+                        欠測率: {activeEval.avgMissingRate ?? 0}% ({activeEval.totalMissingCount ?? 0}台欠測)
                       </span>
                     </div>
                   </div>
+
+                  {/* Prompt 14: Ablation Study Comparison Table (台番スコアの要素検証) */}
+                  {machineBacktestResult.ablationResults && machineBacktestResult.ablationResults.length > 0 && (
+                    <div className="bg-white rounded-xl border border-indigo-200 overflow-hidden shadow-2xs">
+                      <div className="px-4 py-2.5 bg-gradient-to-r from-indigo-900 to-slate-900 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div>
+                          <span className="text-xs font-bold flex items-center gap-1.5 text-indigo-100">
+                            <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-300" />
+                            台番スコア要素検証（アブレーション分析）
+                          </span>
+                          <span className="text-[11px] text-indigo-200 block sm:inline">
+                            同一期間・同一Top-{machineTopN}台における各要素の寄与と95%信頼区間
+                          </span>
+                        </div>
+                        <span className="text-[10px] bg-indigo-500/30 border border-indigo-400/30 text-indigo-100 px-2 py-0.5 rounded font-mono">
+                          全{activeEval.evaluatedDaysCount}日検証
+                        </span>
+                      </div>
+
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs text-left">
+                          <thead className="bg-slate-100/80 text-slate-700 font-bold border-b border-slate-200">
+                            <tr>
+                              <th className="py-2 px-3">評価パターン</th>
+                              <th className="py-2 px-3 text-right">平均リフト</th>
+                              <th className="py-2 px-3 text-right">95%信頼区間</th>
+                              <th className="py-2 px-3 text-right">勝率</th>
+                              <th className="py-2 px-3 text-right">全要素対比 (Δ)</th>
+                              <th className="py-2 px-3">要素診断・重み見直し案</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 font-mono">
+                            {machineBacktestResult.ablationResults.map((ab) => (
+                              <tr
+                                key={ab.variantKey}
+                                className={ab.variantKey === 'all' ? 'bg-amber-50/40 font-bold' : 'hover:bg-slate-50'}
+                              >
+                                <td className="py-2 px-3 font-sans text-slate-900 font-bold">
+                                  {ab.variantName}
+                                  {ab.variantKey === 'all' && (
+                                    <span className="ml-1.5 text-[10px] bg-amber-200 text-amber-900 px-1 py-0.2 rounded font-sans">
+                                      基準
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-2 px-3 text-right font-black">
+                                  <span className={ab.avgLift >= 0 ? 'text-emerald-700' : 'text-rose-600'}>
+                                    {ab.avgLift >= 0 ? `+${ab.avgLift}` : ab.avgLift}枚
+                                  </span>
+                                </td>
+                                <td className="py-2 px-3 text-right text-slate-700 text-[11px]">
+                                  [{ab.ci95[0] >= 0 ? '+' : ''}{ab.ci95[0]}, {ab.ci95[1] >= 0 ? '+' : ''}{ab.ci95[1]}]
+                                </td>
+                                <td className="py-2 px-3 text-right text-slate-800">
+                                  {ab.winRate}%
+                                </td>
+                                <td className="py-2 px-3 text-right">
+                                  {ab.variantKey === 'all' ? (
+                                    <span className="text-slate-400 font-sans">-</span>
+                                  ) : (
+                                    <span
+                                      className={`font-bold ${
+                                        ab.liftDelta > 0
+                                          ? 'text-emerald-600'
+                                          : ab.liftDelta < 0
+                                          ? 'text-rose-600'
+                                          : 'text-slate-500'
+                                      }`}
+                                    >
+                                      {ab.liftDelta >= 0 ? `+${ab.liftDelta}` : ab.liftDelta}枚
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-2 px-3 font-sans text-[11px]">
+                                  {ab.variantKey === 'all' ? (
+                                    <span className="text-slate-500">
+                                      {ab.ci95[0] > 0 ? '優位性あり (CI下限>0)' : '優位性未確認'}
+                                    </span>
+                                  ) : ab.recommendZeroWeight ? (
+                                    <span className="inline-flex items-center gap-1 text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                                      <Info className="w-3 h-3 text-amber-600 shrink-0" />
+                                      リフト低下なし（既定重み0への見直し案あり・自動変更なし）
+                                    </span>
+                                  ) : (
+                                    <span className="text-emerald-700">
+                                      除去でリフト{Math.abs(ab.liftDelta)}枚低下（予測に寄与あり）
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Baseline Comparison Table */}
                   <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">

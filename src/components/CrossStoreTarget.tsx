@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { StoreProfile } from '../data/types';
 import {
   calculateCrossStoreRanking,
@@ -7,7 +7,9 @@ import {
   CrossStoreModelRank,
   CrossStoreMachineRank,
 } from '../utils/crossStoreRanking';
+import { runMachineBacktest } from '../utils/backtestEngine';
 import { formatNumber, formatYen } from '../utils/formatters';
+import type { CrossRankingWorkerRequest, CrossRankingWorkerResponse } from '../workers/crossRankingWorker';
 import {
   Building2,
   Calendar,
@@ -22,6 +24,10 @@ import {
   ChevronDown,
   ChevronUp,
   Filter,
+  CheckCircle2,
+  HelpCircle,
+  Play,
+  RotateCw,
 } from 'lucide-react';
 
 interface CrossStoreTargetProps {
@@ -39,18 +45,52 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
   activeFilterLabel,
   isModelFilterActive,
 }) => {
-  // Target Date state: Default to tomorrow or initial target date
+  // Read initial values from URL hash if available (e.g. #targetDate=2026-05-17&stores=store1,store2)
+  const getHashParams = () => {
+    try {
+      const hash = window.location.hash.slice(1);
+      const params = new URLSearchParams(hash);
+      return {
+        date: params.get('crossDate') || null,
+        stores: params.get('crossStores') ? params.get('crossStores')!.split(',') : null,
+      };
+    } catch {
+      return { date: null, stores: null };
+    }
+  };
+
+  const hashParams = getHashParams();
+
+  // Target Date state
   const [targetDate, setTargetDate] = useState<string>(() => {
+    if (hashParams.date) return hashParams.date;
     if (initialTargetDate) return initialTargetDate;
     const tom = new Date();
     tom.setDate(tom.getDate() + 1);
     return tom.toISOString().slice(0, 10);
   });
 
-  // Selected stores (default all)
-  const [selectedStoreIds, setSelectedStoreIds] = useState<string[]>(() =>
-    stores.map((s) => s.id)
-  );
+  // Selected stores
+  const [selectedStoreIds, setSelectedStoreIds] = useState<string[]>(() => {
+    if (hashParams.stores && hashParams.stores.length > 0) {
+      const validIds = hashParams.stores.filter((id) => stores.some((s) => s.id === id));
+      if (validIds.length > 0) return validIds;
+    }
+    return stores.map((s) => s.id);
+  });
+
+  // Sync hash when targetDate or selectedStoreIds change
+  useEffect(() => {
+    try {
+      const currentHash = window.location.hash.slice(1);
+      const params = new URLSearchParams(currentHash);
+      params.set('crossDate', targetDate);
+      params.set('crossStores', selectedStoreIds.join(','));
+      window.location.hash = params.toString();
+    } catch {
+      // ignore
+    }
+  }, [targetDate, selectedStoreIds]);
 
   // Metric mode: diffCoins vs yen
   const [metricMode, setMetricMode] = useState<CrossMetricMode>('diffCoins');
@@ -61,15 +101,119 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
   // Active view: 'models' | 'machines'
   const [rankingView, setRankingView] = useState<'models' | 'machines'>('models');
 
-  // Heavy computation memoized
-  const rankingResult: CrossStoreRankingResult = useMemo(() => {
+  // Low confidence toggle (Prompt 13: 既定除外、トグルで表示)
+  const [includeLowConfidence, setIncludeLowConfidence] = useState<boolean>(false);
+
+  // Worker calculation & progress
+  const [workerProgress, setWorkerProgress] = useState<number | null>(null);
+  const workerRef = useRef<Worker | null>(null);
+
+  // Store backtest edge cache ({ [storeId]: { hasEdge: boolean; message: string; evaluatedDays: number } })
+  const [edgeCache, setEdgeCache] = useState<
+    Record<string, { hasEdge: boolean; verdictMessage: string; evaluatedDays: number }>
+  >(() => {
+    try {
+      const saved = localStorage.getItem('slorepo_cross_edge_cache');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const [testingStoreId, setTestingStoreId] = useState<string | null>(null);
+
+  const runStoreEdgeTest = (store: StoreProfile) => {
+    if (testingStoreId) return;
+    setTestingStoreId(store.id);
+    setTimeout(() => {
+      try {
+        const priorRecords = (store.dailyRecords || []).filter((r) => r.date < targetDate);
+        const res = runMachineBacktest(priorRecords, store.specialDayRules, {
+          topN: 10,
+          minEvidenceDays: 3,
+          bootstrapIterations: 1000,
+        });
+
+        const edgeInfo = {
+          hasEdge: res.withFilter.hasEdge,
+          verdictMessage: res.withFilter.verdictMessage,
+          evaluatedDays: res.evaluatedDaysCount,
+        };
+
+        setEdgeCache((prev) => {
+          const next = { ...prev, [store.id]: edgeInfo };
+          try {
+            localStorage.setItem('slorepo_cross_edge_cache', JSON.stringify(next));
+          } catch (e) {
+            console.warn('Failed to cache edge test result:', e);
+          }
+          return next;
+        });
+      } finally {
+        setTestingStoreId(null);
+      }
+    }, 50);
+  };
+
+  // Synchronous fallback / memoized ranking
+  const [workerResult, setWorkerResult] = useState<CrossStoreRankingResult | null>(null);
+
+  useEffect(() => {
+    try {
+      const worker = new Worker(
+        new URL('../workers/crossRankingWorker.ts', import.meta.url),
+        { type: 'module' }
+      );
+      workerRef.current = worker;
+
+      setWorkerProgress(20);
+
+      worker.onmessage = (e: MessageEvent<CrossRankingWorkerResponse>) => {
+        if (e.data.type === 'PROGRESS') {
+          setWorkerProgress(e.data.progress);
+        } else if (e.data.type === 'RESULT') {
+          setWorkerResult(e.data.result);
+          setWorkerProgress(null);
+        } else if (e.data.type === 'ERROR') {
+          setWorkerProgress(null);
+        }
+      };
+
+      const req: CrossRankingWorkerRequest = {
+        type: 'CALCULATE_CROSS_RANKING',
+        stores,
+        targetDate,
+        options: {
+          metricMode,
+          topModelCount: displayCount,
+          topMachineCount: displayCount,
+          selectedStoreIds,
+          includeLowConfidence,
+        },
+      };
+      worker.postMessage(req);
+
+      return () => {
+        worker.terminate();
+        workerRef.current = null;
+      };
+    } catch {
+      setWorkerProgress(null);
+    }
+  }, [stores, targetDate, metricMode, displayCount, selectedStoreIds, includeLowConfidence]);
+
+  // Synchronous calculation
+  const syncResult: CrossStoreRankingResult = useMemo(() => {
     return calculateCrossStoreRanking(stores, targetDate, {
       metricMode,
       topModelCount: displayCount,
       topMachineCount: displayCount,
       selectedStoreIds,
+      includeLowConfidence,
     });
-  }, [stores, targetDate, metricMode, displayCount, selectedStoreIds]);
+  }, [stores, targetDate, metricMode, displayCount, selectedStoreIds, includeLowConfidence]);
+
+  const rankingResult = workerResult || syncResult;
 
   const toggleStore = (id: string) => {
     if (selectedStoreIds.includes(id)) {
@@ -144,37 +288,108 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
 
         {/* Controls Toolbar: Stores selector + Metric Mode + Display count */}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 text-xs pt-1">
-          {/* Target Stores Pills */}
+          {/* Target Stores Pills with Backtest Edge Badges */}
           <div className="space-y-1.5 flex-1">
             <span className="text-[11px] font-bold text-slate-500 block uppercase tracking-wider">
-              対象店舗の選択 ({selectedStoreIds.length}/{stores.length}店舗):
+              対象店舗の選択 ({selectedStoreIds.length}/{stores.length}店舗) と台番バックテスト判定:
             </span>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-2">
               {stores.map((s) => {
                 const isSelected = selectedStoreIds.includes(s.id);
+                const edgeInfo = edgeCache[s.id];
+                const isTesting = testingStoreId === s.id;
+                const hasMach = (s.dailyRecords || []).some((r) => r.machines && r.machines.length > 0);
+
                 return (
-                  <button
+                  <div
                     key={s.id}
-                    type="button"
-                    onClick={() => toggleStore(s.id)}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
+                    className={`rounded-xl border p-1.5 flex flex-col gap-1 transition-all ${
                       isSelected
-                        ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
-                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                        ? 'bg-slate-900/5 border-slate-900/30'
+                        : 'bg-white border-slate-200 opacity-60'
                     }`}
                   >
-                    <span>{s.name}</span>
-                    <span className="text-[10px] opacity-70">
-                      ({s.exchangeRate || `${s.rateExchange || 52}枚`})
-                    </span>
-                  </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => toggleStore(s.id)}
+                        className={`px-2 py-0.5 rounded-lg text-xs font-bold border transition-all cursor-pointer flex items-center gap-1 ${
+                          isSelected
+                            ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
+                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        <span>{s.name}</span>
+                        <span className="text-[10px] opacity-70">
+                          ({s.exchangeRate || `${s.rateExchange || 52}枚`})
+                        </span>
+                      </button>
+
+                      {/* Store Edge Badge (Prompt 13 requirement 4) */}
+                      {hasMach && (
+                        <div className="flex items-center gap-1">
+                          {edgeInfo ? (
+                            <span
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-bold border flex items-center gap-0.5 ${
+                                edgeInfo.hasEdge
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                  : 'bg-slate-100 text-slate-600 border-slate-300'
+                              }`}
+                              title={edgeInfo.verdictMessage}
+                            >
+                              {edgeInfo.hasEdge ? (
+                                <>
+                                  <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                                  優位性あり
+                                </>
+                              ) : (
+                                <>
+                                  <HelpCircle className="w-2.5 h-2.5 text-slate-400" />
+                                  優位性なし
+                                </>
+                              )}
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-500 border border-slate-200">
+                              未検証
+                            </span>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => runStoreEdgeTest(s)}
+                            disabled={isTesting}
+                            className="p-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-bold border border-slate-200 cursor-pointer disabled:opacity-50"
+                            title="この店舗の台番バックテスト（優位性判定）を実行"
+                          >
+                            {isTesting ? (
+                              <RotateCw className="w-2.5 h-2.5 animate-spin" />
+                            ) : (
+                              <Play className="w-2.5 h-2.5" />
+                            )}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 );
               })}
             </div>
           </div>
 
-          {/* Right: Metric Mode Toggle & Count */}
+          {/* Right: Metric Mode Toggle & Count & Low Confidence Toggle */}
           <div className="flex flex-wrap items-center gap-2 self-start lg:self-end shrink-0">
+            {/* Low Confidence Toggle */}
+            <label className="flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer select-none bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-lg">
+              <input
+                type="checkbox"
+                checked={includeLowConfidence}
+                onChange={(e) => setIncludeLowConfidence(e.target.checked)}
+                className="rounded text-indigo-600 focus:ring-0"
+              />
+              <span className="font-bold">低信頼も表示</span>
+            </label>
+
             {/* Metric Mode Toggle */}
             <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200 font-bold">
               <button
@@ -214,6 +429,22 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
             </select>
           </div>
         </div>
+
+        {/* Worker Calculation Progress Bar */}
+        {workerProgress !== null && (
+          <div className="space-y-1 animate-in fade-in">
+            <div className="flex justify-between text-[11px] text-slate-500 font-bold">
+              <span>横断ランキングバックグラウンド計算中...</span>
+              <span>{workerProgress}%</span>
+            </div>
+            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+              <div
+                className="bg-indigo-600 h-1.5 transition-all duration-200"
+                style={{ width: `${workerProgress}%` }}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Excluded Stores Notice (if any) */}
         {rankingResult.excludedStores.length > 0 && (

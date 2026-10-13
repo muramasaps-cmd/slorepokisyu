@@ -671,12 +671,24 @@ export interface MachineBacktestDayEvaluation {
   actualAvgDiff: number;
   actualLift: number;
   actualWinRate: number;
+  missingCount?: number;
+  missingRate?: number;
   baselines: {
     randomWithinModel: MachineBaselineMetrics;
     modelAverage: MachineBaselineMetrics;
     priorDayDiff: MachineBaselineMetrics;
     randomMachine: MachineBaselineMetrics;
   };
+}
+
+export interface MachineAblationItem {
+  variantKey: string;
+  variantName: string;
+  avgLift: number;
+  ci95: [number, number];
+  winRate: number;
+  liftDelta: number;
+  recommendZeroWeight: boolean;
 }
 
 export interface MachineBacktestEvaluation {
@@ -687,6 +699,8 @@ export interface MachineBacktestEvaluation {
   avgWinRate: number;
   hallAvgDiff: number;
   hallAvgWinRate: number;
+  totalMissingCount?: number;
+  avgMissingRate?: number;
   ci95: [number, number]; // [lower, upper]
   hasEdge: boolean; // ci95[0] > 0
   verdictMessage: string;
@@ -705,6 +719,9 @@ export interface MachineBacktestResult {
   minEvidenceThreshold: number;
   withFilter: MachineBacktestEvaluation; // 根拠日数フィルタあり（閾値未満除外）
   withoutFilter: MachineBacktestEvaluation; // 根拠日数フィルタなし（全台）
+  totalMissingCount?: number;
+  avgMissingRate?: number;
+  ablationResults?: MachineAblationItem[];
 }
 
 export interface MachineBacktestOptions {
@@ -967,11 +984,20 @@ export function runMachineBacktest(
     const evaluateSelection = (
       selectedRankings: TargetMachineScore[]
     ): MachineBacktestDayEvaluation => {
-      // Keep only machines that actually played on evalDay
-      const validRankings = selectedRankings.filter((r) => dayMachinesMap.has(r.machineNum));
-      const picked = validRankings.slice(0, topN);
+      // Prompt 12 requirement:
+      // DO NOT post-filter with dayMachinesMap and then slice!
+      // Predictions are strictly chosen from ranking (top-N) before knowing evalDay appearances.
+      const candidateList = selectedRankings.slice(0, topN);
+      const selectedMachineNums = candidateList.map((c) => c.machineNum);
 
-      if (picked.length === 0) {
+      // Machines present on evalDay
+      const observedMachines = candidateList.filter((c) => dayMachinesMap.has(c.machineNum));
+      const missingCount = candidateList.length - observedMachines.length;
+      const missingRate = candidateList.length > 0
+        ? Math.round((missingCount / candidateList.length) * 1000) / 10
+        : 0;
+
+      if (observedMachines.length === 0) {
         return {
           date: evalDay.date,
           dayOfWeek: evalDay.dayOfWeek,
@@ -979,11 +1005,13 @@ export function runMachineBacktest(
           hallAvgDiff,
           hallWinRate,
           totalMachines,
-          topN,
-          selectedMachineNums: [],
+          topN: candidateList.length,
+          selectedMachineNums,
           actualAvgDiff: hallAvgDiff,
           actualLift: 0,
           actualWinRate: hallWinRate,
+          missingCount,
+          missingRate,
           baselines: {
             randomWithinModel: { avgDiff: hallAvgDiff, avgLift: 0, avgWinRate: hallWinRate },
             modelAverage: { avgDiff: hallAvgDiff, avgLift: 0, avgWinRate: hallWinRate },
@@ -993,29 +1021,27 @@ export function runMachineBacktest(
         };
       }
 
-      // Actual performance
+      // Actual performance evaluated only on observed machines on evalDay
       let actualDiffSum = 0;
       let actualWinCount = 0;
-      const selectedMachineNums: number[] = [];
 
-      for (const p of picked) {
-        selectedMachineNums.push(p.machineNum);
+      for (const p of observedMachines) {
         const actualM = dayMachinesMap.get(p.machineNum)!;
         actualDiffSum += actualM.diff;
         if (actualM.diff > 0) actualWinCount++;
       }
 
-      const actualAvgDiff = Math.round(actualDiffSum / picked.length);
+      const actualAvgDiff = Math.round(actualDiffSum / observedMachines.length);
       const actualLift = actualAvgDiff - hallAvgDiff;
-      const actualWinRate = Math.round((actualWinCount / picked.length) * 1000) / 10;
+      const actualWinRate = Math.round((actualWinCount / observedMachines.length) * 1000) / 10;
 
-      // Baseline 1: Random within same models (100 trials, seed-fixed)
+      // Baseline 1: Random within same models (100 trials, seed-fixed) evaluated for observed
       let bModelRandDiffSum = 0;
       let bModelRandWinCount = 0;
       for (let t = 0; t < trials; t++) {
         let tDiff = 0;
         let tWin = 0;
-        for (const p of picked) {
+        for (const p of observedMachines) {
           const modelMachines = modelToMachines.get(p.modelName);
           if (modelMachines && modelMachines.length > 0) {
             const mIdx = Math.floor(rng() * modelMachines.length);
@@ -1028,8 +1054,8 @@ export function runMachineBacktest(
             if (actualM.diff > 0) tWin++;
           }
         }
-        bModelRandDiffSum += tDiff / picked.length;
-        bModelRandWinCount += (tWin / picked.length) * 100;
+        bModelRandDiffSum += tDiff / observedMachines.length;
+        bModelRandWinCount += (tWin / observedMachines.length) * 100;
       }
       const baselineRandomWithinModel: MachineBaselineMetrics = {
         avgDiff: Math.round(bModelRandDiffSum / trials),
@@ -1037,10 +1063,10 @@ export function runMachineBacktest(
         avgWinRate: Math.round((bModelRandWinCount / trials) * 10) / 10,
       };
 
-      // Baseline 2: Model Average
+      // Baseline 2: Model Average evaluated for observed
       let modelAvgDiffSum = 0;
       let modelWinRateSum = 0;
-      for (const p of picked) {
+      for (const p of observedMachines) {
         const modelMachines = modelToMachines.get(p.modelName);
         if (modelMachines && modelMachines.length > 0) {
           const mSum = modelMachines.reduce((a, b) => a + b.diff, 0);
@@ -1054,9 +1080,9 @@ export function runMachineBacktest(
         }
       }
       const baselineModelAverage: MachineBaselineMetrics = {
-        avgDiff: Math.round(modelAvgDiffSum / picked.length),
-        avgLift: Math.round(modelAvgDiffSum / picked.length - hallAvgDiff),
-        avgWinRate: Math.round((modelWinRateSum / picked.length) * 10) / 10,
+        avgDiff: Math.round(modelAvgDiffSum / observedMachines.length),
+        avgLift: Math.round(modelAvgDiffSum / observedMachines.length - hallAvgDiff),
+        avgWinRate: Math.round((modelWinRateSum / observedMachines.length) * 10) / 10,
       };
 
       return {
@@ -1066,11 +1092,13 @@ export function runMachineBacktest(
         hallAvgDiff,
         hallWinRate,
         totalMachines,
-        topN: picked.length,
+        topN: candidateList.length,
         selectedMachineNums,
         actualAvgDiff,
         actualLift,
         actualWinRate,
+        missingCount,
+        missingRate,
         baselines: {
           randomWithinModel: baselineRandomWithinModel,
           modelAverage: baselineModelAverage,
@@ -1173,6 +1201,10 @@ export function runMachineBacktest(
       }${ciUpper}枚] が0をまたいでおり（または下回っており）、台番単位の予測に明確な優位性は確認されていません（偶然のばらつきの範囲内です）。`;
     }
 
+    const totalMissingCount = days.reduce((a, d) => a + (d.missingCount ?? 0), 0);
+    const avgMissingRate =
+      count > 0 ? Math.round((days.reduce((a, d) => a + (d.missingRate ?? 0), 0) / count) * 10) / 10 : 0;
+
     return {
       evaluatedDaysCount: count,
       topN,
@@ -1181,6 +1213,8 @@ export function runMachineBacktest(
       avgWinRate,
       hallAvgDiff,
       hallAvgWinRate,
+      totalMissingCount,
+      avgMissingRate,
       ci95: [ciLower, ciUpper],
       hasEdge,
       verdictMessage,
@@ -1210,11 +1244,152 @@ export function runMachineBacktest(
     };
   };
 
+  // Prompt 14: Ablation analysis over the evaluated days
+  // Variants: all, cohortDiffOnly, noHighSetting, noModelScore, noTailZoro
+  const ablationVariants: {
+    key: 'all' | 'cohortDiffOnly' | 'noHighSetting' | 'noModelScore' | 'noTailZoro';
+    name: string;
+    weights: Partial<MachineRankingWeights>;
+  }[] = [
+    {
+      key: 'all',
+      name: '全要素（既定）',
+      weights: DEFAULT_MACHINE_RANKING_WEIGHTS,
+    },
+    {
+      key: 'cohortDiffOnly',
+      name: 'コホート差枚のみ',
+      weights: {
+        ...DEFAULT_MACHINE_RANKING_WEIGHTS,
+        winRateWeight: 0,
+        highSettingWeight: 0,
+        modelScoreWeight: 0,
+        tailMatchBonus: 0,
+        zoroBonus: 0,
+        recentStateWeight: 0,
+      },
+    },
+    {
+      key: 'noHighSetting',
+      name: '高設定挙動なし',
+      weights: {
+        ...DEFAULT_MACHINE_RANKING_WEIGHTS,
+        highSettingWeight: 0,
+      },
+    },
+    {
+      key: 'noModelScore',
+      name: '機種スコアなし',
+      weights: {
+        ...DEFAULT_MACHINE_RANKING_WEIGHTS,
+        modelScoreWeight: 0,
+      },
+    },
+    {
+      key: 'noTailZoro',
+      name: '末尾・ゾロ目なし',
+      weights: {
+        ...DEFAULT_MACHINE_RANKING_WEIGHTS,
+        tailMatchBonus: 0,
+        zoroBonus: 0,
+      },
+    },
+  ];
+
+  const baseEval = aggregateEvaluation(unfilteredDays);
+  const baseAvgLift = baseEval.avgLift;
+
+  const ablationResults: MachineAblationItem[] = ablationVariants.map((variant) => {
+    if (variant.key === 'all') {
+      return {
+        variantKey: 'all',
+        variantName: variant.name,
+        avgLift: baseEval.avgLift,
+        ci95: baseEval.ci95,
+        winRate: baseEval.avgWinRate,
+        liftDelta: 0,
+        recommendZeroWeight: false,
+      };
+    }
+
+    // Run rankings for this variant over the evaluated days
+    const variantDayLifts: number[] = [];
+    let variantWinSum = 0;
+    let variantValidDayCount = 0;
+
+    for (const evalIdx of evalIndices) {
+      const evalDay = sortedRecords[evalIdx];
+      const recordsBefore = sortedRecords.slice(0, evalIdx);
+      const dayMachinesMap = new Map<number, DailyMachineRecord>();
+      (evalDay.machines || []).forEach((m) => dayMachinesMap.set(m.machineNum, m));
+      const hallAvgDiff = evalDay.avgDiffCoins ?? 0;
+
+      const ranking = calculateTargetMachineRanking(
+        evalDay.date,
+        recordsBefore,
+        specialDayRules,
+        variant.weights,
+        {
+          minEvidenceDays: 0,
+        }
+      );
+
+      const topCandidates = ranking.rankings.slice(0, topN);
+      const observed = topCandidates.filter((c) => dayMachinesMap.has(c.machineNum));
+      if (observed.length > 0) {
+        const sumDiff = observed.reduce((acc, m) => {
+          const rec = dayMachinesMap.get(m.machineNum);
+          return acc + (rec?.diff ?? 0);
+        }, 0);
+        const avgD = Math.round(sumDiff / observed.length);
+        const lift = avgD - hallAvgDiff;
+        variantDayLifts.push(lift);
+
+        const wins = observed.filter((m) => (dayMachinesMap.get(m.machineNum)?.diff ?? 0) > 0).length;
+        variantWinSum += (wins / observed.length) * 100;
+        variantValidDayCount++;
+      } else {
+        variantDayLifts.push(0);
+      }
+    }
+
+    const varAvgLift =
+      variantDayLifts.length > 0
+        ? Math.round(variantDayLifts.reduce((a, b) => a + b, 0) / variantDayLifts.length)
+        : 0;
+    const varWinRate =
+      variantValidDayCount > 0
+        ? Math.round((variantWinSum / variantValidDayCount) * 10) / 10
+        : 0;
+
+    const { ciLower, ciUpper } = computeBlockBootstrapCI(
+      variantDayLifts,
+      blockLength,
+      bootstrapIterations,
+      seed
+    );
+
+    const liftDelta = varAvgLift - baseAvgLift;
+    // If removing this feature (or keeping only cohortDiff) results in >= same lift, recommend zero weight
+    const recommendZeroWeight = liftDelta >= 0;
+
+    return {
+      variantKey: variant.key,
+      variantName: variant.name,
+      avgLift: varAvgLift,
+      ci95: [ciLower, ciUpper],
+      winRate: varWinRate,
+      liftDelta,
+      recommendZeroWeight,
+    };
+  });
+
   return {
     evaluatedDaysCount: evalIndices.length,
     topN,
     minEvidenceThreshold,
     withFilter: aggregateEvaluation(filteredDays),
-    withoutFilter: aggregateEvaluation(unfilteredDays),
+    withoutFilter: baseEval,
+    ablationResults,
   };
 }

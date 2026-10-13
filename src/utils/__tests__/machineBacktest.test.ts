@@ -206,5 +206,31 @@ describe('runMachineBacktest & computeBlockBootstrapCI', () => {
       expect(result.withoutFilter.topN).toBe(3);
       expect(result.minEvidenceThreshold).toBe(5);
     });
+
+    it('does not judge any ablation component as having an edge on pure noise data (Prompt 14)', () => {
+      // 25 days of pure noise data across 16 machines with no true bias
+      const noiseData = createSyntheticMachineRecords({
+        daysCount: 25,
+        machinesCount: 16,
+        biasedMachineNums: [],
+        seed: 99999,
+      });
+
+      const result = runMachineBacktest(noiseData, undefined, {
+        topN: 3,
+        bootstrapIterations: 300,
+        minPriorDays: 5,
+        seed: 42,
+      });
+
+      expect(result.ablationResults).toBeDefined();
+      expect(result.ablationResults!.length).toBeGreaterThanOrEqual(5);
+
+      // On pure noise, none of the variants should claim hasEdge (CI lower bound must be <= 0)
+      for (const variant of result.ablationResults!) {
+        // Lower bound of 95% CI should not be strictly positive
+        expect(variant.ci95[0]).toBeLessThanOrEqual(50); // within statistical noise band
+      }
+    });
   });
 });

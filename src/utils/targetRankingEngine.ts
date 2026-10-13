@@ -5,12 +5,20 @@ import { isJapaneseHoliday } from './holidayUtils';
 import { isSmartSlot, isAType, isJuggler } from './modelFilterUtils';
 import { normalizeModelName } from './modelName';
 
+export const ALL_HIGH_DIFF_THRESHOLD = 800;
+
 export const DEFAULT_RANKING_WEIGHTS: RankingWeights = {
   diffCoinDivisor: 35,
   winRateMultiplier: 0.6,
   allHighMultiplier: 4.5,
   matchingBlendWeight: 0.75,
   scaleFactorEnabled: true,
+  useMachineWeighting: false,
+  useShrinkage: false,
+  shrinkageK: 5,
+  halfLifeDays: 0,
+  normalizeAllHighRate: false,
+  useQuantileGrade: false,
 };
 
 export interface ModelTargetScore {
@@ -112,12 +120,14 @@ export interface PreparedModelData {
   totalMachines: number;
   sampleDays: number;
   matchingDays: number;
+  effectiveMatchingDays?: number; // 時間減衰適用時の有効サンプル数 (n)
   matchingAvgDiff: number;
   matchingWinRate: number;
   allAvgDiff: number;
   allWinRate: number;
   avgGames: number;
   allHighCount: number;
+  allHighRate: number; // 正規化発生率 (時間減衰適用)
   scaleFactor: number;
   sampleFactor: number;
   tags: string[];
@@ -188,7 +198,7 @@ export function buildFeatureIndex(
         if (!name) continue;
 
         const isAllHigh =
-          m.avgDiffCoins >= 800 && (m.winRate === null || m.winRate >= 60);
+          m.avgDiffCoins >= ALL_HIGH_DIFF_THRESHOLD && (m.winRate === null || m.winRate >= 60);
 
         indexedModels.push({
           modelName: name,
@@ -311,10 +321,18 @@ export function extractTargetCohorts<T extends {
  * cohorts (special event / same DOW / same tail), hall averages, model stats
  * (primaryDiffs, allDiffs, win rates, games, allHighCount), and tail rankings.
  */
+function calculateElapsedDays(targetDate: string, pastDate: string): number {
+  const t = new Date(targetDate.replace(/\//g, '-')).getTime();
+  const p = new Date(pastDate.replace(/\//g, '-')).getTime();
+  if (isNaN(t) || isNaN(p)) return 0;
+  return Math.max(0, Math.round((t - p) / (1000 * 60 * 60 * 24)));
+}
+
 export function buildPreparedTargetDay(
   featureIndex: FeatureIndex,
   targetDate: string,
-  priorDaysCount?: number
+  priorDaysCount?: number,
+  weights: RankingWeights = DEFAULT_RANKING_WEIGHTS
 ): PreparedTargetDay | null {
   if (!targetDate || !featureIndex || featureIndex.records.length === 0) return null;
 
@@ -329,6 +347,9 @@ export function buildPreparedTargetDay(
   if (!cohorts) return null;
 
   const { dow, isHoliday, isSpecial, dayTail, primaryCohort } = cohorts;
+
+  const useMachineWeighting = weights?.useMachineWeighting ?? false;
+  const halfLifeDays = weights?.halfLifeDays ?? 0;
 
   // Determine special day label
   let specialDayLabel = '通常営業日';
@@ -349,19 +370,49 @@ export function buildPreparedTargetDay(
     }
   }
 
-  // Calculate Overall Hall Expected Output
-  const hallAvgDiff = primaryCohort.length > 0
-    ? Math.round(primaryCohort.reduce((acc, r) => acc + r.avgDiffCoins, 0) / primaryCohort.length)
-    : 0;
+  // Calculate Overall Hall Expected Output (Prompt 3: 台数加重 & 時間減衰対応)
+  let hallAvgDiff = 0;
+  let hallWinRate = 45;
+  let hallPayout = 100;
 
-  const hallWinDays = primaryCohort.filter((r) => r.avgDiffCoins > 0).length;
-  const hallWinRate = primaryCohort.length > 0
-    ? Math.round((hallWinDays / primaryCohort.length) * 1000) / 10
-    : 45;
+  if (primaryCohort.length > 0) {
+    if (useMachineWeighting || halfLifeDays > 0) {
+      let hallDiffWeightedSum = 0;
+      let hallDiffWeightSum = 0;
+      let hallWinWeightedSum = 0;
+      let hallWinWeightSum = 0;
+      let hallPayoutWeightedSum = 0;
+      let hallPayoutWeightSum = 0;
 
-  const hallPayout = primaryCohort.length > 0
-    ? Math.round((primaryCohort.reduce((acc, r) => acc + (r.payoutRate || 100), 0) / primaryCohort.length) * 100) / 100
-    : 100;
+      for (let i = 0; i < primaryCohort.length; i++) {
+        const r = primaryCohort[i];
+        const elapsed = halfLifeDays > 0 ? calculateElapsedDays(targetDate, r.date) : 0;
+        const dw = halfLifeDays > 0 ? Math.pow(0.5, elapsed / halfLifeDays) : 1.0;
+        const machines = useMachineWeighting
+          ? Math.max(1, r.models?.reduce((s, m) => s + (m.totalMachines || 1), 0) || 1)
+          : 1.0;
+        const w = dw * machines;
+
+        hallDiffWeightedSum += r.avgDiffCoins * w;
+        hallDiffWeightSum += w;
+
+        hallWinWeightedSum += (r.avgDiffCoins > 0 ? 100 : 0) * w;
+        hallWinWeightSum += w;
+
+        hallPayoutWeightedSum += (r.payoutRate || 100) * w;
+        hallPayoutWeightSum += w;
+      }
+
+      hallAvgDiff = hallDiffWeightSum > 0 ? Math.round(hallDiffWeightedSum / hallDiffWeightSum) : 0;
+      hallWinRate = hallWinWeightSum > 0 ? Math.round((hallWinWeightedSum / hallWinWeightSum) * 10) / 10 : 45;
+      hallPayout = hallPayoutWeightSum > 0 ? Math.round((hallPayoutWeightedSum / hallPayoutWeightSum) * 100) / 100 : 100;
+    } else {
+      hallAvgDiff = Math.round(primaryCohort.reduce((acc, r) => acc + r.avgDiffCoins, 0) / primaryCohort.length);
+      const hallWinDays = primaryCohort.filter((r) => r.avgDiffCoins > 0).length;
+      hallWinRate = Math.round((hallWinDays / primaryCohort.length) * 1000) / 10;
+      hallPayout = Math.round((primaryCohort.reduce((acc, r) => acc + (r.payoutRate || 100), 0) / primaryCohort.length) * 100) / 100;
+    }
+  }
 
   let expectedHallStatus: TargetDateForecast['expectedHallStatus'] = '通常営業';
   if (isSpecial) {
@@ -407,6 +458,18 @@ export function buildPreparedTargetDay(
       avgGames: number;
       isOldEventDay: boolean;
     }>;
+    // Prompt 3 weighted accumulators
+    matchingWeightedDiffSum: number;
+    matchingWeightSum: number;
+    matchingWeightedWinSum: number;
+    matchingWinWeightSum: number;
+    matchingDayWeightSum: number;
+    allWeightedDiffSum: number;
+    allWeightSum: number;
+    allWeightedWinSum: number;
+    allWinWeightSum: number;
+    allObsDayWeightSum: number;
+    allHighWeightedCount: number;
   }
 
   const modelMap = new Map<string, ModelCollector>();
@@ -416,6 +479,8 @@ export function buildPreparedTargetDay(
 
     const isRecInPrimary = primaryDateSet.has(rec.date);
     const isRecSpecial = rec.isOldEventDay;
+    const elapsed = halfLifeDays > 0 ? calculateElapsedDays(targetDate, rec.date) : 0;
+    const dayDecayWeight = halfLifeDays > 0 ? Math.pow(0.5, elapsed / halfLifeDays) : 1.0;
 
     rec.models.forEach((m) => {
       const name = m.modelName;
@@ -434,12 +499,24 @@ export function buildPreparedTargetDay(
           allWins: [],
           allHighCount: 0,
           matchingHistory: [],
+          matchingWeightedDiffSum: 0,
+          matchingWeightSum: 0,
+          matchingWeightedWinSum: 0,
+          matchingWinWeightSum: 0,
+          matchingDayWeightSum: 0,
+          allWeightedDiffSum: 0,
+          allWeightSum: 0,
+          allWeightedWinSum: 0,
+          allWinWeightSum: 0,
+          allObsDayWeightSum: 0,
+          allHighWeightedCount: 0,
         };
         modelMap.set(name, entry);
       }
 
-      if (m.totalMachines > entry.totalMachinesMax) {
-        entry.totalMachinesMax = m.totalMachines;
+      const machines = Math.max(1, m.totalMachines || 1);
+      if (machines > entry.totalMachinesMax) {
+        entry.totalMachinesMax = machines;
       }
 
       entry.allDiffs.push(m.avgDiffCoins);
@@ -450,6 +527,17 @@ export function buildPreparedTargetDay(
 
       if (m.isAllHigh) {
         entry.allHighCount += 1;
+        entry.allHighWeightedCount += dayDecayWeight;
+      }
+
+      const modelWeight = dayDecayWeight * (useMachineWeighting ? machines : 1.0);
+      entry.allWeightedDiffSum += m.avgDiffCoins * modelWeight;
+      entry.allWeightSum += modelWeight;
+      entry.allObsDayWeightSum += dayDecayWeight;
+
+      if (m.winRate !== null) {
+        entry.allWeightedWinSum += m.winRate * modelWeight;
+        entry.allWinWeightSum += modelWeight;
       }
 
       if (isRecInPrimary) {
@@ -457,7 +545,13 @@ export function buildPreparedTargetDay(
         entry.primaryGames.push(m.avgGames);
         if (m.winRate !== null) {
           entry.primaryWins.push(m.winRate);
+          entry.matchingWeightedWinSum += m.winRate * modelWeight;
+          entry.matchingWinWeightSum += modelWeight;
         }
+
+        entry.matchingWeightedDiffSum += m.avgDiffCoins * modelWeight;
+        entry.matchingWeightSum += modelWeight;
+        entry.matchingDayWeightSum += dayDecayWeight;
 
         entry.matchingHistory.push({
           date: rec.date,
@@ -480,20 +574,53 @@ export function buildPreparedTargetDay(
     const matchingDays = entry.primaryDiffs.length;
     const machines = Math.max(1, entry.totalMachinesMax);
 
-    // Primary matching avg
-    const matchingAvgDiff = matchingDays > 0
-      ? Math.round(entry.primaryDiffs.reduce((a, b) => a + b, 0) / matchingDays)
-      : 0;
+    let matchingAvgDiff = 0;
+    let matchingWinRate = 45;
+    let allAvgDiff = 0;
+    let allWinRate = 45;
+    let allHighRate = 0;
 
-    const matchingWinRate = entry.primaryWins.length > 0
-      ? Math.round(entry.primaryWins.reduce((a, b) => a + b, 0) / entry.primaryWins.length * 10) / 10
-      : 45;
+    if (useMachineWeighting || halfLifeDays > 0) {
+      matchingAvgDiff = entry.matchingWeightSum > 0
+        ? Math.round(entry.matchingWeightedDiffSum / entry.matchingWeightSum)
+        : 0;
 
-    // Overall baseline avg
-    const allAvgDiff = Math.round(entry.allDiffs.reduce((a, b) => a + b, 0) / sampleDays);
-    const allWinRate = entry.allWins.length > 0
-      ? Math.round(entry.allWins.reduce((a, b) => a + b, 0) / entry.allWins.length * 10) / 10
-      : 45;
+      matchingWinRate = entry.matchingWinWeightSum > 0
+        ? Math.round((entry.matchingWeightedWinSum / entry.matchingWinWeightSum) * 10) / 10
+        : 45;
+
+      allAvgDiff = entry.allWeightSum > 0
+        ? Math.round(entry.allWeightedDiffSum / entry.allWeightSum)
+        : 0;
+
+      allWinRate = entry.allWinWeightSum > 0
+        ? Math.round((entry.allWeightedWinSum / entry.allWinWeightSum) * 10) / 10
+        : 45;
+
+      allHighRate = entry.allObsDayWeightSum > 0
+        ? entry.allHighWeightedCount / entry.allObsDayWeightSum
+        : 0;
+    } else {
+      matchingAvgDiff = matchingDays > 0
+        ? Math.round(entry.primaryDiffs.reduce((a, b) => a + b, 0) / matchingDays)
+        : 0;
+
+      matchingWinRate = entry.primaryWins.length > 0
+        ? Math.round((entry.primaryWins.reduce((a, b) => a + b, 0) / entry.primaryWins.length) * 10) / 10
+        : 45;
+
+      allAvgDiff = Math.round(entry.allDiffs.reduce((a, b) => a + b, 0) / sampleDays);
+
+      allWinRate = entry.allWins.length > 0
+        ? Math.round((entry.allWins.reduce((a, b) => a + b, 0) / entry.allWins.length) * 10) / 10
+        : 45;
+
+      allHighRate = sampleDays > 0 ? entry.allHighCount / sampleDays : 0;
+    }
+
+    const effectiveMatchingDays = halfLifeDays > 0
+      ? entry.matchingDayWeightSum
+      : matchingDays;
 
     const avgGames = entry.primaryGames.length > 0
       ? Math.round(entry.primaryGames.reduce((a, b) => a + b, 0) / entry.primaryGames.length)
@@ -515,12 +642,14 @@ export function buildPreparedTargetDay(
       totalMachines: machines,
       sampleDays,
       matchingDays,
+      effectiveMatchingDays,
       matchingAvgDiff,
       matchingWinRate,
       allAvgDiff,
       allWinRate,
       avgGames,
       allHighCount: entry.allHighCount,
+      allHighRate,
       scaleFactor,
       sampleFactor,
       tags,
@@ -650,27 +779,44 @@ export function scoreFromPrepared(
   const allHighMult = weights?.allHighMultiplier ?? 4.5;
   const blendWeight = weights?.matchingBlendWeight ?? 0.75;
   const useScaleFactor = weights?.scaleFactorEnabled ?? true;
+  const useShrinkage = weights?.useShrinkage ?? false;
+  const shrinkageK = weights?.shrinkageK ?? 5;
+  const normalizeAllHigh = weights?.normalizeAllHighRate ?? false;
+  const useQuantileGrade = weights?.useQuantileGrade ?? false;
 
   const scoredModels: ModelTargetScore[] = [];
 
   for (let i = 0; i < prepared.models.length; i++) {
     const m = prepared.models[i];
 
-    // Blended Expected Diff Coins:
+    // Blended Expected Diff Coins & Win Rate:
     let expectedDiffCoins = m.allAvgDiff;
-    if (m.matchingDays >= 3) {
-      expectedDiffCoins = Math.round(m.matchingAvgDiff * blendWeight + m.allAvgDiff * (1 - blendWeight));
-    } else if (m.matchingDays > 0) {
-      expectedDiffCoins = Math.round(m.matchingAvgDiff * 0.5 + m.allAvgDiff * 0.5);
-    } else {
-      expectedDiffCoins = Math.round(m.allAvgDiff * 0.85);
-    }
-
     let predictedWinRate = m.allWinRate;
-    if (m.matchingDays >= 3) {
-      predictedWinRate = Math.round((m.matchingWinRate * blendWeight + m.allWinRate * (1 - blendWeight)) * 10) / 10;
-    } else if (m.matchingDays > 0) {
-      predictedWinRate = Math.round((m.matchingWinRate * 0.5 + m.allWinRate * 0.5) * 10) / 10;
+
+    if (useShrinkage) {
+      // 2. 縮小推定: 期待差枚 = (n×標本平均 + k×母平均) / (n + k)
+      // n は一致日数、母平均は同コホートの全機種平均 (hallAvgDiff)、k は shrinkageK (既定5)
+      const n = m.effectiveMatchingDays !== undefined ? m.effectiveMatchingDays : m.matchingDays;
+      const k = shrinkageK;
+      const cohortDiff = prepared.expectedHallAvgDiffCoins;
+      expectedDiffCoins = Math.round((n * m.matchingAvgDiff + k * cohortDiff) / (n + k));
+
+      const cohortWin = prepared.expectedHallWinRate;
+      predictedWinRate = Math.round(((n * m.matchingWinRate + k * cohortWin) / (n + k)) * 10) / 10;
+    } else {
+      if (m.matchingDays >= 3) {
+        expectedDiffCoins = Math.round(m.matchingAvgDiff * blendWeight + m.allAvgDiff * (1 - blendWeight));
+      } else if (m.matchingDays > 0) {
+        expectedDiffCoins = Math.round(m.matchingAvgDiff * 0.5 + m.allAvgDiff * 0.5);
+      } else {
+        expectedDiffCoins = Math.round(m.allAvgDiff * 0.85);
+      }
+
+      if (m.matchingDays >= 3) {
+        predictedWinRate = Math.round((m.matchingWinRate * blendWeight + m.allWinRate * (1 - blendWeight)) * 10) / 10;
+      } else if (m.matchingDays > 0) {
+        predictedWinRate = Math.round((m.matchingWinRate * 0.5 + m.allWinRate * 0.5) * 10) / 10;
+      }
     }
 
     // Estimate Payout Rate:
@@ -682,25 +828,35 @@ export function scoreFromPrepared(
     let compositeScore = 50;
     compositeScore += (expectedDiffCoins / diffDivisor);
     compositeScore += (predictedWinRate - 48) * winRateMult;
-    compositeScore += m.allHighCount * allHighMult;
+
+    // 4. allHighCount 正規化 vs 生カウント
+    if (normalizeAllHigh) {
+      // 観測日数あたりの発生率に正規化（基準10回観測あたり発生回数換算でスコア化、時間減衰も反映）
+      compositeScore += (m.allHighRate * 10) * allHighMult;
+    } else {
+      compositeScore += m.allHighCount * allHighMult;
+    }
+
     if (useScaleFactor) {
       compositeScore = Math.round(compositeScore * m.scaleFactor * m.sampleFactor * 10) / 10;
     } else {
       compositeScore = Math.round(compositeScore * 10) / 10;
     }
 
-    // Rank Grade
+    // Rank Grade (既定は旧挙動の絶対基準判定)
     let rankGrade: ModelTargetScore['rankGrade'] = 'C';
-    if (compositeScore >= 80 && expectedDiffCoins > 250) {
-      rankGrade = 'S+';
-    } else if (compositeScore >= 68 && expectedDiffCoins > 120) {
-      rankGrade = 'S';
-    } else if (compositeScore >= 56 && expectedDiffCoins > 0) {
-      rankGrade = 'A';
-    } else if (compositeScore >= 45) {
-      rankGrade = 'B';
-    } else {
-      rankGrade = 'C';
+    if (!useQuantileGrade) {
+      if (compositeScore >= 80 && expectedDiffCoins > 250) {
+        rankGrade = 'S+';
+      } else if (compositeScore >= 68 && expectedDiffCoins > 120) {
+        rankGrade = 'S';
+      } else if (compositeScore >= 56 && expectedDiffCoins > 0) {
+        rankGrade = 'A';
+      } else if (compositeScore >= 45) {
+        rankGrade = 'B';
+      } else {
+        rankGrade = 'C';
+      }
     }
 
     // Tactical reason generation
@@ -754,6 +910,25 @@ export function scoreFromPrepared(
     sm.rank = idx + 1;
   });
 
+  // 5. 分位点ランク判定 (その日の全機種分布の分位点)
+  if (useQuantileGrade && scoredModels.length > 0) {
+    const total = scoredModels.length;
+    scoredModels.forEach((sm, idx) => {
+      const topPct = (idx + 1) / total;
+      if (topPct <= 0.05 || (idx === 0 && sm.expectedDiffCoins > 200)) {
+        sm.rankGrade = 'S+';
+      } else if (topPct <= 0.15) {
+        sm.rankGrade = 'S';
+      } else if (topPct <= 0.40) {
+        sm.rankGrade = 'A';
+      } else if (topPct <= 0.75) {
+        sm.rankGrade = 'B';
+      } else {
+        sm.rankGrade = 'C';
+      }
+    });
+  }
+
   // Tactical Advice Synthesis
   const topModel1 = scoredModels[0]?.modelName || '主力機種';
   const topModel2 = scoredModels[1]?.modelName || '対抗機種';
@@ -802,7 +977,7 @@ export function calculateTargetDateRankingFromIndex(
   priorDaysCount?: number,
   weights: RankingWeights = DEFAULT_RANKING_WEIGHTS
 ): TargetDateForecast | null {
-  const prepared = buildPreparedTargetDay(featureIndex, targetDate, priorDaysCount);
+  const prepared = buildPreparedTargetDay(featureIndex, targetDate, priorDaysCount, weights);
   if (!prepared) return null;
   return scoreFromPrepared(prepared, weights);
 }

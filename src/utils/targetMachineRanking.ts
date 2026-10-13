@@ -1,5 +1,5 @@
 // Engine for calculating target machine recommendations by machine number (台番号別狙い台ランキング)
-import { DailyRecord, DailyMachineRecord, SpecialDayRules, RankingWeights } from '../data/types';
+import { DailyRecord, DailyMachineRecord, SpecialDayRules, RankingWeights, MachineRankingWeights } from '../data/types';
 import {
   extractTargetCohorts,
   calculateTargetDateRanking,
@@ -9,17 +9,7 @@ import { isAType, isJuggler } from './modelFilterUtils';
 import { normalizeModelName } from './modelName';
 import { HIGH_SETTING_THRESHOLDS } from './highSettingConfig';
 export { HIGH_SETTING_THRESHOLDS } from './highSettingConfig';
-
-export interface MachineRankingWeights {
-  diffWeight: number; // pts per diff coin (default 0.04)
-  winRateWeight: number; // pts per win rate % above 50% (default 0.3)
-  highSettingWeight: number; // pts for high setting frequency (default 20.0)
-  modelScoreWeight: number; // pts for underlying model forecast score (default 0.25)
-  tailMatchBonus: number; // bonus for tail digit matching target date tail (default 8.0)
-  zoroBonus: number; // bonus for zoro machine number (default 4.0)
-  recentStateWeight: number; // weight for prior day diff (default 0)
-  shrinkageK: number; // empirical Bayes shrinkage hyperparameter (default 3)
-}
+export type { MachineRankingWeights } from '../data/types';
 
 export const DEFAULT_MACHINE_RANKING_WEIGHTS: MachineRankingWeights = {
   diffWeight: 0.04,
@@ -122,7 +112,9 @@ export function isHighSettingBehavior(
     record.payoutRate !== undefined
       ? record.payoutRate
       : games > 0
-      ? ((games * 3 + diff) / (games * 3)) * 100
+      ? ((games * HIGH_SETTING_THRESHOLDS.BET_PER_GAME + diff) /
+          (games * HIGH_SETTING_THRESHOLDS.BET_PER_GAME)) *
+        100
       : 100;
 
   // 1. Unconditional high-volume winner

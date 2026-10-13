@@ -14,6 +14,8 @@ import {
   TargetMachineScore,
 } from './targetMachineRanking';
 import { normalizeModelName } from './modelName';
+import { isJapaneseHoliday } from './holidayUtils';
+import { isDateSpecialDay } from './dataEngine';
 
 export interface BacktestDayEvaluation {
   date: string;
@@ -22,6 +24,7 @@ export interface BacktestDayEvaluation {
   actualHallAvgDiff: number;
   expectedHallAvgDiff: number;
   hallError: number;
+  allPeriodHallError: number; // 全期間平均を出すだけの予測誤差
 
   // Engine Top-K
   engineTopKModels: string[];
@@ -31,12 +34,39 @@ export interface BacktestDayEvaluation {
   engineSpearmanCorr: number | null;
   engineDiffCoinsMae: number;
 
-  // Baseline Top-K (全期間の平均差枚が高い順)
+  // Baseline 1 Top-K (全期間の平均差枚順)
   baselineTopKModels: string[];
   baselineTopKActualAvgDiff: number;
   baselineTopKActualLift: number;
   baselineTopKPositive: boolean;
   baselineSpearmanCorr: number | null;
+
+  // Baseline 2 Top-K: 同曜日（祝日含む）平均順
+  dowTopKModels: string[];
+  dowTopKActualAvgDiff: number;
+  dowTopKActualLift: number;
+  dowTopKPositive: boolean;
+  dowSpearmanCorr: number | null;
+
+  // Baseline 3 Top-K: 同特日平均順
+  specialTopKModels: string[];
+  specialTopKActualAvgDiff: number;
+  specialTopKActualLift: number;
+  specialTopKPositive: boolean;
+  specialSpearmanCorr: number | null;
+
+  // Baseline 4 Top-K: 直近14日平均順
+  recent14TopKModels: string[];
+  recent14TopKActualAvgDiff: number;
+  recent14TopKActualLift: number;
+  recent14TopKPositive: boolean;
+  recent14SpearmanCorr: number | null;
+
+  // Baseline 5: ランダム（シード固定100回平均）
+  randomTopKActualAvgDiff: number;
+  randomTopKActualLift: number;
+  randomTopKPositive: boolean;
+  randomSpearmanCorr: number | null;
 
   // Tail evaluation
   engineTopTail: string;
@@ -58,13 +88,41 @@ export interface BacktestSummaryMetrics {
   engineHallMae: number;
   engineTailAvgDiff: number;
 
-  // Baseline
+  // Baseline 1: 全期間平均順
   baselineAvgTopKLift: number;
   baselineAvgTopKDiff: number;
   baselineTopKPositiveRate: number; // %
   baselineAvgSpearman: number;
 
-  // Comparison Delta
+  // Baseline 2: 同曜日（祝日含む）平均順
+  dowBaselineAvgTopKLift: number;
+  dowBaselineAvgTopKDiff: number;
+  dowBaselineTopKPositiveRate: number; // %
+  dowBaselineAvgSpearman: number;
+
+  // Baseline 3: 同特日平均順
+  specialBaselineAvgTopKLift: number;
+  specialBaselineAvgTopKDiff: number;
+  specialBaselineTopKPositiveRate: number; // %
+  specialBaselineAvgSpearman: number;
+
+  // Baseline 4: 直近14日平均順
+  recent14BaselineAvgTopKLift: number;
+  recent14BaselineAvgTopKDiff: number;
+  recent14BaselineTopKPositiveRate: number; // %
+  recent14BaselineAvgSpearman: number;
+
+  // Baseline 5: ランダム（シード固定100回平均）
+  randomBaselineAvgTopKLift: number;
+  randomBaselineAvgTopKDiff: number;
+  randomBaselineTopKPositiveRate: number; // %
+  randomBaselineAvgSpearman: number;
+
+  // Hall MAE Comparison: "ホール全体MAEも「全期間平均を出すだけの予測」と比較する"
+  allPeriodHallMae: number;
+  hallMaeImprovement: number; // allPeriodHallMae - engineHallMae
+
+  // Comparison Delta (vs baseline 1)
   liftEdge: number; // engineAvgTopKLift - baselineAvgTopKLift
   winRateEdge: number;
   spearmanEdge: number;
@@ -85,7 +143,16 @@ export interface TuningResult {
   valStdError: number;
   tValue: number;
 
-  isRecommended: boolean; // tValue >= 2.0 && valLiftGain > 0
+  // Rolling validation (3-5 splits) & 7-day Block Bootstrap (2000 runs)
+  numSplits: number;
+  splitGains: number[];
+  meanSplitGain: number;
+  bootstrapCiLower: number;
+  bootstrapCiUpper: number;
+  bootstrapIterations: number;
+  bootstrapBlockLength: number;
+
+  isRecommended: boolean; // meanSplitGain > 0 && bootstrapCiLower > 0
   verdictMessage: string;
 }
 
@@ -129,8 +196,44 @@ export function calculateSpearman(predictedScores: number[], actualValues: numbe
 }
 
 /**
+ * Helper to compute machine-weighted actual stats across a list of models
+ */
+function computeTopKMachineWeightedStats(
+  modelNames: string[],
+  actualModelMap: Map<string, { avgDiffCoins: number; winRate: number | null; totalMachines: number }>,
+  actualHallAvgDiff: number
+): { avgDiff: number; lift: number; isPositive: boolean } {
+  let totalMachines = 0;
+  let totalDiff = 0;
+  for (const name of modelNames) {
+    const act = actualModelMap.get(name);
+    if (act) {
+      const machines = Math.max(1, act.totalMachines);
+      totalMachines += machines;
+      totalDiff += machines * act.avgDiffCoins;
+    }
+  }
+  const avgDiff = totalMachines > 0 ? Math.round((totalDiff / totalMachines) * 10) / 10 : 0;
+  const lift = Math.round((avgDiff - actualHallAvgDiff) * 10) / 10;
+  return { avgDiff, lift, isPositive: avgDiff > 0 };
+}
+
+/**
+ * Fast deterministic hash string helper
+ */
+function hashString(str: string): number {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = ((h << 5) - h + str.charCodeAt(i)) | 0;
+  }
+  return h >>> 0;
+}
+
+/**
  * Executes a point-in-time walk-forward backtest on historical daily records.
  * Uses ONLY records strictly prior to each target date.
+ * Includes 5 baselines: All-Time, Day-of-Week (incl. holidays), Special Day, Recent 14d, Random (100 runs).
+ * Computes machine-weighted actual results with minimum machines filter (default: 3台以上).
  */
 export function runWalkForwardBacktest(
   dailyRecords: DailyRecord[],
@@ -138,7 +241,8 @@ export function runWalkForwardBacktest(
   oldEventDays: string = '',
   weights: RankingWeights = DEFAULT_RANKING_WEIGHTS,
   k: number = 3,
-  minWarmupDays: number = 5
+  minWarmupDays: number = 30,
+  minMachines: number = 3
 ): {
   evaluations: BacktestDayEvaluation[];
   summary: BacktestSummaryMetrics;
@@ -167,12 +271,13 @@ export function runWalkForwardBacktest(
 
     if (!forecast || forecast.modelRankings.length === 0) continue;
 
-    // Actual day results map
-    const actualModelMap = new Map<string, { avgDiffCoins: number; winRate: number | null }>();
+    // Actual day results map with machine counts
+    const actualModelMap = new Map<string, { avgDiffCoins: number; winRate: number | null; totalMachines: number }>();
     targetDay.models?.forEach((m) => {
       actualModelMap.set(normalizeModelName(m.modelName), {
         avgDiffCoins: m.avgDiffCoins,
         winRate: m.winRate,
+        totalMachines: m.totalMachines || 1,
       });
     });
 
@@ -182,86 +287,162 @@ export function runWalkForwardBacktest(
     const expectedHallAvgDiff = forecast.expectedHallAvgDiffCoins;
     const hallError = Math.abs(expectedHallAvgDiff - actualHallAvgDiff);
 
-    // Overlapping models for Spearman & MAE
-    const commonModels = forecast.modelRankings.filter((m) =>
-      actualModelMap.has(normalizeModelName(m.modelName))
-    );
+    // Naive all-period hall average prediction & error
+    const allPriorHallAvg = priorRecords.reduce((acc, r) => acc + r.avgDiffCoins, 0) / priorRecords.length;
+    const allPeriodHallError = Math.abs(allPriorHallAvg - actualHallAvgDiff);
 
-    if (commonModels.length === 0) continue;
+    // Eligible candidate models on targetDay meeting minMachines filter (default: 3台以上)
+    let eligibleModels = Array.from(actualModelMap.entries())
+      .filter(([_, info]) => info.totalMachines >= minMachines)
+      .map(([name]) => name);
+    if (eligibleModels.length < 2) {
+      eligibleModels = Array.from(actualModelMap.keys());
+    }
+    const eligibleSet = new Set(eligibleModels);
 
-    // Engine Top-K
-    const engineTopK = commonModels.slice(0, Math.min(k, commonModels.length));
-    const engineTopKActualDiffs = engineTopK.map(
-      (m) => actualModelMap.get(normalizeModelName(m.modelName))!.avgDiffCoins
-    );
-    const engineTopKActualAvgDiff =
-      engineTopKActualDiffs.length > 0
-        ? Math.round(
-            (engineTopKActualDiffs.reduce((a, b) => a + b, 0) /
-              engineTopKActualDiffs.length) *
-              10
-          ) / 10
-        : 0;
-    const engineTopKActualLift =
-      Math.round((engineTopKActualAvgDiff - actualHallAvgDiff) * 10) / 10;
-    const engineTopKPositive = engineTopKActualAvgDiff > 0;
+    // 1. Engine Top-K: filter forecast model rankings by eligibility and presence on targetDay
+    const commonRankings = forecast.modelRankings.filter((m) => {
+      const norm = normalizeModelName(m.modelName);
+      return actualModelMap.has(norm) && eligibleSet.has(norm);
+    });
+
+    if (commonRankings.length === 0) continue;
+
+    const engineTopK = commonRankings.slice(0, Math.min(k, commonRankings.length));
+    const engineTopKNames = engineTopK.map((m) => normalizeModelName(m.modelName));
+    const engineStats = computeTopKMachineWeightedStats(engineTopKNames, actualModelMap, actualHallAvgDiff);
+    const engineTopKActualAvgDiff = engineStats.avgDiff;
+    const engineTopKActualLift = engineStats.lift;
+    const engineTopKPositive = engineStats.isPositive;
 
     // Engine Spearman
-    const engineScores = commonModels.map((m) => m.compositeScore);
-    const actualDiffs = commonModels.map(
-      (m) => actualModelMap.get(normalizeModelName(m.modelName))!.avgDiffCoins
-    );
+    const engineScores = commonRankings.map((m) => m.compositeScore);
+    const actualDiffs = commonRankings.map((m) => actualModelMap.get(normalizeModelName(m.modelName))!.avgDiffCoins);
     const engineSpearmanCorr = calculateSpearman(engineScores, actualDiffs);
 
     // Engine MAE
-    const maeSum = commonModels.reduce((acc, m) => {
+    const maeSum = commonRankings.reduce((acc, m) => {
       const act = actualModelMap.get(normalizeModelName(m.modelName))!.avgDiffCoins;
       return acc + Math.abs(m.expectedDiffCoins - act);
     }, 0);
-    const engineDiffCoinsMae = Math.round(maeSum / commonModels.length);
+    const engineDiffCoinsMae = Math.round(maeSum / commonRankings.length);
 
-    // 2. Run Baseline Forecast (全期間の平均差枚が高い順)
-    const baselineModelMap = new Map<string, { totalDiff: number; count: number }>();
-    priorRecords.forEach((r) => {
-      r.models?.forEach((m) => {
-        const name = normalizeModelName(m.modelName);
-        const existing = baselineModelMap.get(name) || { totalDiff: 0, count: 0 };
-        existing.totalDiff += m.avgDiffCoins;
-        existing.count += 1;
-        baselineModelMap.set(name, existing);
-      });
+    // Helper for computing model averages over a subset of prior records
+    const computeModelPriorAverages = (records: DailyRecord[]): Map<string, number> => {
+      const map = new Map<string, { totalDiff: number; count: number }>();
+      for (const r of records) {
+        if (!r.models) continue;
+        for (const m of r.models) {
+          const norm = normalizeModelName(m.modelName);
+          const cur = map.get(norm) || { totalDiff: 0, count: 0 };
+          cur.totalDiff += m.avgDiffCoins;
+          cur.count += 1;
+          map.set(norm, cur);
+        }
+      }
+      const res = new Map<string, number>();
+      for (const [name, stat] of map.entries()) {
+        if (stat.count > 0) res.set(name, stat.totalDiff / stat.count);
+      }
+      return res;
+    };
+
+    // Helper to score and get top-K for a baseline map
+    const evaluateBaseline = (avgMap: Map<string, number>) => {
+      const scored = eligibleModels
+        .map((name) => ({ name, score: avgMap.get(name) ?? 0 }))
+        .sort((a, b) => b.score - a.score);
+      const topK = scored.slice(0, Math.min(k, scored.length));
+      const topKNames = topK.map((m) => m.name);
+      const stats = computeTopKMachineWeightedStats(topKNames, actualModelMap, actualHallAvgDiff);
+      const spearman = calculateSpearman(
+        scored.map((m) => m.score),
+        scored.map((m) => actualModelMap.get(m.name)!.avgDiffCoins)
+      );
+      return {
+        topKModels: topKNames,
+        actualAvgDiff: stats.avgDiff,
+        actualLift: stats.lift,
+        isPositive: stats.isPositive,
+        spearmanCorr: spearman,
+      };
+    };
+
+    // 2. Baseline 1: All-Time Average (全期間平均順)
+    const allTimeAvgMap = computeModelPriorAverages(priorRecords);
+    const baseline1 = evaluateBaseline(allTimeAvgMap);
+
+    // 3. Baseline 2: Same Day-of-Week including Holidays (同曜日・祝日平均順)
+    const isTargetHoliday = isJapaneseHoliday(targetDay.date);
+    let matchingDowRecords = priorRecords.filter((r) => {
+      if (isTargetHoliday) return isJapaneseHoliday(r.date);
+      return !isJapaneseHoliday(r.date) && r.dayOfWeek === targetDay.dayOfWeek;
     });
+    if (matchingDowRecords.length < 2) {
+      matchingDowRecords = priorRecords.filter((r) => r.dayOfWeek === targetDay.dayOfWeek);
+      if (matchingDowRecords.length === 0) matchingDowRecords = priorRecords;
+    }
+    const dowAvgMap = computeModelPriorAverages(matchingDowRecords);
+    const baseline2 = evaluateBaseline(dowAvgMap);
 
-    const baselineScored = Array.from(baselineModelMap.entries())
-      .filter(([name]) => actualModelMap.has(name))
-      .map(([name, stat]) => ({
-        name,
-        allAvgDiff: stat.count > 0 ? stat.totalDiff / stat.count : 0,
-      }))
-      .sort((a, b) => b.allAvgDiff - a.allAvgDiff);
-
-    const baselineTopK = baselineScored.slice(0, Math.min(k, baselineScored.length));
-    const baselineTopKActualDiffs = baselineTopK.map(
-      (m) => actualModelMap.get(m.name)!.avgDiffCoins
+    // 4. Baseline 3: Same Special Day Average (同特日平均順)
+    const targetIsSpecial = isDateSpecialDay(targetDay.date, specialDayRules);
+    let matchingSpecialRecords = priorRecords.filter(
+      (r) => isDateSpecialDay(r.date, specialDayRules) === targetIsSpecial
     );
-    const baselineTopKActualAvgDiff =
-      baselineTopKActualDiffs.length > 0
-        ? Math.round(
-            (baselineTopKActualDiffs.reduce((a, b) => a + b, 0) /
-              baselineTopKActualDiffs.length) *
-              10
-          ) / 10
-        : 0;
-    const baselineTopKActualLift =
-      Math.round((baselineTopKActualAvgDiff - actualHallAvgDiff) * 10) / 10;
-    const baselineTopKPositive = baselineTopKActualAvgDiff > 0;
+    if (matchingSpecialRecords.length === 0) matchingSpecialRecords = priorRecords;
+    const specialAvgMap = computeModelPriorAverages(matchingSpecialRecords);
+    const baseline3 = evaluateBaseline(specialAvgMap);
 
-    const baselineSpearmanCorr = calculateSpearman(
-      baselineScored.map((m) => m.allAvgDiff),
-      baselineScored.map((m) => actualModelMap.get(m.name)!.avgDiffCoins)
-    );
+    // 5. Baseline 4: Recent 14 Days Average (直近14日平均順)
+    const targetMs = new Date(targetDay.date).getTime();
+    let recent14Records = priorRecords.filter((r) => {
+      const dt = (targetMs - new Date(r.date).getTime()) / 86400000;
+      return dt > 0 && dt <= 14;
+    });
+    if (recent14Records.length < 3) {
+      recent14Records = priorRecords.slice(-14);
+    }
+    const recent14AvgMap = computeModelPriorAverages(recent14Records);
+    const baseline4 = evaluateBaseline(recent14AvgMap);
 
-    // 3. Tail evaluation
+    // 6. Baseline 5: Random Sampling 100 trials average (シード固定100回試行平均)
+    let randDiffSum = 0;
+    let randPositiveCount = 0;
+    let randSpearmanSum = 0;
+    let randSpearmanValid = 0;
+    const randomTrials = 100;
+    const rng = createSeededRandom(hashString(targetDay.date) ^ 42);
+
+    for (let trial = 0; trial < randomTrials; trial++) {
+      const shuffled = [...eligibleModels];
+      for (let sIdx = shuffled.length - 1; sIdx > 0; sIdx--) {
+        const j = Math.floor(rng() * (sIdx + 1));
+        const temp = shuffled[sIdx];
+        shuffled[sIdx] = shuffled[j];
+        shuffled[j] = temp;
+      }
+      const trialTopK = shuffled.slice(0, Math.min(k, shuffled.length));
+      const trialStats = computeTopKMachineWeightedStats(trialTopK, actualModelMap, actualHallAvgDiff);
+      randDiffSum += trialStats.avgDiff;
+      if (trialStats.isPositive) randPositiveCount++;
+
+      const randomRankScores = eligibleModels.map((_, idx) => shuffled.indexOf(eligibleModels[idx]));
+      const sp = calculateSpearman(
+        randomRankScores,
+        eligibleModels.map((name) => actualModelMap.get(name)!.avgDiffCoins)
+      );
+      if (sp !== null) {
+        randSpearmanSum += sp;
+        randSpearmanValid++;
+      }
+    }
+    const randAvgDiff = Math.round((randDiffSum / randomTrials) * 10) / 10;
+    const randLift = Math.round((randAvgDiff - actualHallAvgDiff) * 10) / 10;
+    const randPositive = randAvgDiff > 0;
+    const randSpearman = randSpearmanValid > 0 ? Math.round((randSpearmanSum / randSpearmanValid) * 1000) / 1000 : null;
+
+    // 7. Tail evaluation
     const topTail = forecast.tailRankings[0]?.tailName || '';
     let topTailActualAvg: number | null = null;
     let topTailWinRate: number | null = null;
@@ -280,6 +461,7 @@ export function runWalkForwardBacktest(
       actualHallAvgDiff,
       expectedHallAvgDiff,
       hallError,
+      allPeriodHallError,
 
       engineTopKModels: engineTopK.map((m) => m.modelName),
       engineTopKActualAvgDiff,
@@ -288,11 +470,34 @@ export function runWalkForwardBacktest(
       engineSpearmanCorr,
       engineDiffCoinsMae,
 
-      baselineTopKModels: baselineTopK.map((m) => m.name),
-      baselineTopKActualAvgDiff,
-      baselineTopKActualLift,
-      baselineTopKPositive,
-      baselineSpearmanCorr,
+      baselineTopKModels: baseline1.topKModels,
+      baselineTopKActualAvgDiff: baseline1.actualAvgDiff,
+      baselineTopKActualLift: baseline1.actualLift,
+      baselineTopKPositive: baseline1.isPositive,
+      baselineSpearmanCorr: baseline1.spearmanCorr,
+
+      dowTopKModels: baseline2.topKModels,
+      dowTopKActualAvgDiff: baseline2.actualAvgDiff,
+      dowTopKActualLift: baseline2.actualLift,
+      dowTopKPositive: baseline2.isPositive,
+      dowSpearmanCorr: baseline2.spearmanCorr,
+
+      specialTopKModels: baseline3.topKModels,
+      specialTopKActualAvgDiff: baseline3.actualAvgDiff,
+      specialTopKActualLift: baseline3.actualLift,
+      specialTopKPositive: baseline3.isPositive,
+      specialSpearmanCorr: baseline3.spearmanCorr,
+
+      recent14TopKModels: baseline4.topKModels,
+      recent14TopKActualAvgDiff: baseline4.actualAvgDiff,
+      recent14TopKActualLift: baseline4.actualLift,
+      recent14TopKPositive: baseline4.isPositive,
+      recent14SpearmanCorr: baseline4.spearmanCorr,
+
+      randomTopKActualAvgDiff: randAvgDiff,
+      randomTopKActualLift: randLift,
+      randomTopKPositive: randPositive,
+      randomSpearmanCorr: randSpearman,
 
       engineTopTail: topTail,
       engineTopTailActualAvgDiff: topTailActualAvg,
@@ -320,6 +525,24 @@ export function runWalkForwardBacktest(
         baselineAvgTopKDiff: 0,
         baselineTopKPositiveRate: 0,
         baselineAvgSpearman: 0,
+        dowBaselineAvgTopKLift: 0,
+        dowBaselineAvgTopKDiff: 0,
+        dowBaselineTopKPositiveRate: 0,
+        dowBaselineAvgSpearman: 0,
+        specialBaselineAvgTopKLift: 0,
+        specialBaselineAvgTopKDiff: 0,
+        specialBaselineTopKPositiveRate: 0,
+        specialBaselineAvgSpearman: 0,
+        recent14BaselineAvgTopKLift: 0,
+        recent14BaselineAvgTopKDiff: 0,
+        recent14BaselineTopKPositiveRate: 0,
+        recent14BaselineAvgSpearman: 0,
+        randomBaselineAvgTopKLift: 0,
+        randomBaselineAvgTopKDiff: 0,
+        randomBaselineTopKPositiveRate: 0,
+        randomBaselineAvgSpearman: 0,
+        allPeriodHallMae: 0,
+        hallMaeImprovement: 0,
         liftEdge: 0,
         winRateEdge: 0,
         spearmanEdge: 0,
@@ -344,18 +567,48 @@ export function runWalkForwardBacktest(
     .filter((s): s is number => s !== null);
   const baselinePositiveCount = evaluations.filter((e) => e.baselineTopKPositive).length;
 
+  const dowLifts = evaluations.map((e) => e.dowTopKActualLift);
+  const dowDiffs = evaluations.map((e) => e.dowTopKActualAvgDiff);
+  const dowSpearmans = evaluations
+    .map((e) => e.dowSpearmanCorr)
+    .filter((s): s is number => s !== null);
+  const dowPositiveCount = evaluations.filter((e) => e.dowTopKPositive).length;
+
+  const specialLifts = evaluations.map((e) => e.specialTopKActualLift);
+  const specialDiffs = evaluations.map((e) => e.specialTopKActualAvgDiff);
+  const specialSpearmans = evaluations
+    .map((e) => e.specialSpearmanCorr)
+    .filter((s): s is number => s !== null);
+  const specialPositiveCount = evaluations.filter((e) => e.specialTopKPositive).length;
+
+  const recent14Lifts = evaluations.map((e) => e.recent14TopKActualLift);
+  const recent14Diffs = evaluations.map((e) => e.recent14TopKActualAvgDiff);
+  const recent14Spearmans = evaluations
+    .map((e) => e.recent14SpearmanCorr)
+    .filter((s): s is number => s !== null);
+  const recent14PositiveCount = evaluations.filter((e) => e.recent14TopKPositive).length;
+
+  const randomLifts = evaluations.map((e) => e.randomTopKActualLift);
+  const randomDiffs = evaluations.map((e) => e.randomTopKActualAvgDiff);
+  const randomSpearmans = evaluations
+    .map((e) => e.randomSpearmanCorr)
+    .filter((s): s is number => s !== null);
+  const randomPositiveCount = evaluations.filter((e) => e.randomTopKPositive).length;
+
   const engineAvgTopKLift = Math.round(engineLifts.reduce((a, b) => a + b, 0) / total);
   const engineAvgTopKDiff = Math.round(engineDiffs.reduce((a, b) => a + b, 0) / total);
   const engineTopKPositiveRate = Math.round((enginePositiveCount / total) * 1000) / 10;
   const engineAvgSpearman =
     engineSpearmans.length > 0
-      ? Math.round((engineSpearmans.reduce((a, b) => a + b, 0) / engineSpearmans.length) * 1000) /
-        1000
+      ? Math.round((engineSpearmans.reduce((a, b) => a + b, 0) / engineSpearmans.length) * 1000) / 1000
       : 0;
   const engineDiffCoinsMae = Math.round(
     evaluations.reduce((a, b) => a + b.engineDiffCoinsMae, 0) / total
   );
   const engineHallMae = Math.round(evaluations.reduce((a, b) => a + b.hallError, 0) / total);
+  const allPeriodHallMae = Math.round(evaluations.reduce((a, b) => a + b.allPeriodHallError, 0) / total);
+  const hallMaeImprovement = allPeriodHallMae - engineHallMae;
+
   const engineTailAvgDiff =
     engineTailDiffs.length > 0
       ? Math.round(engineTailDiffs.reduce((a, b) => a + b, 0) / engineTailDiffs.length)
@@ -366,8 +619,39 @@ export function runWalkForwardBacktest(
   const baselineTopKPositiveRate = Math.round((baselinePositiveCount / total) * 1000) / 10;
   const baselineAvgSpearman =
     baselineSpearmans.length > 0
-      ? Math.round((baselineSpearmans.reduce((a, b) => a + b, 0) / baselineSpearmans.length) * 1000) /
-        1000
+      ? Math.round((baselineSpearmans.reduce((a, b) => a + b, 0) / baselineSpearmans.length) * 1000) / 1000
+      : 0;
+
+  const dowBaselineAvgTopKLift = Math.round(dowLifts.reduce((a, b) => a + b, 0) / total);
+  const dowBaselineAvgTopKDiff = Math.round(dowDiffs.reduce((a, b) => a + b, 0) / total);
+  const dowBaselineTopKPositiveRate = Math.round((dowPositiveCount / total) * 1000) / 10;
+  const dowBaselineAvgSpearman =
+    dowSpearmans.length > 0
+      ? Math.round((dowSpearmans.reduce((a, b) => a + b, 0) / dowSpearmans.length) * 1000) / 1000
+      : 0;
+
+  const specialBaselineAvgTopKLift = Math.round(specialLifts.reduce((a, b) => a + b, 0) / total);
+  const specialBaselineAvgTopKDiff = Math.round(specialDiffs.reduce((a, b) => a + b, 0) / total);
+  const specialBaselineTopKPositiveRate = Math.round((specialPositiveCount / total) * 1000) / 10;
+  const specialBaselineAvgSpearman =
+    specialSpearmans.length > 0
+      ? Math.round((specialSpearmans.reduce((a, b) => a + b, 0) / specialSpearmans.length) * 1000) / 1000
+      : 0;
+
+  const recent14BaselineAvgTopKLift = Math.round(recent14Lifts.reduce((a, b) => a + b, 0) / total);
+  const recent14BaselineAvgTopKDiff = Math.round(recent14Diffs.reduce((a, b) => a + b, 0) / total);
+  const recent14BaselineTopKPositiveRate = Math.round((recent14PositiveCount / total) * 1000) / 10;
+  const recent14BaselineAvgSpearman =
+    recent14Spearmans.length > 0
+      ? Math.round((recent14Spearmans.reduce((a, b) => a + b, 0) / recent14Spearmans.length) * 1000) / 1000
+      : 0;
+
+  const randomBaselineAvgTopKLift = Math.round(randomLifts.reduce((a, b) => a + b, 0) / total);
+  const randomBaselineAvgTopKDiff = Math.round(randomDiffs.reduce((a, b) => a + b, 0) / total);
+  const randomBaselineTopKPositiveRate = Math.round((randomPositiveCount / total) * 1000) / 10;
+  const randomBaselineAvgSpearman =
+    randomSpearmans.length > 0
+      ? Math.round((randomSpearmans.reduce((a, b) => a + b, 0) / randomSpearmans.length) * 1000) / 1000
       : 0;
 
   return {
@@ -390,245 +674,283 @@ export function runWalkForwardBacktest(
       baselineTopKPositiveRate,
       baselineAvgSpearman,
 
+      dowBaselineAvgTopKLift,
+      dowBaselineAvgTopKDiff,
+      dowBaselineTopKPositiveRate,
+      dowBaselineAvgSpearman,
+
+      specialBaselineAvgTopKLift,
+      specialBaselineAvgTopKDiff,
+      specialBaselineTopKPositiveRate,
+      specialBaselineAvgSpearman,
+
+      recent14BaselineAvgTopKLift,
+      recent14BaselineAvgTopKDiff,
+      recent14BaselineTopKPositiveRate,
+      recent14BaselineAvgSpearman,
+
+      randomBaselineAvgTopKLift,
+      randomBaselineAvgTopKDiff,
+      randomBaselineTopKPositiveRate,
+      randomBaselineAvgSpearman,
+
+      allPeriodHallMae,
+      hallMaeImprovement,
+
       liftEdge: engineAvgTopKLift - baselineAvgTopKLift,
       winRateEdge: Math.round((engineTopKPositiveRate - baselineTopKPositiveRate) * 10) / 10,
       spearmanEdge: Math.round((engineAvgSpearman - baselineAvgSpearman) * 1000) / 1000,
     },
   };
 }
-
 /**
- * Automated parameter tuning with Train (70%) and Validation (30%) time-series split.
- * Explores weights on Train, and tests on Validation. Recommends adoption ONLY if
- * Validation lift improves with t-value >= 2.0.
+ * Automated parameter tuning with Expanding Window Rolling Validation (3-5 splits)
+ * and 7-day Moving Block Bootstrap (2,000 runs) 95% Confidence Interval.
+ * Explores 64 random candidate parameter combinations covering scaleFactorEnabled.
+ * Adoption requires BOTH positive mean lift gain across all splits AND positive 95% CI lower bound.
  */
 export function runAutoTuning(
   dailyRecords: DailyRecord[],
   specialDayRules?: SpecialDayRules,
   oldEventDays: string = '',
   k: number = 3,
-  onProgress?: (progressPercent: number) => void
+  onProgress?: (progressPercent: number) => void,
+  minWarmupDays: number = 30,
+  minMachines: number = 3
 ): TuningResult | null {
   const sorted = [...dailyRecords]
     .filter((r) => r.models && r.models.length > 0)
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  if (sorted.length < 8) return null;
+  if (sorted.length < 10) return null;
 
-  // Split into Train (first 70%) and Validation (last 30%)
-  const minWarmup = 4;
-  const evaluableDays = sorted.slice(minWarmup);
+  // Determine warmup and evaluable range
+  const warmupDays = Math.min(minWarmupDays, Math.max(4, Math.floor(sorted.length * 0.3)));
+  const evaluableDays = sorted.slice(warmupDays);
   if (evaluableDays.length < 4) return null;
 
-  const splitIdx = Math.max(2, Math.floor(evaluableDays.length * 0.7));
-  const trainDays = evaluableDays.slice(0, splitIdx);
-  const valDays = evaluableDays.slice(splitIdx);
+  // Expanding window rolling validation: 3 to 5 splits
+  const numSplits = Math.min(5, Math.max(3, Math.floor(evaluableDays.length / 7)));
 
-  if (trainDays.length < 2 || valDays.length < 2) return null;
+  // Define expanding splits
+  // Each split s: Train = sorted[0 .. valStart], Validation = sorted[valStart .. valEnd]
+  interface SplitRange {
+    trainCount: number;
+    valStart: number;
+    valEnd: number;
+    valDays: DailyRecord[];
+  }
+  const splits: SplitRange[] = [];
+  for (let s = 0; s < numSplits; s++) {
+    const valStartLocal = Math.floor((s * evaluableDays.length) / numSplits);
+    const valEndLocal =
+      s === numSplits - 1
+        ? evaluableDays.length
+        : Math.floor(((s + 1) * evaluableDays.length) / numSplits);
+    const valStart = warmupDays + valStartLocal;
+    const valEnd = warmupDays + valEndLocal;
+    splits.push({
+      trainCount: valStart,
+      valStart,
+      valEnd,
+      valDays: sorted.slice(valStart, valEnd),
+    });
+  }
 
-  // Build feature index ONCE across all sorted historical records
+  // Precompute feature index and prepared target days ONCE across all sorted historical records
   const featureIndex = buildFeatureIndex(sorted, specialDayRules, oldEventDays);
-
-  const trainPriorCounts = trainDays.map((td) =>
-    sorted.findIndex((r) => r.date === td.date)
-  );
-  const valPriorCounts = valDays.map((vd) =>
-    sorted.findIndex((r) => r.date === vd.date)
+  const preparedDays = sorted.map((d, idx) =>
+    buildPreparedTargetDay(featureIndex, d.date, idx)
   );
 
-  // 1. Build PreparedTargetDay and actual maps ONCE for each train day
-  const trainPreparedDays = trainDays.map((td, i) =>
-    buildPreparedTargetDay(featureIndex, td.date, trainPriorCounts[i])
-  );
-  const trainActualMaps = trainDays.map((td) => {
-    const map = new Map<string, number>();
-    td.models?.forEach((m) => map.set(normalizeModelName(m.modelName), m.avgDiffCoins));
+  // Precompute actual day model maps with machine counts
+  const actualMaps = sorted.map((d) => {
+    const map = new Map<string, { avgDiffCoins: number; totalMachines: number }>();
+    d.models?.forEach((m) => {
+      map.set(normalizeModelName(m.modelName), {
+        avgDiffCoins: m.avgDiffCoins,
+        totalMachines: m.totalMachines || 1,
+      });
+    });
     return map;
   });
 
-  // 2. Build PreparedTargetDay and actual maps ONCE for each validation day
-  const valPreparedDays = valDays.map((vd, i) =>
-    buildPreparedTargetDay(featureIndex, vd.date, valPriorCounts[i])
-  );
-  const valActualMaps = valDays.map((vd) => {
-    const map = new Map<string, number>();
-    vd.models?.forEach((m) => map.set(normalizeModelName(m.modelName), m.avgDiffCoins));
-    return map;
-  });
+  // Generate 64 random candidate parameter combinations
+  const candRng = createSeededRandom(42);
+  const candidateDivisors = [20, 25, 30, 35, 40, 50, 60];
+  const candidateWinMults = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2];
+  const candidateHighMults = [1.5, 2.5, 3.5, 4.5, 6.0, 7.5];
+  const candidateBlends = [0.4, 0.55, 0.7, 0.75, 0.85, 0.95];
 
-  // Search grid on Train period
-  const candidateDivisors = [25, 35, 50];
-  const candidateWinMults = [0.3, 0.6, 1.0];
-  const candidateHighMults = [2.0, 4.5, 7.0];
-  const candidateBlends = [0.5, 0.75, 0.9];
+  const candidates: RankingWeights[] = [
+    { ...DEFAULT_RANKING_WEIGHTS, scaleFactorEnabled: true },
+    { ...DEFAULT_RANKING_WEIGHTS, scaleFactorEnabled: false },
+  ];
 
-  let bestTrainLift = -Infinity;
+  while (candidates.length < 64) {
+    const div = candidateDivisors[Math.floor(candRng() * candidateDivisors.length)];
+    const win = candidateWinMults[Math.floor(candRng() * candidateWinMults.length)];
+    const high = candidateHighMults[Math.floor(candRng() * candidateHighMults.length)];
+    const blend = candidateBlends[Math.floor(candRng() * candidateBlends.length)];
+    const scale = candRng() > 0.5;
+    candidates.push({
+      diffCoinDivisor: div,
+      winRateMultiplier: win,
+      allHighMultiplier: high,
+      matchingBlendWeight: blend,
+      scaleFactorEnabled: scale,
+    });
+  }
+
+  // Helper to compute machine-weighted lift for a prepared day
+  const computeDayLift = (dayIdx: number, w: RankingWeights): number | null => {
+    const prep = preparedDays[dayIdx];
+    if (!prep || prep.models.length === 0) return null;
+    const fc = scoreFromPrepared(prep, w);
+    if (!fc || fc.modelRankings.length === 0) return null;
+
+    const actualMap = actualMaps[dayIdx];
+    const targetDay = sorted[dayIdx];
+
+    // Eligible candidate models meeting minMachines filter
+    let eligibleModels = Array.from(actualMap.entries())
+      .filter(([_, info]) => info.totalMachines >= minMachines)
+      .map(([name]) => name);
+    if (eligibleModels.length < 2) {
+      eligibleModels = Array.from(actualMap.keys());
+    }
+    const eligibleSet = new Set(eligibleModels);
+
+    const topModels = fc.modelRankings.filter((m) => {
+      const norm = normalizeModelName(m.modelName);
+      return actualMap.has(norm) && eligibleSet.has(norm);
+    }).slice(0, k);
+
+    if (topModels.length === 0) return null;
+
+    let totMachines = 0;
+    let totDiff = 0;
+    for (const m of topModels) {
+      const act = actualMap.get(normalizeModelName(m.modelName))!;
+      const machines = Math.max(1, act.totalMachines);
+      totMachines += machines;
+      totDiff += machines * act.avgDiffCoins;
+    }
+    const weightedAvg = totMachines > 0 ? totDiff / totMachines : 0;
+    return weightedAvg - targetDay.avgDiffCoins;
+  };
+
+  // 1. Train Evaluation: Find candidate with highest average training lift across initial expanding window
+  const initialTrainCount = splits[0].trainCount;
   let bestCandidateWeights: RankingWeights = { ...DEFAULT_RANKING_WEIGHTS };
+  let bestTrainLift = -Infinity;
 
-  const totalCombinations =
-    candidateDivisors.length *
-    candidateWinMults.length *
-    candidateHighMults.length *
-    candidateBlends.length;
-  let comboIndex = 0;
-
-  // Evaluate candidate weights on train days
-  for (const div of candidateDivisors) {
-    for (const win of candidateWinMults) {
-      for (const high of candidateHighMults) {
-        for (const blend of candidateBlends) {
-          comboIndex++;
-          const w: RankingWeights = {
-            diffCoinDivisor: div,
-            winRateMultiplier: win,
-            allHighMultiplier: high,
-            matchingBlendWeight: blend,
-            scaleFactorEnabled: true,
-          };
-
-          // Fast lift evaluation on Train using scoreFromPrepared
-          let sumLift = 0;
-          let count = 0;
-          for (let ti = 0; ti < trainDays.length; ti++) {
-            const prep = trainPreparedDays[ti];
-            if (!prep || prep.models.length === 0) continue;
-
-            const targetDay = trainDays[ti];
-            const fc = scoreFromPrepared(prep, w);
-            if (!fc || fc.modelRankings.length === 0) continue;
-
-            const actualMap = trainActualMaps[ti];
-
-            const topModels = fc.modelRankings
-              .filter((m) => actualMap.has(normalizeModelName(m.modelName)))
-              .slice(0, k);
-
-            if (topModels.length > 0) {
-              const avgActual =
-                topModels.reduce((acc, m) => acc + actualMap.get(normalizeModelName(m.modelName))!, 0) /
-                topModels.length;
-              sumLift += avgActual - targetDay.avgDiffCoins;
-              count++;
-            }
-          }
-
-          const avgTrainLift = count > 0 ? sumLift / count : -Infinity;
-          if (avgTrainLift > bestTrainLift) {
-            bestTrainLift = avgTrainLift;
-            bestCandidateWeights = w;
-          }
-
-          if (onProgress && comboIndex % 8 === 0) {
-            const pct = Math.min(95, Math.round((comboIndex / totalCombinations) * 90));
-            onProgress(pct);
-          }
-        }
+  for (let cIdx = 0; cIdx < candidates.length; cIdx++) {
+    const cand = candidates[cIdx];
+    let sumLift = 0;
+    let count = 0;
+    for (let ti = 0; ti < initialTrainCount; ti++) {
+      const l = computeDayLift(ti, cand);
+      if (l !== null) {
+        sumLift += l;
+        count++;
       }
     }
-  }
+    const avgLift = count > 0 ? sumLift / count : -Infinity;
+    if (avgLift > bestTrainLift) {
+      bestTrainLift = avgLift;
+      bestCandidateWeights = cand;
+    }
 
-  // Evaluate default weights on Train days for baseline
-  let trainDefaultSumLift = 0;
-  let trainDefaultCount = 0;
-  for (let ti = 0; ti < trainDays.length; ti++) {
-    const prep = trainPreparedDays[ti];
-    if (!prep || prep.models.length === 0) continue;
-
-    const targetDay = trainDays[ti];
-    const fc = scoreFromPrepared(prep, DEFAULT_RANKING_WEIGHTS);
-    if (!fc || fc.modelRankings.length === 0) continue;
-
-    const actualMap = trainActualMaps[ti];
-    const topModels = fc.modelRankings
-      .filter((m) => actualMap.has(normalizeModelName(m.modelName)))
-      .slice(0, k);
-    if (topModels.length > 0) {
-      const avgActual =
-        topModels.reduce((acc, m) => acc + actualMap.get(normalizeModelName(m.modelName))!, 0) /
-        topModels.length;
-      trainDefaultSumLift += avgActual - targetDay.avgDiffCoins;
-      trainDefaultCount++;
+    if (onProgress && cIdx % 8 === 0) {
+      onProgress(Math.min(85, Math.round((cIdx / candidates.length) * 85)));
     }
   }
-  const trainDefaultLift =
-    trainDefaultCount > 0 ? Math.round(trainDefaultSumLift / trainDefaultCount) : 0;
+
+  // Train lift with default weights
+  let trainDefSum = 0;
+  let trainDefCount = 0;
+  for (let ti = 0; ti < initialTrainCount; ti++) {
+    const l = computeDayLift(ti, DEFAULT_RANKING_WEIGHTS);
+    if (l !== null) {
+      trainDefSum += l;
+      trainDefCount++;
+    }
+  }
+  const trainDefaultLift = trainDefCount > 0 ? Math.round(trainDefSum / trainDefCount) : 0;
   const trainCandidateLift = Math.round(bestTrainLift);
   const trainLiftGain = trainCandidateLift - trainDefaultLift;
 
-  // Validation phase: Out-of-sample paired test on valDays using scoreFromPrepared
-  const diffs: number[] = [];
-  let valDefaultSum = 0;
-  let valCandidateSum = 0;
-  let valValidCount = 0;
+  // 2. Rolling Validation Phase: Evaluate on future validation slices across all splits
+  const splitGains: number[] = [];
+  const allValDiffs: number[] = [];
+  let valDefTotalSum = 0;
+  let valCandTotalSum = 0;
+  let valTotalDays = 0;
 
-  for (let vi = 0; vi < valDays.length; vi++) {
-    const prep = valPreparedDays[vi];
-    if (!prep || prep.models.length === 0) continue;
-
-    const targetDay = valDays[vi];
-    const actualMap = valActualMaps[vi];
-
-    // Default
-    const fcDef = scoreFromPrepared(prep, DEFAULT_RANKING_WEIGHTS);
-    // Candidate
-    const fcCand = scoreFromPrepared(prep, bestCandidateWeights);
-
-    if (!fcDef || !fcCand) continue;
-
-    const topDef = fcDef.modelRankings
-      .filter((m) => actualMap.has(normalizeModelName(m.modelName)))
-      .slice(0, k);
-    const topCand = fcCand.modelRankings
-      .filter((m) => actualMap.has(normalizeModelName(m.modelName)))
-      .slice(0, k);
-
-    if (topDef.length === 0 || topCand.length === 0) continue;
-
-    const defAvg =
-      topDef.reduce((acc, m) => acc + actualMap.get(normalizeModelName(m.modelName))!, 0) / topDef.length;
-    const candAvg =
-      topCand.reduce((acc, m) => acc + actualMap.get(normalizeModelName(m.modelName))!, 0) / topCand.length;
-
-    const defLift = defAvg - targetDay.avgDiffCoins;
-    const candLift = candAvg - targetDay.avgDiffCoins;
-
-    valDefaultSum += defLift;
-    valCandidateSum += candLift;
-    valValidCount++;
-
-    diffs.push(candLift - defLift);
+  for (let sIdx = 0; sIdx < splits.length; sIdx++) {
+    const split = splits[sIdx];
+    const splitDiffs: number[] = [];
+    for (let vi = split.valStart; vi < split.valEnd; vi++) {
+      const candLift = computeDayLift(vi, bestCandidateWeights);
+      const defLift = computeDayLift(vi, DEFAULT_RANKING_WEIGHTS);
+      if (candLift !== null && defLift !== null) {
+        const diff = candLift - defLift;
+        splitDiffs.push(diff);
+        allValDiffs.push(diff);
+        valDefTotalSum += defLift;
+        valCandTotalSum += candLift;
+        valTotalDays++;
+      }
+    }
+    const sMean = splitDiffs.length > 0 ? splitDiffs.reduce((a, b) => a + b, 0) / splitDiffs.length : 0;
+    splitGains.push(Math.round(sMean * 10) / 10);
   }
 
-  const valEvaluatedDays = valValidCount;
-  const valDefaultLift = valEvaluatedDays > 0 ? Math.round(valDefaultSum / valEvaluatedDays) : 0;
-  const valCandidateLift =
-    valEvaluatedDays > 0 ? Math.round(valCandidateSum / valEvaluatedDays) : 0;
+  if (onProgress) onProgress(90);
+
+  const valEvaluatedDays = valTotalDays;
+  const valDefaultLift = valEvaluatedDays > 0 ? Math.round(valDefTotalSum / valEvaluatedDays) : 0;
+  const valCandidateLift = valEvaluatedDays > 0 ? Math.round(valCandTotalSum / valEvaluatedDays) : 0;
   const valLiftGain = valCandidateLift - valDefaultLift;
 
-  // Paired t-test
+  const meanSplitGain =
+    splitGains.length > 0
+      ? Math.round((splitGains.reduce((a, b) => a + b, 0) / splitGains.length) * 10) / 10
+      : 0;
+
+  // 3. Block Bootstrap: 7-day blocks, 2000 iterations
+  const bootstrap = computeBlockBootstrapCI(allValDiffs, 7, 2000, 42);
+  const bootstrapCiLower = bootstrap.ciLower;
+  const bootstrapCiUpper = bootstrap.ciUpper;
+
+  // Paired t-test statistics for compatibility
   let tValue = 0;
   let valStdError = 0;
-  if (diffs.length >= 2) {
-    const meanDiff = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+  if (allValDiffs.length >= 2) {
+    const meanDiff = allValDiffs.reduce((a, b) => a + b, 0) / allValDiffs.length;
     const variance =
-      diffs.reduce((acc, d) => acc + (d - meanDiff) * (d - meanDiff), 0) /
-      (diffs.length - 1);
+      allValDiffs.reduce((acc, d) => acc + (d - meanDiff) * (d - meanDiff), 0) /
+      (allValDiffs.length - 1);
     const stdDev = Math.sqrt(variance);
-    valStdError = stdDev / Math.sqrt(diffs.length);
+    valStdError = stdDev / Math.sqrt(allValDiffs.length);
     if (valStdError > 0.001) {
       tValue = Math.round((meanDiff / valStdError) * 100) / 100;
     }
   }
 
-  const isRecommended = valLiftGain > 0 && tValue >= 2.0;
+  // Adoption Condition:
+  // 「全分割平均の改善が正」かつ「ブロックブートストラップ（ブロック長7日、2000回）の95%区間下限が正」
+  const isRecommended = meanSplitGain > 0 && bootstrapCiLower > 0;
 
+  // Verdict message with explicit warning on multiple comparisons
   let verdictMessage = '';
   if (isRecommended) {
-    verdictMessage = `検証期間（後半30%）において上位${k}機種のリフトが平均 +${valLiftGain}枚 向上し、t値 ${tValue}（≧ 2.0）により偶然のばらつきと区別できる有意な改善が確認されました。この店舗設定としての採用を推奨します。`;
-  } else if (valLiftGain <= 0) {
-    verdictMessage = `検証期間において改善が見られないか低下（${valLiftGain}枚、t値 ${tValue}）しました。過学習を防止するため、標準のデフォルト重みの維持を推奨します。`;
+    verdictMessage = `ローリング検証（${numSplits}分割）において、全分割平均で +${meanSplitGain}枚 のリフト改善を確認しました。7日ブロックブートストラップ（2,000回試行）による95%信頼区間は [+${bootstrapCiLower}枚, +${bootstrapCiUpper}枚] と下限が0を上回っており、有意な改善が確認されました。※探索した${candidates.length}組の候補群からの最良選択に伴う多重比較バイアス（過学習）を考慮しても信頼性が担保されているため、店舗設定としての採用を推奨します。`;
+  } else if (meanSplitGain <= 0) {
+    verdictMessage = `ローリング検証（${numSplits}分割）において、全分割平均でのリフト改善が確認できませんでした（${meanSplitGain}枚）。多重比較による過学習を防止するため、標準デフォルト重みの維持を推奨します。`;
   } else {
-    verdictMessage = `検証期間で +${valLiftGain}枚 のプラスが見られましたが、t値が ${tValue}（< 2.0）のため偶然の変動と区別できません。統計的信頼性を重視し、標準デフォルト重みの維持を推奨します。`;
+    verdictMessage = `ローリング検証（${numSplits}分割）の全分割平均では +${meanSplitGain}枚 の改善が見られましたが、7日ブロックブートストラップ（2,000回試行）の95%信頼区間は [${bootstrapCiLower}枚, +${bootstrapCiUpper}枚] であり、下限が0以下（偶然のばらつきの範囲内）です。※多数の候補から選定したことによる多重比較（過学習）の懸念があるため、標準デフォルト重みの維持を推奨します。`;
   }
 
   if (onProgress) {
@@ -637,7 +959,7 @@ export function runAutoTuning(
 
   return {
     candidateWeights: bestCandidateWeights,
-    trainEvaluatedDays: trainDays.length,
+    trainEvaluatedDays: initialTrainCount,
     valEvaluatedDays,
 
     trainDefaultLift,
@@ -649,6 +971,14 @@ export function runAutoTuning(
     valLiftGain,
     valStdError: Math.round(valStdError * 10) / 10,
     tValue,
+
+    numSplits,
+    splitGains,
+    meanSplitGain,
+    bootstrapCiLower,
+    bootstrapCiUpper,
+    bootstrapIterations: 2000,
+    bootstrapBlockLength: 7,
 
     isRecommended,
     verdictMessage,
@@ -1398,5 +1728,141 @@ export function runMachineBacktest(
     withFilter: aggregateEvaluation(filteredDays),
     withoutFilter: baseEval,
     ablationResults,
+  };
+}
+
+export interface MachineRollingValidationResult {
+  numSplits: number;
+  valEvaluatedDays: number;
+  splitGains: number[];
+  meanSplitGain: number;
+  bootstrapCiLower: number;
+  bootstrapCiUpper: number;
+  isRecommended: boolean;
+  verdictMessage: string;
+}
+
+/**
+ * Prompt 14: Rolling validation (3-5 splits) with Moving Block Bootstrap (2,000 iterations)
+ * for adjusting machine ranking weights. Evaluates across all splits to prevent choosing
+ * weights based on a single split (overfitting prevention).
+ */
+export function runMachineRollingValidation(
+  dailyRecords: DailyRecord[],
+  specialDayRules?: SpecialDayRules,
+  candidateWeights: Partial<MachineRankingWeights> = {},
+  baseWeights: MachineRankingWeights = DEFAULT_MACHINE_RANKING_WEIGHTS,
+  topN: number = 10
+): MachineRollingValidationResult | null {
+  const sortedRecords = [...dailyRecords]
+    .filter((d) => d.machines && d.machines.length > 0)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  if (sortedRecords.length < 10) return null;
+
+  const minWarmup = Math.min(5, Math.floor(sortedRecords.length * 0.25));
+  const evaluableCount = sortedRecords.length - minWarmup;
+  if (evaluableCount < 5) return null;
+
+  const numSplits = Math.min(5, Math.max(3, Math.floor(evaluableCount / 5)));
+  const splitGains: number[] = [];
+  const allDiffLifts: number[] = [];
+
+  for (let s = 0; s < numSplits; s++) {
+    const valStartLocal = Math.floor((s * evaluableCount) / numSplits);
+    const valEndLocal =
+      s === numSplits - 1
+        ? evaluableCount
+        : Math.floor(((s + 1) * evaluableCount) / numSplits);
+
+    const valStart = minWarmup + valStartLocal;
+    const valEnd = minWarmup + valEndLocal;
+
+    const splitDiffs: number[] = [];
+
+    for (let i = valStart; i < valEnd; i++) {
+      const evalDay = sortedRecords[i];
+      const recordsBefore = sortedRecords.slice(0, i);
+      const dayMachinesMap = new Map<number, DailyMachineRecord>();
+      (evalDay.machines || []).forEach((m) => dayMachinesMap.set(m.machineNum, m));
+      const hallAvgDiff = evalDay.avgDiffCoins ?? 0;
+
+      // Candidate lift
+      const candRanking = calculateTargetMachineRanking(
+        evalDay.date,
+        recordsBefore,
+        specialDayRules,
+        candidateWeights,
+        { minEvidenceDays: 0 }
+      );
+      const candTop = candRanking.rankings.slice(0, topN);
+      const candObs = candTop.filter((c) => dayMachinesMap.has(c.machineNum));
+      let candLift = 0;
+      if (candObs.length > 0) {
+        const sumD = candObs.reduce((acc, m) => acc + (dayMachinesMap.get(m.machineNum)?.diff ?? 0), 0);
+        candLift = Math.round(sumD / candObs.length) - hallAvgDiff;
+      }
+
+      // Base lift
+      const baseRanking = calculateTargetMachineRanking(
+        evalDay.date,
+        recordsBefore,
+        specialDayRules,
+        baseWeights,
+        { minEvidenceDays: 0 }
+      );
+      const baseTop = baseRanking.rankings.slice(0, topN);
+      const baseObs = baseTop.filter((c) => dayMachinesMap.has(c.machineNum));
+      let baseLift = 0;
+      if (baseObs.length > 0) {
+        const sumD = baseObs.reduce((acc, m) => acc + (dayMachinesMap.get(m.machineNum)?.diff ?? 0), 0);
+        baseLift = Math.round(sumD / baseObs.length) - hallAvgDiff;
+      }
+
+      const diff = candLift - baseLift;
+      splitDiffs.push(diff);
+      allDiffLifts.push(diff);
+    }
+
+    const splitMean =
+      splitDiffs.length > 0
+        ? Math.round(splitDiffs.reduce((a, b) => a + b, 0) / splitDiffs.length)
+        : 0;
+    splitGains.push(splitMean);
+  }
+
+  const meanSplitGain =
+    splitGains.length > 0
+      ? Math.round(splitGains.reduce((a, b) => a + b, 0) / splitGains.length)
+      : 0;
+
+  const { ciLower, ciUpper } = computeBlockBootstrapCI(
+    allDiffLifts,
+    7,
+    2000,
+    42
+  );
+
+  const allSplitsNonNegative = splitGains.every((g) => g >= 0);
+  const isRecommended = meanSplitGain > 0 && ciLower > 0 && allSplitsNonNegative;
+
+  let verdictMessage = '';
+  if (isRecommended) {
+    verdictMessage = `【採用推奨】全${numSplits}分割の検証すべてでリフトが同等以上（全分割平均 +${meanSplitGain}枚）を達成し、95%信頼区間 [+${ciLower}枚, +${ciUpper}枚] で0を有意に上回っています。店舗の固有重みとして保存できます。`;
+  } else {
+    verdictMessage = `【標準維持推奨】全${numSplits}分割の検証において明確な有意差（全分割平均 ${
+      meanSplitGain >= 0 ? `+${meanSplitGain}` : meanSplitGain
+    }枚, 95%区間下限: ${ciLower}枚）が確認されませんでした。過剰適合（過学習）を防ぐため、既定の重みを維持することを推奨します。`;
+  }
+
+  return {
+    numSplits,
+    valEvaluatedDays: allDiffLifts.length,
+    splitGains,
+    meanSplitGain,
+    bootstrapCiLower: ciLower,
+    bootstrapCiUpper: ciUpper,
+    isRecommended,
+    verdictMessage,
   };
 }

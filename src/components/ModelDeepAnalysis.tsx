@@ -11,6 +11,8 @@ import {
   ModelPresetMode,
 } from '../utils/modelFilterUtils';
 import { ModelMultiSelectModal } from './ModelMultiSelectModal';
+import { ATypeSettingDistributionCard } from './ATypeSettingDistributionCard';
+import { resolveATypeSpecs, estimateSettingDistributionFromPayout } from '../utils/aTypeSettingEstimator';
 import {
   Cpu,
   Search,
@@ -54,7 +56,7 @@ interface ModelDeepAnalysisProps {
 type FilterCategory = 'all' | 'positive' | 'negative' | 'main' | 'small';
 type ModelPresetType = 'all' | 'smart_slot' | 'a_type' | 'juggler' | 'custom';
 type SortField = 'totalDiff' | 'avgDiff' | 'winRate' | 'avgGames' | 'machines' | 'name';
-type ActiveSubView = 'models' | 'tails';
+type ActiveSubView = 'models' | 'tails' | 'a_type_settings';
 
 export const ModelDeepAnalysis: React.FC<ModelDeepAnalysisProps> = ({
   dailyRecords,
@@ -96,6 +98,13 @@ export const ModelDeepAnalysis: React.FC<ModelDeepAnalysisProps> = ({
     () => aggregatedModels.map((m) => m.modelName),
     [aggregatedModels]
   );
+
+  // A-Type Models
+  const aTypeModels = useMemo(
+    () => aggregatedModels.filter((m) => isAType(m.modelName)),
+    [aggregatedModels]
+  );
+  const [selectedATypeModelName, setSelectedATypeModelName] = useState<string>('');
 
   // Counts for each preset
   const presetCounts = useMemo(() => {
@@ -405,6 +414,25 @@ export const ModelDeepAnalysis: React.FC<ModelDeepAnalysisProps> = ({
             >
               <Hash className="w-3.5 h-3.5" />
               <span>台番号末尾別結果 ({aggregatedTails.length}分類)</span>
+            </button>
+          )}
+          {aTypeModels.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                setSubView('a_type_settings');
+                if (!selectedATypeModelName && aTypeModels.length > 0) {
+                  setSelectedATypeModelName(aTypeModels[0].modelName);
+                }
+              }}
+              className={`px-3.5 py-1.5 font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                subView === 'a_type_settings'
+                  ? 'bg-emerald-400 text-slate-950 shadow-sm font-black'
+                  : 'text-slate-300 hover:text-white'
+              }`}
+            >
+              <Target className="w-3.5 h-3.5" />
+              <span>Aタイプ設定推定 ({aTypeModels.length}機種)</span>
             </button>
           )}
         </div>
@@ -1106,6 +1134,14 @@ export const ModelDeepAnalysis: React.FC<ModelDeepAnalysisProps> = ({
                                   </span>
                                 </div>
 
+                                {/* A-Type Setting Distribution Card (Prompt 15) */}
+                                {isAType(m.modelName) && (
+                                  <ATypeSettingDistributionCard
+                                    stat={m}
+                                    dailyRecords={dailyRecords}
+                                  />
+                                )}
+
                                 {/* Comparison: Event Days vs Normal Days */}
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                                   <div className="p-3 bg-amber-50/50 rounded-lg border border-amber-200/60">
@@ -1326,6 +1362,152 @@ export const ModelDeepAnalysis: React.FC<ModelDeepAnalysisProps> = ({
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* A-TYPE SETTING ESTIMATION SUBVIEW (Prompt 15) */}
+      {subView === 'a_type_settings' && (
+        <div className="p-4 sm:p-5 space-y-4">
+          {/* Header Explanation Banner */}
+          <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-slate-50 p-4 rounded-xl border border-emerald-200 text-xs text-slate-700 space-y-2">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div className="p-1 rounded-md bg-emerald-600 text-white font-black">
+                  <Target className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-slate-900">
+                    Aタイプ 出率・設定値分布推定 (公表スペック×観測出率)
+                  </h3>
+                  <p className="text-[11px] text-slate-600 mt-0.5">
+                    完全3枚掛け（BET 3枚固定）を前提とし、Aタイプの公表機械割と実測の回転数・差枚数から設定1〜6の推定確率分布を算出します。
+                  </p>
+                </div>
+              </div>
+              <span className="text-[11px] bg-emerald-100 text-emerald-800 border border-emerald-300 px-2.5 py-1 rounded-lg font-bold self-start sm:self-auto">
+                対象機種: {aTypeModels.length}機種
+              </span>
+            </div>
+
+            {/* Model Selector Buttons */}
+            <div className="pt-2 border-t border-emerald-200/60 flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] font-bold text-slate-700 mr-1">機種を選択:</span>
+              {aTypeModels.map((am) => {
+                const isSelected = (selectedATypeModelName || aTypeModels[0]?.modelName) === am.modelName;
+                return (
+                  <button
+                    key={am.modelName}
+                    type="button"
+                    onClick={() => setSelectedATypeModelName(am.modelName)}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-emerald-600 text-white shadow-2xs font-black'
+                        : 'bg-white hover:bg-emerald-50 text-slate-700 border border-emerald-200'
+                    }`}
+                  >
+                    <span>{am.modelName}</span>
+                    <span className="text-[10px] ml-1 opacity-80">({am.avgMachinesPerDay}台)</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Active Model Detailed Card */}
+          {(() => {
+            const activeModel =
+              aTypeModels.find((m) => m.modelName === selectedATypeModelName) || aTypeModels[0];
+            if (!activeModel) return null;
+            return (
+              <ATypeSettingDistributionCard
+                stat={activeModel}
+                dailyRecords={dailyRecords}
+              />
+            );
+          })()}
+
+          {/* Store-wide A-Type Summary Table */}
+          {aTypeModels.length > 1 && (
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+              <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                  <BarChart3 className="w-3.5 h-3.5 text-emerald-600" />
+                  店舗内 全Aタイプ機種 設定推定サマリー一覧
+                </span>
+                <span className="text-[11px] text-slate-500 font-sans">
+                  機種クリックで上記詳細カードを切替表示
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-slate-100/70 text-slate-700 font-bold border-b border-slate-200">
+                    <tr>
+                      <th className="py-2 px-3">機種名</th>
+                      <th className="py-2 px-3 text-right">台数</th>
+                      <th className="py-2 px-3 text-right">平均G数</th>
+                      <th className="py-2 px-3 text-right">実績出率</th>
+                      <th className="py-2 px-3 text-right">推定期待設定</th>
+                      <th className="py-2 px-3 text-center">最尤設定</th>
+                      <th className="py-2 px-3 text-right">高設定(4+)率</th>
+                      <th className="py-2 px-3 text-right">最高(5/6)率</th>
+                      <th className="py-2 px-3 text-center">適用スペック</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-mono">
+                    {aTypeModels.map((am) => {
+                      const totalG = Math.max(0, Math.round(am.avgGames * am.totalMachineDays));
+                      const inCoins = totalG * 3;
+                      const outCoins = inCoins + am.totalDiffCoins;
+                      const payout = inCoins > 0 ? (outCoins / inCoins) * 100 : 100;
+                      const res = resolveATypeSpecs(am.modelName);
+                      const dist = estimateSettingDistributionFromPayout(totalG, payout, res.specs);
+                      const isSelected = (selectedATypeModelName || aTypeModels[0]?.modelName) === am.modelName;
+
+                      return (
+                        <tr
+                          key={am.modelName}
+                          onClick={() => setSelectedATypeModelName(am.modelName)}
+                          className={`hover:bg-slate-50 cursor-pointer transition-colors ${
+                            isSelected ? 'bg-emerald-50/60 font-bold' : ''
+                          }`}
+                        >
+                          <td className="py-2 px-3 font-sans font-bold text-slate-900">
+                            {am.modelName}
+                          </td>
+                          <td className="py-2 px-3 text-right text-slate-700">
+                            {am.avgMachinesPerDay}台
+                          </td>
+                          <td className="py-2 px-3 text-right text-slate-700">
+                            {formatNumber(am.avgGames)}G
+                          </td>
+                          <td className="py-2 px-3 text-right font-black text-slate-900">
+                            {Math.round(payout * 10) / 10}%
+                          </td>
+                          <td className="py-2 px-3 text-right font-black text-emerald-700">
+                            設定 {dist.expectedSetting}
+                          </td>
+                          <td className="py-2 px-3 text-center">
+                            <span className="text-[11px] px-1.5 py-0.2 rounded font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              設定 {dist.mostLikelySetting}
+                            </span>
+                          </td>
+                          <td className="py-2 px-3 text-right text-indigo-700 font-bold">
+                            {dist.highSettingRate}%
+                          </td>
+                          <td className="py-2 px-3 text-right text-rose-700 font-bold">
+                            {dist.topSettingRate}%
+                          </td>
+                          <td className="py-2 px-3 text-center font-sans text-[11px] text-slate-500">
+                            {res.displayName}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

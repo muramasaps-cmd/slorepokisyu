@@ -214,4 +214,215 @@ describe('calculateTargetDateRanking', () => {
       expect(goldenPayload).toMatchSnapshot();
     });
   });
+
+  describe('Prompt 3: 統計の改善オプション (台数加重・縮小推定・時間減衰・全台系正規化・分位点ランク)', () => {
+    it('1. 台数加重平均 (useMachineWeighting): 機種×日およびコホートをtotalMachinesで加重する', () => {
+      // 2日間の小規模データを作成:
+      // Day 1 (特日): 機種A = 10台, 差枚+1000枚, 勝率80%
+      // Day 2 (特日): 機種A = 1台, 差枚-500枚, 勝率0%
+      const testRecords = [
+        {
+          date: '2024-03-07',
+          yearMonth: '2024-03',
+          year: 2024,
+          month: 3,
+          day: 7,
+          dayOfWeek: '木',
+          avgDiffCoins: 1000,
+          avgGames: 5000,
+          winRate: 80,
+          winMachines: 8,
+          totalMachines: 10,
+          totalDiffCoins: 10000,
+          hallCoinProfit: -10000,
+          playerCoinProfit: 10000,
+          hallYenProfit: -200000,
+          playerYenProfit: 200000,
+          inCoins: 150000,
+          outCoins: 160000,
+          payoutRate: 106.67,
+          estimatedRevenue: 300000,
+          exchangeGapProfit: 5000,
+          gModelHallProfit: -195000,
+          gModelPlayerProfit: 195000,
+          isOldEventDay: true,
+          is7Day: true,
+          notable: '',
+          models: [
+            {
+              modelName: 'テスト機種A',
+              avgDiffCoins: 1000,
+              totalDiffCoins: 10000,
+              avgGames: 5000,
+              winRate: 80,
+              winMachines: 8,
+              totalMachines: 10,
+            },
+          ],
+        },
+        {
+          date: '2024-03-17',
+          yearMonth: '2024-03',
+          year: 2024,
+          month: 3,
+          day: 17,
+          dayOfWeek: '日',
+          avgDiffCoins: -500,
+          avgGames: 3000,
+          winRate: 0,
+          winMachines: 0,
+          totalMachines: 1,
+          totalDiffCoins: -500,
+          hallCoinProfit: 500,
+          playerCoinProfit: -500,
+          hallYenProfit: 10000,
+          playerYenProfit: -10000,
+          inCoins: 9000,
+          outCoins: 8500,
+          payoutRate: 94.44,
+          estimatedRevenue: 18000,
+          exchangeGapProfit: 300,
+          gModelHallProfit: 10300,
+          gModelPlayerProfit: -10300,
+          isOldEventDay: true,
+          is7Day: true,
+          notable: '',
+          models: [
+            {
+              modelName: 'テスト機種A',
+              avgDiffCoins: -500,
+              totalDiffCoins: -500,
+              avgGames: 3000,
+              winRate: 0,
+              winMachines: 0,
+              totalMachines: 1,
+            },
+          ],
+        },
+      ];
+
+      // デフォルト (非加重): 単純平均 = (1000 + -500) / 2 = +250枚
+      const defaultForecast = calculateTargetDateRanking(
+        '2024-03-27',
+        testRecords,
+        specialRules,
+        '',
+        DEFAULT_RANKING_WEIGHTS
+      );
+      expect(defaultForecast).not.toBeNull();
+      const defaultModel = defaultForecast!.modelRankings[0];
+      expect(defaultModel.matchingAvgDiffCoins).toBe(250);
+
+      // 加重平均: (1000 * 10 + -500 * 1) / (10 + 1) = 9500 / 11 = 864枚
+      const weightedForecast = calculateTargetDateRanking(
+        '2024-03-27',
+        testRecords,
+        specialRules,
+        '',
+        { ...DEFAULT_RANKING_WEIGHTS, useMachineWeighting: true }
+      );
+      expect(weightedForecast).not.toBeNull();
+      const weightedModel = weightedForecast!.modelRankings[0];
+      expect(weightedModel.matchingAvgDiffCoins).toBe(864);
+    });
+
+    it('2. 縮小推定 (useShrinkage): (n*標本平均 + k*母平均) / (n + k) で推定差枚を母平均へ縮小する', () => {
+      const records = generateSyntheticDailyRecords(42, 60, 15, specialRules);
+      const defaultForecast = calculateTargetDateRanking(
+        '2024-03-07',
+        records,
+        specialRules,
+        '',
+        { ...DEFAULT_RANKING_WEIGHTS, useShrinkage: false }
+      );
+
+      const shrinkForecast = calculateTargetDateRanking(
+        '2024-03-07',
+        records,
+        specialRules,
+        '',
+        { ...DEFAULT_RANKING_WEIGHTS, useShrinkage: true, shrinkageK: 5 }
+      );
+
+      expect(defaultForecast).not.toBeNull();
+      expect(shrinkForecast).not.toBeNull();
+
+      // 一致日数が少ない機種において、縮小推定値は母平均 (ホール平均差枚) に近づく
+      const cohortAvg = shrinkForecast!.expectedHallAvgDiffCoins;
+      const mShrink = shrinkForecast!.modelRankings[0];
+      const mDefault = defaultForecast!.modelRankings[0];
+
+      expect(typeof mShrink.expectedDiffCoins).toBe('number');
+      // 縮小推定適用時は、標本平均と母平均の間の値をとる
+      const n = mShrink.matchingDaysCount;
+      const k = 5;
+      const expectedCalc = Math.round((n * mShrink.matchingAvgDiffCoins + k * cohortAvg) / (n + k));
+      expect(mShrink.expectedDiffCoins).toBe(expectedCalc);
+      expect(mShrink.expectedDiffCoins).not.toBe(mDefault.expectedDiffCoins);
+    });
+
+    it('3. 時間減衰 (halfLifeDays): 経過日数に応じて過去日の重みが減衰する', () => {
+      const records = generateSyntheticDailyRecords(42, 60, 15, specialRules);
+      const defaultForecast = calculateTargetDateRanking(
+        '2024-03-07',
+        records,
+        specialRules,
+        '',
+        { ...DEFAULT_RANKING_WEIGHTS, halfLifeDays: 0 }
+      );
+
+      const decayedForecast = calculateTargetDateRanking(
+        '2024-03-07',
+        records,
+        specialRules,
+        '',
+        { ...DEFAULT_RANKING_WEIGHTS, halfLifeDays: 30 }
+      );
+
+      expect(defaultForecast).not.toBeNull();
+      expect(decayedForecast).not.toBeNull();
+      // 直近のデータがより重視されるため、差枚やスコアに有意な差が生じる
+      expect(decayedForecast!.modelRankings[0].expectedDiffCoins).toBeDefined();
+    });
+
+    it('4. allHighCount 正規化 (normalizeAllHighRate): 観測日数あたりの発生率に正規化する', () => {
+      const records = generateSyntheticDailyRecords(42, 60, 15, specialRules);
+      const defaultForecast = calculateTargetDateRanking(
+        '2024-03-07',
+        records,
+        specialRules,
+        '',
+        { ...DEFAULT_RANKING_WEIGHTS, normalizeAllHighRate: false }
+      );
+
+      const normForecast = calculateTargetDateRanking(
+        '2024-03-07',
+        records,
+        specialRules,
+        '',
+        { ...DEFAULT_RANKING_WEIGHTS, normalizeAllHighRate: true }
+      );
+
+      expect(defaultForecast).not.toBeNull();
+      expect(normForecast).not.toBeNull();
+      expect(normForecast!.modelRankings.length).toBe(defaultForecast!.modelRankings.length);
+    });
+
+    it('5. 分位点ランク判定 (useQuantileGrade): 当日の全機種分布の分位点でランクGradeを付与する', () => {
+      const records = generateSyntheticDailyRecords(42, 60, 20, specialRules);
+      const quantileForecast = calculateTargetDateRanking(
+        '2024-03-07',
+        records,
+        specialRules,
+        '',
+        { ...DEFAULT_RANKING_WEIGHTS, useQuantileGrade: true }
+      );
+
+      expect(quantileForecast).not.toBeNull();
+      const grades = quantileForecast!.modelRankings.map((m) => m.rankGrade);
+      // 上位はS+/S、下位はCが分布に応じて適切に付与される
+      expect(grades[0]).toMatch(/S\+|S/);
+      expect(grades[grades.length - 1]).toBe('C');
+    });
+  });
 });

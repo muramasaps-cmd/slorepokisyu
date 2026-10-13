@@ -256,6 +256,7 @@ export function getSavedStores(): StoreProfile[] {
                 categoryRates: existing.categoryRates || s.categoryRates,
                 includeReusedMachinesInStats: existing.includeReusedMachinesInStats ?? s.includeReusedMachinesInStats,
                 customRankingWeights: existing.customRankingWeights || s.customRankingWeights,
+                customMachineRankingWeights: existing.customMachineRankingWeights || s.customMachineRankingWeights,
                 dailyRecords: mergedDaily,
                 dataRange:
                   mergedDaily.length > 0 && mergedDaily[0]?.date && mergedDaily[mergedDaily.length - 1]?.date
@@ -329,18 +330,18 @@ export async function saveStoresToStorageAsync(
   let lsSuccess = false;
 
   try {
-    await saveStoresToIdb(stores);
-    idbSuccess = true;
-  } catch (err: any) {
-    console.warn('IndexedDB save failed:', err);
-  }
-
-  try {
     const compact = stripDerivedForStorage(stores);
     localStorage.setItem(STORAGE_KEY_STORES, JSON.stringify(compact));
     lsSuccess = true;
   } catch (err: any) {
     console.warn('LocalStorage save failed:', err);
+  }
+
+  try {
+    await saveStoresToIdb(stores);
+    idbSuccess = true;
+  } catch (err: any) {
+    console.warn('IndexedDB save failed:', err);
   }
 
   // If IndexedDB failed, report to user via toast notification with fallback status
@@ -441,6 +442,10 @@ export function upsertStore(store: StoreProfile): StoreProfile[] {
       'customRankingWeights' in store
         ? store.customRankingWeights
         : existing.customRankingWeights;
+    const resolvedMachineWeights =
+      'customMachineRankingWeights' in store
+        ? store.customMachineRankingWeights
+        : existing.customMachineRankingWeights;
     const resolvedAlias =
       'modelAliasDictionary' in store
         ? store.modelAliasDictionary
@@ -462,6 +467,7 @@ export function upsertStore(store: StoreProfile): StoreProfile[] {
       rateLend: rateLend || store.rateLend || existing.rateLend || 46,
       rateExchange: rateExchange || store.rateExchange || existing.rateExchange || 52,
       customRankingWeights: resolvedWeights,
+      customMachineRankingWeights: resolvedMachineWeights,
       modelAliasDictionary: resolvedAlias,
       categoryRates: resolvedCatRates,
       includeReusedMachinesInStats: resolvedReused,
@@ -478,11 +484,35 @@ export function upsertStore(store: StoreProfile): StoreProfile[] {
   }
 
   const savedStore = index >= 0 ? stores[index] : stores[stores.length - 1];
+
+  let lsSuccess = false;
+  try {
+    const compact = stripDerivedForStorage(stores);
+    localStorage.setItem(STORAGE_KEY_STORES, JSON.stringify(compact));
+    lsSuccess = true;
+  } catch (err: any) {
+    console.warn('LocalStorage save failed:', err);
+  }
+
   putStoreToIdb(savedStore).catch((err) => {
     console.warn('Individual putStoreToIdb failed:', err);
+    if (lsSuccess) {
+      notifyStorageEvent({
+        type: 'warning',
+        title: 'IndexedDB保存失敗（自動フォールバック成功）',
+        message: `店舗「${savedStore.name}」のIndexedDB書き込みに失敗しましたが、localStorageへバックアップ保存しました。`,
+        fallbackStatus: 'success',
+      });
+    } else {
+      notifyStorageEvent({
+        type: 'error',
+        title: '店舗データ保存失敗（フォールバック不可）',
+        message: `店舗「${savedStore.name}」のIndexedDBおよびlocalStorage保存に失敗しました。`,
+        fallbackStatus: 'failed',
+      });
+    }
   });
 
-  saveStoresToStorage(stores);
   return stores;
 }
 
@@ -501,6 +531,10 @@ export function upsertStores(newStores: StoreProfile[]): StoreProfile[] {
         'customRankingWeights' in store
           ? store.customRankingWeights
           : existing.customRankingWeights;
+      const resolvedMachineWeights =
+        'customMachineRankingWeights' in store
+          ? store.customMachineRankingWeights
+          : existing.customMachineRankingWeights;
       const resolvedAlias =
         'modelAliasDictionary' in store
           ? store.modelAliasDictionary
@@ -522,6 +556,7 @@ export function upsertStores(newStores: StoreProfile[]): StoreProfile[] {
         rateLend: rateLend || store.rateLend || existing.rateLend || 46,
         rateExchange: rateExchange || store.rateExchange || existing.rateExchange || 52,
         customRankingWeights: resolvedWeights,
+        customMachineRankingWeights: resolvedMachineWeights,
         modelAliasDictionary: resolvedAlias,
         categoryRates: resolvedCatRates,
         includeReusedMachinesInStats: resolvedReused,
@@ -546,12 +581,37 @@ export function upsertStores(newStores: StoreProfile[]): StoreProfile[] {
  * Delete a store by ID
  */
 export function deleteStore(id: string): { stores: StoreProfile[]; newActiveId: string } {
+  let stores = getSavedStores();
+  const targetStore = stores.find((s) => s.id === id);
+  stores = stores.filter((s) => s.id !== id);
+
+  let lsSuccess = false;
+  try {
+    const compact = stripDerivedForStorage(stores);
+    localStorage.setItem(STORAGE_KEY_STORES, JSON.stringify(compact));
+    lsSuccess = true;
+  } catch (err: any) {
+    console.warn('LocalStorage save failed:', err);
+  }
+
   deleteStoreFromIdb(id).catch((err) => {
     console.warn('deleteStoreFromIdb failed:', err);
+    if (lsSuccess) {
+      notifyStorageEvent({
+        type: 'warning',
+        title: 'IndexedDB削除失敗（自動フォールバック成功）',
+        message: `店舗「${targetStore?.name || id}」のIndexedDB削除に失敗しましたが、localStorageからは削除しました。`,
+        fallbackStatus: 'success',
+      });
+    } else {
+      notifyStorageEvent({
+        type: 'error',
+        title: '店舗削除失敗（フォールバック不可）',
+        message: `店舗「${targetStore?.name || id}」の削除に失敗しました。`,
+        fallbackStatus: 'failed',
+      });
+    }
   });
-  let stores = getSavedStores();
-  stores = stores.filter((s) => s.id !== id);
-  saveStoresToStorage(stores);
 
   let activeId = getActiveStoreId();
   if (activeId === id || !stores.some((s) => s.id === activeId)) {
@@ -567,12 +627,33 @@ export function deleteStore(id: string): { stores: StoreProfile[]; newActiveId: 
  * Clears ALL stores and resets the application to empty state
  */
 export function resetAllStores(): StoreProfile[] {
-  clearStoresFromIdb().catch(() => {});
+  let lsSuccess = false;
   try {
     localStorage.setItem(STORAGE_KEY_STORES, JSON.stringify([]));
     localStorage.removeItem(STORAGE_KEY_ACTIVE_ID);
+    lsSuccess = true;
   } catch (e) {
-    // ignore
+    console.warn('LocalStorage clear failed:', e);
   }
+
+  clearStoresFromIdb().catch((err) => {
+    console.warn('clearStoresFromIdb failed:', err);
+    if (lsSuccess) {
+      notifyStorageEvent({
+        type: 'warning',
+        title: 'IndexedDBクリア失敗（自動フォールバック成功）',
+        message: 'IndexedDBの全店舗クリアに失敗しましたが、localStorageはリセットしました。',
+        fallbackStatus: 'success',
+      });
+    } else {
+      notifyStorageEvent({
+        type: 'error',
+        title: '全店舗リセット失敗（フォールバック不可）',
+        message: 'IndexedDBおよびlocalStorageのリセットに失敗しました。',
+        fallbackStatus: 'failed',
+      });
+    }
+  });
+
   return [];
 }

@@ -7,6 +7,8 @@ export interface TuningWorkerRequest {
   specialDayRules?: SpecialDayRules;
   oldEventDays?: string;
   k?: number;
+  minWarmupDays?: number;
+  minMachines?: number;
 }
 
 export type TuningWorkerResponse =
@@ -15,7 +17,15 @@ export type TuningWorkerResponse =
   | { type: 'ERROR'; error: string };
 
 self.onmessage = (event: MessageEvent<TuningWorkerRequest>) => {
-  const { type, dailyRecords, specialDayRules, oldEventDays = '', k = 3 } = event.data;
+  const {
+    type,
+    dailyRecords,
+    specialDayRules,
+    oldEventDays = '',
+    k = 3,
+    minWarmupDays = 30,
+    minMachines = 3,
+  } = event.data;
 
   if (type === 'START_TUNING') {
     try {
@@ -26,7 +36,9 @@ self.onmessage = (event: MessageEvent<TuningWorkerRequest>) => {
         k,
         (progressPercent) => {
           self.postMessage({ type: 'PROGRESS', progress: progressPercent } satisfies TuningWorkerResponse);
-        }
+        },
+        minWarmupDays,
+        minMachines
       );
       self.postMessage({ type: 'RESULT', result } satisfies TuningWorkerResponse);
     } catch (err) {

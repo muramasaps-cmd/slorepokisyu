@@ -9,6 +9,7 @@ import {
   isAType,
   isJuggler,
 } from '../utils/modelFilterUtils';
+import { resolveATypeSpecs, estimateSettingDistributionFromPayout } from '../utils/aTypeSettingEstimator';
 import {
   X,
   Calendar,

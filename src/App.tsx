@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { StoreProfile, MonthlyStat, DailyRecord, RankingWeights } from './data/types';
+import { StoreProfile, MonthlyStat, DailyRecord, RankingWeights, MachineRankingWeights } from './data/types';
 import { Header, ProfitModelType, UnitMode } from './components/Header';
 import { KpiCards } from './components/KpiCards';
 import { ProfitChart } from './components/ProfitChart';
@@ -496,6 +496,17 @@ export default function App() {
     const updatedStore: StoreProfile = {
       ...currentStore,
       customRankingWeights: weights,
+      updatedAt: new Date().toISOString(),
+    };
+    const updatedList = upsertStore(updatedStore);
+    setStores(updatedList);
+  };
+
+  const handleSaveStoreMachineWeights = (weights: MachineRankingWeights | undefined) => {
+    if (!currentStore) return;
+    const updatedStore: StoreProfile = {
+      ...currentStore,
+      customMachineRankingWeights: weights,
       updatedAt: new Date().toISOString(),
     };
     const updatedList = upsertStore(updatedStore);
@@ -1203,6 +1214,7 @@ export default function App() {
               specialDayRules={currentStore.specialDayRules}
               oldEventDays={currentStore.oldEventDays}
               customWeights={currentStore.customRankingWeights}
+              customMachineWeights={currentStore.customMachineRankingWeights}
               islandConfig={currentStore.islandConfig}
               includeReusedMachines={currentStore.includeReusedMachinesInStats}
               aliasDictionary={currentStore.modelAliasDictionary}
@@ -1316,6 +1328,8 @@ export default function App() {
               storeName={currentStore.name}
               currentWeights={currentStore.customRankingWeights}
               onSaveStoreWeights={handleSaveStoreWeights}
+              currentMachineWeights={currentStore.customMachineRankingWeights}
+              onSaveStoreMachineWeights={handleSaveStoreMachineWeights}
             />
           </div>
         )}

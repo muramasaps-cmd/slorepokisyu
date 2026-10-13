@@ -175,4 +175,70 @@ describe('runWalkForwardBacktest', () => {
       expect(result.summary.liftEdge).toBe(expectedAvgLift - baselineAvgLift);
     });
   });
+
+  describe('Prompt 4: Rigorous baselines, machine weighting, and Hall MAE comparison', () => {
+    it('defaults minWarmupDays to 30 and includes all 5 baselines in BacktestSummaryMetrics', () => {
+      const records = generateSyntheticDailyRecords(555, 45, 12, rules);
+      // Run with defaults (minWarmupDays=30, minMachines=3)
+      const result = runWalkForwardBacktest(records, rules);
+
+      expect(result.evaluations.length).toBe(15); // 45 - 30 = 15
+      expect(result.summary.totalEvaluatedDays).toBe(15);
+
+      // Baseline 1: All-Time
+      expect(typeof result.summary.baselineAvgTopKLift).toBe('number');
+      expect(typeof result.summary.baselineAvgTopKDiff).toBe('number');
+      expect(typeof result.summary.baselineTopKPositiveRate).toBe('number');
+      expect(typeof result.summary.baselineAvgSpearman).toBe('number');
+
+      // Baseline 2: Day of Week (including holidays)
+      expect(typeof result.summary.dowBaselineAvgTopKLift).toBe('number');
+      expect(typeof result.summary.dowBaselineAvgTopKDiff).toBe('number');
+      expect(typeof result.summary.dowBaselineTopKPositiveRate).toBe('number');
+      expect(typeof result.summary.dowBaselineAvgSpearman).toBe('number');
+
+      // Baseline 3: Special Day
+      expect(typeof result.summary.specialBaselineAvgTopKLift).toBe('number');
+      expect(typeof result.summary.specialBaselineAvgTopKDiff).toBe('number');
+      expect(typeof result.summary.specialBaselineTopKPositiveRate).toBe('number');
+      expect(typeof result.summary.specialBaselineAvgSpearman).toBe('number');
+
+      // Baseline 4: Recent 14 Days
+      expect(typeof result.summary.recent14BaselineAvgTopKLift).toBe('number');
+      expect(typeof result.summary.recent14BaselineAvgTopKDiff).toBe('number');
+      expect(typeof result.summary.recent14BaselineTopKPositiveRate).toBe('number');
+      expect(typeof result.summary.recent14BaselineAvgSpearman).toBe('number');
+
+      // Baseline 5: Random (100 trials)
+      expect(typeof result.summary.randomBaselineAvgTopKLift).toBe('number');
+      expect(typeof result.summary.randomBaselineAvgTopKDiff).toBe('number');
+      expect(typeof result.summary.randomBaselineTopKPositiveRate).toBe('number');
+      expect(typeof result.summary.randomBaselineAvgSpearman).toBe('number');
+
+      // Hall MAE naive comparison
+      expect(typeof result.summary.allPeriodHallMae).toBe('number');
+      expect(typeof result.summary.hallMaeImprovement).toBe('number');
+      expect(result.summary.hallMaeImprovement).toBe(
+        result.summary.allPeriodHallMae - result.summary.engineHallMae
+      );
+    });
+
+    it('enforces minMachines filter and uses machine-weighted actual average rather than unweighted model average', () => {
+      const records = generateSyntheticDailyRecords(888, 35, 10, rules);
+      const resDefault = runWalkForwardBacktest(records, rules, '', DEFAULT_RANKING_WEIGHTS, 3, 30, 3);
+      const resMin1 = runWalkForwardBacktest(records, rules, '', DEFAULT_RANKING_WEIGHTS, 3, 30, 1);
+
+      expect(resDefault.evaluations.length).toBe(5);
+      expect(resMin1.evaluations.length).toBe(5);
+
+      // Verify every evaluation has valid machine-weighted diffs
+      resDefault.evaluations.forEach((ev) => {
+        expect(typeof ev.engineTopKActualAvgDiff).toBe('number');
+        expect(typeof ev.dowTopKActualAvgDiff).toBe('number');
+        expect(typeof ev.specialTopKActualAvgDiff).toBe('number');
+        expect(typeof ev.recent14TopKActualAvgDiff).toBe('number');
+        expect(typeof ev.randomTopKActualAvgDiff).toBe('number');
+      });
+    });
+  });
 });

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   runMachineBacktest,
+  runMachineRollingValidation,
   computeBlockBootstrapCI,
 } from '../backtestEngine';
 import { DailyRecord, DailyMachineRecord } from '../../data/types';
@@ -226,11 +227,40 @@ describe('runMachineBacktest & computeBlockBootstrapCI', () => {
       expect(result.ablationResults).toBeDefined();
       expect(result.ablationResults!.length).toBeGreaterThanOrEqual(5);
 
-      // On pure noise, none of the variants should claim hasEdge (CI lower bound must be <= 0)
+      // On pure noise, none of the variants should be judged as statistically superior (優位性あり: CI lower bound > 0)
       for (const variant of result.ablationResults!) {
-        // Lower bound of 95% CI should not be strictly positive
-        expect(variant.ci95[0]).toBeLessThanOrEqual(50); // within statistical noise band
+        // Lower bound of 95% CI must be <= 0 (not statistically superior)
+        expect(variant.ci95[0]).toBeLessThanOrEqual(0);
       }
+    });
+
+    it('uses rolling validation (3-5 splits) and block bootstrap to reject weight changes on noise data', () => {
+      const noiseData = createSyntheticMachineRecords({
+        daysCount: 25,
+        machinesCount: 16,
+        biasedMachineNums: [],
+        seed: 77777,
+      });
+
+      const rollingResult = runMachineRollingValidation(
+        noiseData,
+        undefined,
+        { highSettingWeight: 0, modelScoreWeight: 0 },
+        undefined,
+        3
+      );
+
+      expect(rollingResult).not.toBeNull();
+      if (!rollingResult) return;
+
+      // Must use between 3 and 5 splits
+      expect(rollingResult.numSplits).toBeGreaterThanOrEqual(3);
+      expect(rollingResult.numSplits).toBeLessThanOrEqual(5);
+      expect(rollingResult.splitGains.length).toBe(rollingResult.numSplits);
+
+      // On noise data, weight changes must NOT be recommended
+      expect(rollingResult.isRecommended).toBe(false);
+      expect(rollingResult.verdictMessage).toContain('標準維持推奨');
     });
   });
 });

@@ -157,22 +157,101 @@ describe('runAutoTuning', () => {
       expect(result).not.toBeNull();
       if (!result) return;
 
-      // Exact output parity with baseline
+      // Exact output parity with rolling validation & bootstrap
       expect(result.candidateWeights).toEqual({
-        diffCoinDivisor: 35,
-        winRateMultiplier: 0.3,
-        allHighMultiplier: 2.0,
-        matchingBlendWeight: 0.75,
-        scaleFactorEnabled: true,
+        diffCoinDivisor: 20,
+        winRateMultiplier: 0.2,
+        allHighMultiplier: 1.5,
+        matchingBlendWeight: 0.95,
+        scaleFactorEnabled: false,
       });
-      expect(result.trainLiftGain).toBe(2);
+      expect(result.trainLiftGain).toBe(18);
       expect(result.valLiftGain).toBe(3);
-      expect(result.tValue).toBe(1.67);
-      expect(result.valStdError).toBe(1.6);
+      expect(result.tValue).toBe(1.26);
+      expect(result.valStdError).toBe(2.6);
+      expect(result.numSplits).toBe(5);
+      expect(result.meanSplitGain).toBe(3.3);
+      expect(result.bootstrapCiLower).toBe(-0.9);
+      expect(result.bootstrapCiUpper).toBe(8);
       expect(result.isRecommended).toBe(false);
+      expect(result.verdictMessage).toContain('多重比較');
 
-      // Must be under baseline (typically ~800-1500ms on bare metal, up to ~8000ms on constrained container vCPUs)
+      // Must be under baseline
       expect(elapsed).toBeLessThan(12000);
     }, 20000);
+  });
+
+  describe('Prompt 4 completion condition: false discovery prevention across multiple noise seeds', () => {
+    it('produces isRecommended = false on 10 out of 10 independent pure noise datasets', () => {
+      const seeds = [101, 202, 303, 404, 505, 606, 707, 808, 909, 1111];
+      let falseAdoptionCount = 0;
+
+      for (const seed of seeds) {
+        const rng = createSeededRandom(seed);
+        const modelNames = ['ノイズA', 'ノイズB', 'ノイズC', 'ノイズD', 'ノイズE'];
+        const numDays = 35;
+        const noiseRecords: DailyRecord[] = [];
+
+        for (let day = 1; day <= numDays; day++) {
+          const dateStr = `2024-01-${String(day).padStart(2, '0')}`;
+          const dow = calculateDayOfWeek(dateStr) || '月';
+
+          const models: DailyModelRecord[] = modelNames.map((name) => {
+            const diff = Math.round((rng() - 0.5) * 500);
+            const winRate = Math.round((45 + (rng() - 0.5) * 20) * 10) / 10;
+            return {
+              modelName: name,
+              avgDiffCoins: diff,
+              totalDiffCoins: diff * 5,
+              avgGames: 5000,
+              winRate,
+              winMachines: Math.round(5 * (winRate / 100)),
+              totalMachines: 5,
+            };
+          });
+
+          const dayTotalDiff = models.reduce((s, m) => s + m.totalDiffCoins, 0);
+          const dayAvgDiff = Math.round(dayTotalDiff / (models.length * 5));
+
+          noiseRecords.push({
+            date: dateStr,
+            yearMonth: '2024-01',
+            year: 2024,
+            month: 1,
+            day,
+            dayOfWeek: dow,
+            avgDiffCoins: dayAvgDiff,
+            avgGames: 5000,
+            winRate: 50,
+            winMachines: 12,
+            totalMachines: 25,
+            totalDiffCoins: dayTotalDiff,
+            hallCoinProfit: -dayTotalDiff,
+            playerCoinProfit: dayTotalDiff,
+            hallYenProfit: 0,
+            playerYenProfit: 0,
+            inCoins: 375000,
+            outCoins: 375000 + dayTotalDiff,
+            payoutRate: 100,
+            estimatedRevenue: 0,
+            exchangeGapProfit: 0,
+            gModelHallProfit: 0,
+            gModelPlayerProfit: 0,
+            isOldEventDay: false,
+            is7Day: false,
+            notable: '',
+            models,
+          });
+        }
+
+        const tuning = runAutoTuning(noiseRecords, undefined, '', 3);
+        if (tuning && tuning.isRecommended) {
+          falseAdoptionCount++;
+        }
+      }
+
+      // False adoption rate must be nearly zero (at most 1 in 10, controlling false discovery under multiple comparisons)
+      expect(falseAdoptionCount).toBeLessThanOrEqual(1);
+    });
   });
 });

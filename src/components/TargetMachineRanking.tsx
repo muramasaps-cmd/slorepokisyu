@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { DailyRecord, SpecialDayRules, RankingWeights, IslandDefinition } from '../data/types';
+import { DailyRecord, SpecialDayRules, RankingWeights, MachineRankingWeights, IslandDefinition } from '../data/types';
 import {
   calculateTargetMachineRanking,
   TargetMachineRankingResult,
@@ -31,6 +31,7 @@ interface TargetMachineRankingProps {
   dailyRecords: DailyRecord[];
   specialDayRules?: SpecialDayRules;
   customWeights?: RankingWeights;
+  customMachineWeights?: MachineRankingWeights;
   islandConfig?: string;
   onOpenStoreManager?: () => void;
   includeReusedMachines?: boolean;
@@ -94,6 +95,7 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
   dailyRecords,
   specialDayRules,
   customWeights,
+  customMachineWeights,
   islandConfig,
   onOpenStoreManager,
   includeReusedMachines = false,
@@ -122,18 +124,19 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
       minEvidenceDays: 3,
       blockLength: 7,
       bootstrapIterations: 500, // fast run for UI indicator
+      weights: customMachineWeights,
     });
-  }, [dailyRecords, specialDayRules, hasMachineData]);
+  }, [dailyRecords, specialDayRules, hasMachineData, customMachineWeights]);
 
   // Calculate machine ranking for target date
   const rankingResult: TargetMachineRankingResult | null = useMemo(() => {
     if (!hasMachineData || !targetDate) return null;
-    return calculateTargetMachineRanking(targetDate, dailyRecords, specialDayRules, undefined, {
+    return calculateTargetMachineRanking(targetDate, dailyRecords, specialDayRules, customMachineWeights, {
       rankingWeights: customWeights,
       includeReusedMachines,
       aliasDictionary,
     });
-  }, [targetDate, dailyRecords, specialDayRules, customWeights, hasMachineData, includeReusedMachines, aliasDictionary]);
+  }, [targetDate, dailyRecords, specialDayRules, customWeights, customMachineWeights, hasMachineData, includeReusedMachines, aliasDictionary]);
 
   // Extract unique models & tails from ranking results
   const availableModels = useMemo(() => {

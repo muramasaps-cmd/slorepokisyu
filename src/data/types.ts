@@ -45,12 +45,31 @@ export interface RankingWeights {
   allHighMultiplier: number; // default: 4.5
   matchingBlendWeight: number; // default: 0.75
   scaleFactorEnabled: boolean; // default: true
+  // Prompt 3: 統計の改善オプション (すべて切替可能・既定は旧挙動のまま)
+  useMachineWeighting?: boolean; // default: false (1. 台数加重平均)
+  useShrinkage?: boolean; // default: false (2. 縮小推定)
+  shrinkageK?: number; // default: 5 (2. 縮小係数 k)
+  halfLifeDays?: number; // default: 0 (3. 時間減衰半減期、0=無効)
+  normalizeAllHighRate?: boolean; // default: false (4. allHighCount 発生率正規化)
+  useQuantileGrade?: boolean; // default: false (5. 分位点ランク判定)
+}
+
+export interface MachineRankingWeights {
+  diffWeight: number; // pts per diff coin (default 0.04)
+  winRateWeight: number; // pts per win rate % above 50% (default 0.3)
+  highSettingWeight: number; // pts for high setting frequency (default 20.0)
+  modelScoreWeight: number; // pts for underlying model forecast score (default 0.25)
+  tailMatchBonus: number; // bonus for tail digit matching target date tail (default 8.0)
+  zoroBonus: number; // bonus for zoro machine number (default 4.0)
+  recentStateWeight: number; // weight for prior day diff (default 0)
+  shrinkageK: number; // empirical Bayes shrinkage hyperparameter (default 3)
 }
 
 export interface StoreProfile extends StoreInfo {
   id: string;
   dailyRecords: DailyRecord[];
   customRankingWeights?: RankingWeights;
+  customMachineRankingWeights?: MachineRankingWeights;
   createdAt?: string;
   updatedAt?: string;
 }

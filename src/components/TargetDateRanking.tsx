@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { DailyRecord, SpecialDayRules, RankingWeights } from '../data/types';
+import { DailyRecord, SpecialDayRules, RankingWeights, MachineRankingWeights } from '../data/types';
 import {
   calculateTargetDateRanking,
   TargetDateForecast,
@@ -41,6 +41,7 @@ interface TargetDateRankingProps {
   specialDayRules?: SpecialDayRules;
   oldEventDays?: string;
   customWeights?: RankingWeights;
+  customMachineWeights?: MachineRankingWeights;
   islandConfig?: string;
   includeReusedMachines?: boolean;
   aliasDictionary?: Record<string, string>;
@@ -62,6 +63,7 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
   specialDayRules,
   oldEventDays = '',
   customWeights,
+  customMachineWeights,
   islandConfig,
   includeReusedMachines = false,
   aliasDictionary,
@@ -706,6 +708,7 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
         dailyRecords={dailyRecords}
         specialDayRules={specialDayRules}
         customWeights={customWeights}
+        customMachineWeights={customMachineWeights}
         islandConfig={islandConfig}
         includeReusedMachines={includeReusedState}
         aliasDictionary={aliasDictionary}

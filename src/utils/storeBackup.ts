@@ -35,6 +35,11 @@ export function exportAllStoresAsJson(stores: StoreProfile[]): void {
 
   const jsonString = JSON.stringify(backupData, null, 2);
   const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8;' });
+
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return;
+  }
+
   const url = URL.createObjectURL(blob);
   const now = new Date();
   const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(
@@ -173,6 +178,8 @@ export function mergeImportedStores(
         includeReusedMachinesInStats:
           imported.includeReusedMachinesInStats ?? existing.includeReusedMachinesInStats,
         customRankingWeights: imported.customRankingWeights || existing.customRankingWeights,
+        customMachineRankingWeights:
+          imported.customMachineRankingWeights || existing.customMachineRankingWeights,
         totalMachinesApprox: Math.max(
           existing.totalMachinesApprox || 0,
           imported.totalMachinesApprox || 0

@@ -1,15 +1,18 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { DailyRecord, SpecialDayRules, RankingWeights } from '../data/types';
+import { DailyRecord, SpecialDayRules, RankingWeights, MachineRankingWeights } from '../data/types';
 import {
   runWalkForwardBacktest,
   runAutoTuning,
   runMachineBacktest,
+  runMachineRollingValidation,
+  MachineRollingValidationResult,
   BacktestDayEvaluation,
   BacktestSummaryMetrics,
   TuningResult,
   MachineBacktestResult,
 } from '../utils/backtestEngine';
 import { DEFAULT_RANKING_WEIGHTS } from '../utils/targetRankingEngine';
+import { DEFAULT_MACHINE_RANKING_WEIGHTS } from '../utils/targetMachineRanking';
 import type { TuningWorkerRequest, TuningWorkerResponse } from '../workers/tuningWorker';
 import { formatCoins, formatNumber } from '../utils/formatters';
 import {
@@ -41,6 +44,8 @@ interface AccuracyValidationProps {
   storeName: string;
   currentWeights?: RankingWeights;
   onSaveStoreWeights: (weights: RankingWeights | undefined) => void;
+  currentMachineWeights?: MachineRankingWeights;
+  onSaveStoreMachineWeights?: (weights: MachineRankingWeights | undefined) => void;
 }
 
 export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
@@ -50,8 +55,12 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
   storeName,
   currentWeights,
   onSaveStoreWeights,
+  currentMachineWeights,
+  onSaveStoreMachineWeights,
 }) => {
   const [topK, setTopK] = useState<number>(3);
+  const [minWarmupDays, setMinWarmupDays] = useState<number>(30);
+  const [minMachines, setMinMachines] = useState<number>(3);
   const [filterMode, setFilterMode] = useState<'all' | 'special' | 'normal'>('all');
   const [tuningResult, setTuningResult] = useState<TuningResult | null>(null);
   const [isTuningRunning, setIsTuningRunning] = useState<boolean>(false);
@@ -68,6 +77,21 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
     [dailyRecords]
   );
 
+  const activeMachineWeights = currentMachineWeights || DEFAULT_MACHINE_RANKING_WEIGHTS;
+  const isCustomMachineWeightsApplied = Boolean(
+    currentMachineWeights &&
+      (currentMachineWeights.diffWeight !== DEFAULT_MACHINE_RANKING_WEIGHTS.diffWeight ||
+        currentMachineWeights.winRateWeight !== DEFAULT_MACHINE_RANKING_WEIGHTS.winRateWeight ||
+        currentMachineWeights.highSettingWeight !== DEFAULT_MACHINE_RANKING_WEIGHTS.highSettingWeight ||
+        currentMachineWeights.modelScoreWeight !== DEFAULT_MACHINE_RANKING_WEIGHTS.modelScoreWeight ||
+        currentMachineWeights.tailMatchBonus !== DEFAULT_MACHINE_RANKING_WEIGHTS.tailMatchBonus ||
+        currentMachineWeights.zoroBonus !== DEFAULT_MACHINE_RANKING_WEIGHTS.zoroBonus ||
+        currentMachineWeights.recentStateWeight !== DEFAULT_MACHINE_RANKING_WEIGHTS.recentStateWeight)
+  );
+
+  const [machineRollingResult, setMachineRollingResult] = useState<MachineRollingValidationResult | null>(null);
+  const [isMachineRollingRunning, setIsMachineRollingRunning] = useState<boolean>(false);
+
   const machineBacktestResult: MachineBacktestResult | null = useMemo(() => {
     if (!hasMachineData) return null;
     return runMachineBacktest(dailyRecords, specialDayRules, {
@@ -75,8 +99,52 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
       minEvidenceDays: 3,
       blockLength: 7,
       bootstrapIterations: 2000,
+      weights: activeMachineWeights,
     });
-  }, [dailyRecords, specialDayRules, machineTopN, hasMachineData]);
+  }, [dailyRecords, specialDayRules, machineTopN, hasMachineData, activeMachineWeights]);
+
+  // Suggested weights based on ablation items that have recommendZeroWeight: true
+  const suggestedZeroWeights = useMemo(() => {
+    if (!machineBacktestResult?.ablationResults) return null;
+    const items = machineBacktestResult.ablationResults;
+    const zeroVariants = items.filter((it) => it.variantKey !== 'all' && it.recommendZeroWeight);
+    if (zeroVariants.length === 0) return null;
+
+    const modified: MachineRankingWeights = { ...activeMachineWeights };
+    const changedNames: string[] = [];
+    zeroVariants.forEach((it) => {
+      if (it.variantKey === 'noHighSetting') {
+        modified.highSettingWeight = 0;
+        changedNames.push('高設定挙動重み → 0');
+      }
+      if (it.variantKey === 'noModelScore') {
+        modified.modelScoreWeight = 0;
+        changedNames.push('機種スコア重み → 0');
+      }
+      if (it.variantKey === 'noTailZoro') {
+        modified.tailMatchBonus = 0;
+        modified.zoroBonus = 0;
+        changedNames.push('末尾・ゾロ目ボーナス → 0');
+      }
+    });
+    return { weights: modified, changedNames };
+  }, [machineBacktestResult, activeMachineWeights]);
+
+  const handleRunMachineRollingValidation = () => {
+    if (!suggestedZeroWeights) return;
+    setIsMachineRollingRunning(true);
+    setTimeout(() => {
+      const res = runMachineRollingValidation(
+        dailyRecords,
+        specialDayRules,
+        suggestedZeroWeights.weights,
+        activeMachineWeights,
+        machineTopN
+      );
+      setMachineRollingResult(res);
+      setIsMachineRollingRunning(false);
+    }, 50);
+  };
 
   useEffect(() => {
     return () => {
@@ -104,9 +172,10 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
       oldEventDays,
       activeWeights,
       topK,
-      5
+      minWarmupDays,
+      minMachines
     );
-  }, [dailyRecords, specialDayRules, oldEventDays, activeWeights, topK]);
+  }, [dailyRecords, specialDayRules, oldEventDays, activeWeights, topK, minWarmupDays, minMachines]);
 
   // Filtered day evaluations
   const filteredEvaluations = useMemo(() => {
@@ -149,9 +218,17 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
           worker.terminate();
           workerRef.current = null;
           setTimeout(() => {
-            const res = runAutoTuning(dailyRecords, specialDayRules, oldEventDays, topK, (pct) => {
-              setTuningProgress(pct);
-            });
+            const res = runAutoTuning(
+              dailyRecords,
+              specialDayRules,
+              oldEventDays,
+              topK,
+              (pct) => {
+                setTuningProgress(pct);
+              },
+              minWarmupDays,
+              minMachines
+            );
             setTuningResult(res);
             setIsTuningRunning(false);
             setTuningProgress(100);
@@ -164,9 +241,17 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
         worker.terminate();
         workerRef.current = null;
         setTimeout(() => {
-          const res = runAutoTuning(dailyRecords, specialDayRules, oldEventDays, topK, (pct) => {
-            setTuningProgress(pct);
-          });
+          const res = runAutoTuning(
+            dailyRecords,
+            specialDayRules,
+            oldEventDays,
+            topK,
+            (pct) => {
+              setTuningProgress(pct);
+            },
+            minWarmupDays,
+            minMachines
+          );
           setTuningResult(res);
           setIsTuningRunning(false);
           setTuningProgress(100);
@@ -179,6 +264,8 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
         specialDayRules,
         oldEventDays,
         k: topK,
+        minWarmupDays,
+        minMachines,
       };
 
       worker.postMessage(request);
@@ -186,9 +273,17 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
       // Fallback to sync run if Worker fails to initialize
       console.warn('Worker instantiation failed, falling back to sync execution:', e);
       setTimeout(() => {
-        const res = runAutoTuning(dailyRecords, specialDayRules, oldEventDays, topK, (pct) => {
-          setTuningProgress(pct);
-        });
+        const res = runAutoTuning(
+          dailyRecords,
+          specialDayRules,
+          oldEventDays,
+          topK,
+          (pct) => {
+            setTuningProgress(pct);
+          },
+          minWarmupDays,
+          minMachines
+        );
         setTuningResult(res);
         setIsTuningRunning(false);
         setTuningProgress(100);
@@ -250,31 +345,74 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
             </p>
           </div>
 
-          {/* Controls: Top-K and Filter */}
-          <div className="flex items-center gap-2 bg-slate-50 p-1.5 rounded-xl border border-slate-200 self-start md:self-auto shrink-0">
-            <span className="text-xs font-bold text-slate-600 pl-1">対象機種数:</span>
-            <button
-              type="button"
-              onClick={() => setTopK(3)}
-              className={`px-2.5 py-1 text-xs font-black rounded-lg transition-all cursor-pointer ${
-                topK === 3
-                  ? 'bg-amber-500 text-slate-950 shadow-2xs'
-                  : 'bg-white text-slate-600 hover:text-slate-900 border border-slate-200'
-              }`}
-            >
-              上位3機種 (本命)
-            </button>
-            <button
-              type="button"
-              onClick={() => setTopK(5)}
-              className={`px-2.5 py-1 text-xs font-black rounded-lg transition-all cursor-pointer ${
-                topK === 5
-                  ? 'bg-amber-500 text-slate-950 shadow-2xs'
-                  : 'bg-white text-slate-600 hover:text-slate-900 border border-slate-200'
-              }`}
-            >
-              上位5機種 (幅広)
-            </button>
+          {/* Controls: Top-K, minWarmupDays, and minMachines */}
+          <div className="flex flex-wrap items-center gap-2 self-start md:self-auto shrink-0">
+            {/* Top-K */}
+            <div className="flex items-center gap-1.5 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
+              <span className="text-xs font-bold text-slate-600 pl-1">対象機種:</span>
+              <button
+                type="button"
+                onClick={() => setTopK(3)}
+                className={`px-2 py-1 text-xs font-black rounded-lg transition-all cursor-pointer ${
+                  topK === 3
+                    ? 'bg-amber-500 text-slate-950 shadow-2xs'
+                    : 'bg-white text-slate-600 hover:text-slate-900 border border-slate-200'
+                }`}
+              >
+                上位3機種
+              </button>
+              <button
+                type="button"
+                onClick={() => setTopK(5)}
+                className={`px-2 py-1 text-xs font-black rounded-lg transition-all cursor-pointer ${
+                  topK === 5
+                    ? 'bg-amber-500 text-slate-950 shadow-2xs'
+                    : 'bg-white text-slate-600 hover:text-slate-900 border border-slate-200'
+                }`}
+              >
+                上位5機種
+              </button>
+            </div>
+
+            {/* minWarmupDays */}
+            <div className="flex items-center gap-1 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
+              <span className="text-xs font-bold text-slate-600 pl-1">準備期間:</span>
+              {[14, 30, 60].map((days) => (
+                <button
+                  key={days}
+                  type="button"
+                  onClick={() => setMinWarmupDays(days)}
+                  className={`px-2 py-1 text-xs font-black rounded-lg transition-all cursor-pointer ${
+                    minWarmupDays === days
+                      ? 'bg-indigo-600 text-white shadow-2xs'
+                      : 'bg-white text-slate-600 hover:text-slate-900 border border-slate-200'
+                  }`}
+                  title={`検証開始前の準備期間を${days}日間に設定`}
+                >
+                  {days}日{days === 30 ? ' (既定)' : ''}
+                </button>
+              ))}
+            </div>
+
+            {/* minMachines */}
+            <div className="flex items-center gap-1 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
+              <span className="text-xs font-bold text-slate-600 pl-1">最小台数:</span>
+              {[1, 3, 5].map((count) => (
+                <button
+                  key={count}
+                  type="button"
+                  onClick={() => setMinMachines(count)}
+                  className={`px-2 py-1 text-xs font-black rounded-lg transition-all cursor-pointer ${
+                    minMachines === count
+                      ? 'bg-indigo-600 text-white shadow-2xs'
+                      : 'bg-white text-slate-600 hover:text-slate-900 border border-slate-200'
+                  }`}
+                  title={`最低設置台数が${count}台以上の機種を対象に評価（台数加重）`}
+                >
+                  {count}台〜{count === 3 ? ' (既定)' : ''}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -292,18 +430,18 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
           <div className="flex items-start gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
             <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
             <div>
-              <span className="font-bold text-slate-800 block">単純ルールとの常時対比</span>
+              <span className="font-bold text-slate-800 block">5つの強力ベースライン対比</span>
               <span className="text-slate-500 text-[11px]">
-                「全期間平均が高い順」という単純戦略をベンチマークとして常時比較。
+                全期間・同曜日・同特日・直近14日・ランダム（100回試行平均）と常時対比。
               </span>
             </div>
           </div>
           <div className="flex items-start gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
             <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
             <div>
-              <span className="font-bold text-slate-800 block">統計的検定（t値≧2.0）</span>
+              <span className="font-bold text-slate-800 block">拡張ローリング & ブートストラップ</span>
               <span className="text-slate-500 text-[11px]">
-                自動調整は検証期間（30%）での有意差が確認できた場合のみ採用を推奨。
+                自動調整は3〜5分割ローリング検証と7日ブロックブートストラップ95%区間で判定。
               </span>
             </div>
           </div>
@@ -403,17 +541,24 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
         {/* Metric 5: Hall Error MAE */}
         <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs space-y-1">
           <span className="text-[11px] font-bold text-slate-500 flex items-center justify-between">
-            <span>ホール全体予測誤差</span>
+            <span>ホール全体予測誤差 (MAE)</span>
             <span className="bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded text-[10px] font-bold">
-              営業日全体
+              対 全期間平均
             </span>
           </span>
           <div className="text-xl sm:text-2xl font-black text-slate-800">
             {summary.engineHallMae}
             <span className="text-xs text-slate-500 font-normal ml-0.5">枚/台</span>
           </div>
-          <div className="text-[11px] text-slate-400 pt-1 border-t border-slate-100">
-            還元日/回収日の見極め
+          <div className="text-[11px] text-slate-500 flex items-center justify-between pt-1 border-t border-slate-100">
+            <span>全期間平均MAE ({summary.allPeriodHallMae}枚) 比:</span>
+            <span
+              className={`font-black ${
+                summary.hallMaeImprovement >= 0 ? 'text-emerald-600' : 'text-rose-600'
+              }`}
+            >
+              {summary.hallMaeImprovement >= 0 ? `-${summary.hallMaeImprovement}` : `+${Math.abs(summary.hallMaeImprovement)}`}枚
+            </span>
           </div>
         </div>
 
@@ -439,13 +584,13 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
         </div>
       </div>
 
-      {/* Comparison Table: Engine (Composite Score) vs Baseline (Simple Rule) */}
+      {/* Comparison Table: Engine (Composite Score) vs 5 Baselines */}
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
         <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Trophy className="w-4 h-4 text-amber-500" />
             <h3 className="text-sm font-bold text-slate-900">
-              予測エンジン（複合スコア） vs 単純ベンチマーク（全期間平均順）比較
+              予測エンジン（複合スコア） vs 5大ベースライン比較検証
             </h3>
           </div>
           <span className="text-xs text-slate-500">
@@ -457,29 +602,44 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
           <table className="w-full text-xs text-left">
             <thead className="bg-slate-100/70 text-slate-600 font-bold border-b border-slate-200">
               <tr>
-                <th className="py-2.5 px-4">評価指標</th>
-                <th className="py-2.5 px-4 text-amber-700 bg-amber-50/50">
-                  当システム（複合スコア予測）
+                <th className="py-2.5 px-3 whitespace-nowrap">評価指標</th>
+                <th className="py-2.5 px-3 text-amber-700 bg-amber-50/70 font-black whitespace-nowrap">
+                  当システム (複合スコア)
                 </th>
-                <th className="py-2.5 px-4 text-slate-600">
-                  単純ルール（全期間の平均差枚順）
-                </th>
-                <th className="py-2.5 px-4 text-right">改善効果（エッジ差分）</th>
-                <th className="py-2.5 px-4">優位性評価</th>
+                <th className="py-2.5 px-3 text-slate-700 whitespace-nowrap">全期間平均</th>
+                <th className="py-2.5 px-3 text-slate-700 whitespace-nowrap">同曜日(祝日含)</th>
+                <th className="py-2.5 px-3 text-slate-700 whitespace-nowrap">同特日平均</th>
+                <th className="py-2.5 px-3 text-slate-700 whitespace-nowrap">直近14日平均</th>
+                <th className="py-2.5 px-3 text-slate-700 whitespace-nowrap">ランダム(100回)</th>
+                <th className="py-2.5 px-3 text-right whitespace-nowrap">全期間比エッジ</th>
+                <th className="py-2.5 px-3 whitespace-nowrap">優位性評価</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-800">
+              {/* Row 1: Top-K Lift */}
               <tr className="hover:bg-slate-50/50">
-                <td className="py-3 px-4 font-bold text-slate-900">
-                  上位{topK}機種の平均差枚リフト（対ホール平均）
+                <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">
+                  上位{topK}機種 平均リフト (対ホール)
                 </td>
-                <td className="py-3 px-4 font-black text-amber-700 bg-amber-50/30">
-                  {summary.engineAvgTopKLift >= 0 ? `+${summary.engineAvgTopKLift}` : summary.engineAvgTopKLift}枚 / 台
+                <td className="py-3 px-3 font-black text-amber-700 bg-amber-50/30 whitespace-nowrap">
+                  {summary.engineAvgTopKLift >= 0 ? `+${summary.engineAvgTopKLift}` : summary.engineAvgTopKLift}枚/台
                 </td>
-                <td className="py-3 px-4 font-semibold text-slate-600">
-                  {summary.baselineAvgTopKLift >= 0 ? `+${summary.baselineAvgTopKLift}` : summary.baselineAvgTopKLift}枚 / 台
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  {summary.baselineAvgTopKLift >= 0 ? `+${summary.baselineAvgTopKLift}` : summary.baselineAvgTopKLift}枚
                 </td>
-                <td className="py-3 px-4 text-right font-black">
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  {summary.dowBaselineAvgTopKLift >= 0 ? `+${summary.dowBaselineAvgTopKLift}` : summary.dowBaselineAvgTopKLift}枚
+                </td>
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  {summary.specialBaselineAvgTopKLift >= 0 ? `+${summary.specialBaselineAvgTopKLift}` : summary.specialBaselineAvgTopKLift}枚
+                </td>
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  {summary.recent14BaselineAvgTopKLift >= 0 ? `+${summary.recent14BaselineAvgTopKLift}` : summary.recent14BaselineAvgTopKLift}枚
+                </td>
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  {summary.randomBaselineAvgTopKLift >= 0 ? `+${summary.randomBaselineAvgTopKLift}` : summary.randomBaselineAvgTopKLift}枚
+                </td>
+                <td className="py-3 px-3 text-right font-black whitespace-nowrap">
                   <span
                     className={`inline-block px-2 py-0.5 rounded text-xs ${
                       summary.liftEdge >= 0
@@ -490,7 +650,7 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
                     {summary.liftEdge >= 0 ? `+${summary.liftEdge}` : summary.liftEdge}枚
                   </span>
                 </td>
-                <td className="py-3 px-4 text-slate-600">
+                <td className="py-3 px-3 text-slate-600 whitespace-nowrap">
                   {summary.liftEdge > 100 ? (
                     <span className="text-emerald-700 font-bold flex items-center gap-1">
                       <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
@@ -504,15 +664,30 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
                 </td>
               </tr>
 
+              {/* Row 2: Top-K Weighted Actual Diff */}
               <tr className="hover:bg-slate-50/50">
-                <td className="py-3 px-4 font-bold text-slate-900">上位{topK}機種 実績平均差枚</td>
-                <td className="py-3 px-4 font-black text-amber-700 bg-amber-50/30">
-                  {summary.engineAvgTopKDiff >= 0 ? `+${summary.engineAvgTopKDiff}` : summary.engineAvgTopKDiff}枚 / 台
+                <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">
+                  上位{topK}機種 実績平均差枚 (台数加重)
                 </td>
-                <td className="py-3 px-4 font-semibold text-slate-600">
-                  {summary.baselineAvgTopKDiff >= 0 ? `+${summary.baselineAvgTopKDiff}` : summary.baselineAvgTopKDiff}枚 / 台
+                <td className="py-3 px-3 font-black text-amber-700 bg-amber-50/30 whitespace-nowrap">
+                  {summary.engineAvgTopKDiff >= 0 ? `+${summary.engineAvgTopKDiff}` : summary.engineAvgTopKDiff}枚/台
                 </td>
-                <td className="py-3 px-4 text-right font-black">
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  {summary.baselineAvgTopKDiff >= 0 ? `+${summary.baselineAvgTopKDiff}` : summary.baselineAvgTopKDiff}枚
+                </td>
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  {summary.dowBaselineAvgTopKDiff >= 0 ? `+${summary.dowBaselineAvgTopKDiff}` : summary.dowBaselineAvgTopKDiff}枚
+                </td>
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  {summary.specialBaselineAvgTopKDiff >= 0 ? `+${summary.specialBaselineAvgTopKDiff}` : summary.specialBaselineAvgTopKDiff}枚
+                </td>
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  {summary.recent14BaselineAvgTopKDiff >= 0 ? `+${summary.recent14BaselineAvgTopKDiff}` : summary.recent14BaselineAvgTopKDiff}枚
+                </td>
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  {summary.randomBaselineAvgTopKDiff >= 0 ? `+${summary.randomBaselineAvgTopKDiff}` : summary.randomBaselineAvgTopKDiff}枚
+                </td>
+                <td className="py-3 px-3 text-right font-black whitespace-nowrap">
                   <span
                     className={`inline-block px-2 py-0.5 rounded text-xs ${
                       summary.engineAvgTopKDiff >= summary.baselineAvgTopKDiff
@@ -524,20 +699,35 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
                     {summary.engineAvgTopKDiff - summary.baselineAvgTopKDiff}枚
                   </span>
                 </td>
-                <td className="py-3 px-4 text-slate-600">
+                <td className="py-3 px-3 text-slate-600 whitespace-nowrap">
                   朝イチ推奨機種の純粋な出玉成績
                 </td>
               </tr>
 
+              {/* Row 3: Top-K Win Rate */}
               <tr className="hover:bg-slate-50/50">
-                <td className="py-3 px-4 font-bold text-slate-900">上位{topK}機種 勝率（プラス日比率）</td>
-                <td className="py-3 px-4 font-black text-amber-700 bg-amber-50/30">
+                <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">
+                  上位{topK}機種 勝率 (プラス日比率)
+                </td>
+                <td className="py-3 px-3 font-black text-amber-700 bg-amber-50/30 whitespace-nowrap">
                   {summary.engineTopKPositiveRate}%
                 </td>
-                <td className="py-3 px-4 font-semibold text-slate-600">
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
                   {summary.baselineTopKPositiveRate}%
                 </td>
-                <td className="py-3 px-4 text-right font-black">
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  {summary.dowBaselineTopKPositiveRate}%
+                </td>
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  {summary.specialBaselineTopKPositiveRate}%
+                </td>
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  {summary.recent14BaselineTopKPositiveRate}%
+                </td>
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  {summary.randomBaselineTopKPositiveRate}%
+                </td>
+                <td className="py-3 px-3 text-right font-black whitespace-nowrap">
                   <span
                     className={`inline-block px-2 py-0.5 rounded text-xs ${
                       summary.winRateEdge >= 0
@@ -548,20 +738,35 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
                     {summary.winRateEdge >= 0 ? `+${summary.winRateEdge}` : summary.winRateEdge}%
                   </span>
                 </td>
-                <td className="py-3 px-4 text-slate-600">
+                <td className="py-3 px-3 text-slate-600 whitespace-nowrap">
                   高勝率で負けリスクを低減
                 </td>
               </tr>
 
+              {/* Row 4: Spearman Correlation */}
               <tr className="hover:bg-slate-50/50">
-                <td className="py-3 px-4 font-bold text-slate-900">順位相関係数（スピアマン）</td>
-                <td className="py-3 px-4 font-black text-amber-700 bg-amber-50/30">
+                <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">
+                  順位相関係数 (スピアマン)
+                </td>
+                <td className="py-3 px-3 font-black text-amber-700 bg-amber-50/30 whitespace-nowrap">
                   {summary.engineAvgSpearman >= 0 ? `+${summary.engineAvgSpearman}` : summary.engineAvgSpearman}
                 </td>
-                <td className="py-3 px-4 font-semibold text-slate-600">
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
                   {summary.baselineAvgSpearman >= 0 ? `+${summary.baselineAvgSpearman}` : summary.baselineAvgSpearman}
                 </td>
-                <td className="py-3 px-4 text-right font-black">
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  {summary.dowBaselineAvgSpearman >= 0 ? `+${summary.dowBaselineAvgSpearman}` : summary.dowBaselineAvgSpearman}
+                </td>
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  {summary.specialBaselineAvgSpearman >= 0 ? `+${summary.specialBaselineAvgSpearman}` : summary.specialBaselineAvgSpearman}
+                </td>
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  {summary.recent14BaselineAvgSpearman >= 0 ? `+${summary.recent14BaselineAvgSpearman}` : summary.recent14BaselineAvgSpearman}
+                </td>
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  {summary.randomBaselineAvgSpearman >= 0 ? `+${summary.randomBaselineAvgSpearman}` : summary.randomBaselineAvgSpearman}
+                </td>
+                <td className="py-3 px-3 text-right font-black whitespace-nowrap">
                   <span
                     className={`inline-block px-2 py-0.5 rounded text-xs ${
                       summary.spearmanEdge >= 0
@@ -572,8 +777,42 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
                     {summary.spearmanEdge >= 0 ? `+${summary.spearmanEdge}` : summary.spearmanEdge}
                   </span>
                 </td>
-                <td className="py-3 px-4 text-slate-600">
+                <td className="py-3 px-3 text-slate-600 whitespace-nowrap">
                   ランキング全体の序列予測精度
+                </td>
+              </tr>
+
+              {/* Row 5: Hall MAE Comparison */}
+              <tr className="hover:bg-slate-50/50">
+                <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">
+                  ホール全体予測誤差 (MAE)
+                </td>
+                <td className="py-3 px-3 font-black text-amber-700 bg-amber-50/30 whitespace-nowrap">
+                  {summary.engineHallMae}枚/台
+                </td>
+                <td className="py-3 px-3 font-semibold text-slate-700 whitespace-nowrap">
+                  {summary.allPeriodHallMae}枚/台
+                </td>
+                <td colSpan={4} className="py-3 px-3 text-slate-400 text-[11px] whitespace-nowrap">
+                  (全期間平均値をそのまま出すだけの単純予測と対比)
+                </td>
+                <td className="py-3 px-3 text-right font-black whitespace-nowrap">
+                  <span
+                    className={`inline-block px-2 py-0.5 rounded text-xs ${
+                      summary.hallMaeImprovement >= 0
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-rose-100 text-rose-800'
+                    }`}
+                  >
+                    {summary.hallMaeImprovement >= 0 ? `+${summary.hallMaeImprovement}` : summary.hallMaeImprovement}枚 改善
+                  </span>
+                </td>
+                <td className="py-3 px-3 text-slate-600 whitespace-nowrap">
+                  {summary.hallMaeImprovement > 0 ? (
+                    <span className="text-emerald-600 font-bold">全期間平均予測より高精度</span>
+                  ) : (
+                    <span className="text-slate-500">全期間平均予測と同等</span>
+                  )}
                 </td>
               </tr>
             </tbody>
@@ -591,7 +830,7 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
                 店舗別パラメータ自動調整
               </span>
               <span className="text-indigo-200 text-xs font-medium">
-                学習70%・検証30% 時系列アウトオブサンプル検定
+                拡張ローリング検証（3〜5分割） & 7日ブロックブートストラップ（2,000回）
               </span>
             </div>
             <h3 className="text-base sm:text-lg font-bold text-white mt-1">
@@ -652,7 +891,7 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
         <div className="p-5 space-y-4">
           <div className="text-xs text-slate-600 max-w-4xl space-y-1">
             <p>
-              過去の全データを<strong>時系列で学習期間（前半70%）と検証期間（後半30%）</strong>に分割します。学習期間でのみ重みの組み合わせを探索し、<strong>未知の検証期間でもリフトが改善し、かつt値が2.0以上（有意差あり）</strong>の場合のみ「採用推奨」と判定します。
+              過去の全データを<strong>時系列の拡張ウィンドウ（3〜5分割ローリング検証）</strong>で評価します。粗グリッドからランダム探索（64組・規模補正ON/OFF含む）を行い、<strong>「全分割平均の改善が正」かつ「7日ブロックブートストラップ（2,000回）の95%信頼区間下限が0超」</strong>を満たした場合のみ「採用推奨」と判定します。※多数の候補探索に伴う多重比較バイアス（過学習）を厳格に防ぎます。
             </p>
           </div>
 
@@ -686,10 +925,10 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
                             : 'bg-amber-200 text-amber-900'
                         }`}
                       >
-                        {tuningResult.isRecommended ? '【採用推奨】有意な改善を確認' : '【現状維持推奨】有意差なし'}
+                        {tuningResult.isRecommended ? '【採用推奨】有意な改善を確認' : '【標準維持推奨】有意差なし'}
                       </span>
                       <span className="text-xs font-mono font-bold text-slate-700">
-                        t値 = {tuningResult.tValue} (基準値 ≧ 2.0)
+                        全分割平均 = {tuningResult.meanSplitGain >= 0 ? `+${tuningResult.meanSplitGain}` : tuningResult.meanSplitGain}枚 | 95%区間下限 = {tuningResult.bootstrapCiLower}枚
                       </span>
                     </div>
                     <p className="text-xs font-medium leading-relaxed">{tuningResult.verdictMessage}</p>
@@ -712,98 +951,90 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
 
               {/* Statistics Breakdown Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-                {/* Train Period Card */}
+                {/* Rolling Splits Card */}
                 <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-1">
                   <span className="text-slate-500 font-bold block">
-                    学習期間 (前半70%・{tuningResult.trainEvaluatedDays}営業日)
+                    ローリング検証 ({tuningResult.numSplits}分割)
                   </span>
                   <div className="flex items-baseline justify-between">
-                    <span className="text-slate-600">デフォルトリフト:</span>
-                    <span className="font-bold text-slate-800">+{tuningResult.trainDefaultLift}枚</span>
+                    <span className="text-slate-600">全分割平均向上:</span>
+                    <span className={`font-black ${tuningResult.meanSplitGain > 0 ? 'text-emerald-600' : 'text-slate-800'}`}>
+                      {tuningResult.meanSplitGain >= 0 ? `+${tuningResult.meanSplitGain}` : tuningResult.meanSplitGain}枚
+                    </span>
                   </div>
-                  <div className="flex items-baseline justify-between">
-                    <span className="text-slate-600">探索候補リフト:</span>
-                    <span className="font-black text-amber-600">+{tuningResult.trainCandidateLift}枚</span>
+                  <div className="flex items-baseline justify-between text-[11px]">
+                    <span className="text-slate-500">各分割Gain:</span>
+                    <span className="font-mono font-bold text-slate-700">
+                      [{tuningResult.splitGains.map((g) => (g >= 0 ? `+${g}` : `${g}`)).join(', ')}]
+                    </span>
                   </div>
                   <div className="flex items-baseline justify-between pt-1 border-t border-slate-200">
-                    <span className="font-bold text-slate-700">学習期 向上幅:</span>
-                    <span className="font-black text-emerald-600">+{tuningResult.trainLiftGain}枚</span>
+                    <span className="font-bold text-slate-700">検証総日数:</span>
+                    <span className="font-bold text-slate-800">{tuningResult.valEvaluatedDays}営業日</span>
                   </div>
                 </div>
 
-                {/* Validation Period Card */}
+                {/* Block Bootstrap Card */}
                 <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-1">
                   <span className="text-slate-500 font-bold block">
-                    検証期間 (後半30%・{tuningResult.valEvaluatedDays}営業日)
+                    7日ブロックブートストラップ (2,000回)
                   </span>
                   <div className="flex items-baseline justify-between">
-                    <span className="text-slate-600">デフォルトリフト:</span>
-                    <span className="font-bold text-slate-800">+{tuningResult.valDefaultLift}枚</span>
+                    <span className="text-slate-600">95%信頼区間:</span>
+                    <span className="font-black text-indigo-700">
+                      [{tuningResult.bootstrapCiLower >= 0 ? `+${tuningResult.bootstrapCiLower}` : tuningResult.bootstrapCiLower}枚, {tuningResult.bootstrapCiUpper >= 0 ? `+${tuningResult.bootstrapCiUpper}` : tuningResult.bootstrapCiUpper}枚]
+                    </span>
                   </div>
-                  <div className="flex items-baseline justify-between">
-                    <span className="text-slate-600">検証期 実現リフト:</span>
-                    <span className="font-black text-amber-600">+{tuningResult.valCandidateLift}枚</span>
+                  <div className="flex items-baseline justify-between text-[11px]">
+                    <span className="text-slate-500">区間下限判定:</span>
+                    <span className={`font-bold ${tuningResult.bootstrapCiLower > 0 ? 'text-emerald-600' : 'text-amber-700'}`}>
+                      {tuningResult.bootstrapCiLower > 0 ? '下限 > 0 (有意)' : '0以下 (偶発の範囲)'}
+                    </span>
                   </div>
                   <div className="flex items-baseline justify-between pt-1 border-t border-slate-200">
-                    <span className="font-bold text-slate-700">検証期 真の向上:</span>
-                    <span
-                      className={`font-black ${
-                        tuningResult.valLiftGain > 0 ? 'text-emerald-600' : 'text-rose-600'
-                      }`}
-                    >
-                      {tuningResult.valLiftGain > 0 ? `+${tuningResult.valLiftGain}` : tuningResult.valLiftGain}枚
-                    </span>
+                    <span className="font-bold text-slate-700">ブロック長:</span>
+                    <span className="font-bold text-slate-800">{tuningResult.bootstrapBlockLength}日間 (週周期保存)</span>
                   </div>
                 </div>
 
                 {/* Statistical Significance Card */}
                 <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-1">
-                  <span className="text-slate-500 font-bold block">統計的検定 (Paired t-test)</span>
+                  <span className="text-slate-500 font-bold block">検定統計量 & 学習実績</span>
                   <div className="flex items-baseline justify-between">
                     <span className="text-slate-600">標準誤差 (SE):</span>
                     <span className="font-bold text-slate-800">{tuningResult.valStdError}枚</span>
                   </div>
                   <div className="flex items-baseline justify-between">
                     <span className="text-slate-600">検定統計量 t値:</span>
-                    <span
-                      className={`font-black ${
-                        tuningResult.tValue >= 2.0 ? 'text-emerald-600' : 'text-slate-800'
-                      }`}
-                    >
+                    <span className="font-black text-slate-800">
                       {tuningResult.tValue}
                     </span>
                   </div>
                   <div className="flex items-baseline justify-between pt-1 border-t border-slate-200">
-                    <span className="font-bold text-slate-700">有意水準 判定:</span>
-                    <span
-                      className={`font-bold ${
-                        tuningResult.isRecommended ? 'text-emerald-700' : 'text-amber-700'
-                      }`}
-                    >
-                      {tuningResult.isRecommended ? '有意(p < 0.05)' : '有意差なし'}
-                    </span>
+                    <span className="font-bold text-slate-700">初期学習期Gain:</span>
+                    <span className="font-black text-emerald-600">+{tuningResult.trainLiftGain}枚</span>
                   </div>
                 </div>
 
                 {/* Candidate Weights Card */}
                 <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-1">
-                  <span className="text-slate-500 font-bold block">探索された重み構成</span>
+                  <span className="text-slate-500 font-bold block">探索重み (64組ランダム探索)</span>
                   <div className="flex items-baseline justify-between text-[11px]">
-                    <span className="text-slate-600">差枚数除数:</span>
+                    <span className="text-slate-600">差枚除数 / 勝率:</span>
                     <span className="font-bold text-slate-800">
-                      {tuningResult.candidateWeights.diffCoinDivisor} (標準 35)
+                      {tuningResult.candidateWeights.diffCoinDivisor} / {tuningResult.candidateWeights.winRateMultiplier}
                     </span>
                   </div>
                   <div className="flex items-baseline justify-between text-[11px]">
-                    <span className="text-slate-600">勝率加点係数:</span>
+                    <span className="text-slate-600">全台系 / ブレンド:</span>
                     <span className="font-bold text-slate-800">
-                      {tuningResult.candidateWeights.winRateMultiplier} (標準 0.6)
+                      +{tuningResult.candidateWeights.allHighMultiplier}点 / {tuningResult.candidateWeights.matchingBlendWeight}
                     </span>
                   </div>
-                  <div className="flex items-baseline justify-between text-[11px]">
-                    <span className="text-slate-600">全台系加点:</span>
-                    <span className="font-bold text-slate-800">
-                      +{tuningResult.candidateWeights.allHighMultiplier}点 (標準 4.5)
+                  <div className="flex items-baseline justify-between pt-1 border-t border-slate-200 text-[11px]">
+                    <span className="font-bold text-slate-700">規模補正:</span>
+                    <span className="font-bold text-indigo-700">
+                      {tuningResult.candidateWeights.scaleFactorEnabled ? '有効 (ON)' : '無効 (OFF)'}
                     </span>
                   </div>
                 </div>
@@ -1109,6 +1340,110 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
                             ))}
                           </tbody>
                         </table>
+                      </div>
+
+                      {/* Suggested Machine Weights & Rolling Validation Panel (Prompt 14) */}
+                      <div className="p-4 bg-slate-50 border-t border-slate-200 space-y-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-slate-800">店舗設定ステータス:</span>
+                            {isCustomMachineWeightsApplied ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded">
+                                <Check className="w-3 h-3 text-indigo-600" />
+                                店舗カスタム台番重み適用中
+                              </span>
+                            ) : (
+                              <span className="text-[11px] text-slate-500 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded">
+                                既定重み適用中（標準）
+                              </span>
+                            )}
+                          </div>
+                          {isCustomMachineWeightsApplied && onSaveStoreMachineWeights && (
+                            <button
+                              type="button"
+                              onClick={() => onSaveStoreMachineWeights(undefined)}
+                              className="text-[11px] text-slate-600 hover:text-slate-800 underline flex items-center gap-1 cursor-pointer"
+                            >
+                              <RotateCcw className="w-3 h-3" />
+                              既定の重みにリセット
+                            </button>
+                          )}
+                        </div>
+
+                        {suggestedZeroWeights && (
+                          <div className="bg-amber-50/70 border border-amber-200 rounded-lg p-3 space-y-2">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                              <div>
+                                <span className="text-xs font-bold text-amber-900 flex items-center gap-1">
+                                  <Info className="w-3.5 h-3.5 text-amber-700" />
+                                  効かない要素の見直し案（自動では変更されません）
+                                </span>
+                                <p className="text-[11px] text-amber-800 mt-0.5">
+                                  アブレーション検証でリフト低下が認められなかった要素: {suggestedZeroWeights.changedNames.join(', ')}
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={handleRunMachineRollingValidation}
+                                disabled={isMachineRollingRunning}
+                                className="shrink-0 text-xs px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                              >
+                                <SlidersHorizontal className="w-3.5 h-3.5" />
+                                {isMachineRollingRunning ? '検証中...' : 'ローリング検証(3〜5分割)で確認'}
+                              </button>
+                            </div>
+
+                            {machineRollingResult && (
+                              <div className="mt-2 pt-2 border-t border-amber-200/80 bg-white/70 rounded p-2.5 text-xs space-y-1.5">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <span className="font-bold text-slate-800">
+                                    ローリング検証結果 ({machineRollingResult.numSplits}分割 / {machineRollingResult.valEvaluatedDays}営業日):
+                                  </span>
+                                  <span className={`font-bold px-2 py-0.5 rounded text-[11px] ${
+                                    machineRollingResult.isRecommended
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : 'bg-amber-100 text-amber-800'
+                                  }`}>
+                                    {machineRollingResult.isRecommended ? '【採用推奨】有意' : '【標準維持推奨】有意差なし'}
+                                  </span>
+                                </div>
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-mono text-slate-700">
+                                  <div className="bg-white p-1.5 rounded border border-slate-200">
+                                    <div className="text-[10px] text-slate-500 font-sans">各分割ゲイン</div>
+                                    <div className="font-bold">[{machineRollingResult.splitGains.map(g => g >= 0 ? `+${g}` : `${g}`).join(', ')}]枚</div>
+                                  </div>
+                                  <div className="bg-white p-1.5 rounded border border-slate-200">
+                                    <div className="text-[10px] text-slate-500 font-sans">全分割平均</div>
+                                    <div className="font-bold">{machineRollingResult.meanSplitGain >= 0 ? `+${machineRollingResult.meanSplitGain}` : machineRollingResult.meanSplitGain}枚</div>
+                                  </div>
+                                  <div className="bg-white p-1.5 rounded border border-slate-200">
+                                    <div className="text-[10px] text-slate-500 font-sans">95%信頼区間</div>
+                                    <div className="font-bold">[{machineRollingResult.bootstrapCiLower >= 0 ? `+` : ''}{machineRollingResult.bootstrapCiLower}, {machineRollingResult.bootstrapCiUpper >= 0 ? `+` : ''}{machineRollingResult.bootstrapCiUpper}]</div>
+                                  </div>
+                                  <div className="bg-white p-1.5 rounded border border-slate-200">
+                                    <div className="text-[10px] text-slate-500 font-sans">単一分割依存</div>
+                                    <div className="font-bold text-emerald-700">全分割で判定済</div>
+                                  </div>
+                                </div>
+                                <p className="text-[11px] text-slate-600 font-sans leading-relaxed">
+                                  {machineRollingResult.verdictMessage}
+                                </p>
+                                {onSaveStoreMachineWeights && (
+                                  <div className="pt-1.5 flex justify-end">
+                                    <button
+                                      type="button"
+                                      onClick={() => onSaveStoreMachineWeights(suggestedZeroWeights.weights)}
+                                      className="text-xs px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer"
+                                    >
+                                      <Check className="w-3.5 h-3.5" />
+                                      この見直し案を店舗の重みとして保存
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}

@@ -33,6 +33,8 @@ interface TargetMachineRankingProps {
   customWeights?: RankingWeights;
   islandConfig?: string;
   onOpenStoreManager?: () => void;
+  includeReusedMachines?: boolean;
+  aliasDictionary?: Record<string, string>;
 }
 
 /**

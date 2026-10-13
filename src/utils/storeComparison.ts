@@ -1,5 +1,6 @@
 import { StoreProfile, DailyRecord } from '../data/types';
 import { isDateSpecialDay } from './dataEngine';
+import { normalizeModelName } from './modelName';
 
 export interface StoreCommonPeriod {
   startDate: string;
@@ -614,7 +615,7 @@ export function calculateCommonModels(
     for (const r of records) {
       if (!r.models) continue;
       for (const m of r.models) {
-        const name = (m.modelName || '').trim();
+        const name = normalizeModelName(m.modelName, s.modelAliasDictionary);
         if (!name) continue;
         if (!modelMap.has(name)) modelMap.set(name, new Map());
         const storeMap = modelMap.get(name)!;

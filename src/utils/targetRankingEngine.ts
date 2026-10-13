@@ -3,6 +3,7 @@ import { DailyRecord, DailyModelRecord, DailyTailRecord, SpecialDayRules, Rankin
 import { calculateDayOfWeek, isDateSpecialDay } from './dataEngine';
 import { isJapaneseHoliday } from './holidayUtils';
 import { isSmartSlot, isAType, isJuggler } from './modelFilterUtils';
+import { normalizeModelName } from './modelName';
 
 export const DEFAULT_RANKING_WEIGHTS: RankingWeights = {
   diffCoinDivisor: 35,
@@ -106,21 +107,73 @@ export interface FeatureIndex {
   oldEventDays?: string;
 }
 
+export interface PreparedModelData {
+  modelName: string;
+  totalMachines: number;
+  sampleDays: number;
+  matchingDays: number;
+  matchingAvgDiff: number;
+  matchingWinRate: number;
+  allAvgDiff: number;
+  allWinRate: number;
+  avgGames: number;
+  allHighCount: number;
+  scaleFactor: number;
+  sampleFactor: number;
+  tags: string[];
+  matchingHistory: Array<{
+    date: string;
+    dayOfWeek: string;
+    avgDiffCoins: number;
+    winRate: number | null;
+    avgGames: number;
+    isOldEventDay: boolean;
+  }>;
+}
+
+export interface PreparedTargetDay {
+  targetDate: string;
+  dow: string;
+  isHoliday: boolean;
+  isSpecial: boolean;
+  dayTail: number;
+  specialDayLabel: string;
+  expectedHallStatus: TargetDateForecast['expectedHallStatus'];
+  expectedHallAvgDiffCoins: number;
+  expectedHallWinRate: number;
+  expectedHallPayoutRate: number;
+  matchingHistoricalDaysCount: number;
+  models: PreparedModelData[];
+  tailRankings: TailTargetScore[];
+}
+
+export interface FeatureIndexOptions {
+  includeReusedMachines?: boolean;
+  aliasDictionary?: Record<string, string>;
+}
+
 /**
  * Precomputes weight-independent aggregations across historical records:
- * (date attributes, holiday/special-day status, model name trimming, isAllHigh check).
+ * (date attributes, holiday/special-day status, model name normalization, isAllHigh check).
  * Run once so multi-step backtests and auto-tuning do not repeat scans and slicing.
  */
 export function buildFeatureIndex(
   dailyRecords: DailyRecord[],
   specialDayRules?: SpecialDayRules,
-  oldEventDays: string = ''
+  oldEventDays: string = '',
+  options?: FeatureIndexOptions
 ): FeatureIndex {
   if (!dailyRecords || dailyRecords.length === 0) {
     return { records: [], specialDayRules, oldEventDays };
   }
 
-  const records: IndexedDailyRecord[] = dailyRecords.map((r) => {
+  // By default, only use days with model-level data and exclude machine-imputed days (isReusedMachines)
+  const eligibleRecords = options?.includeReusedMachines
+    ? dailyRecords
+    : dailyRecords.filter((r) => !r.isReusedMachines && r.models && r.models.length > 0);
+  const sourceRecords = eligibleRecords.length > 0 ? eligibleRecords : dailyRecords;
+
+  const records: IndexedDailyRecord[] = sourceRecords.map((r) => {
     const isSpecial = specialDayRules
       ? isDateSpecialDay(r.date, specialDayRules)
       : r.isOldEventDay;
@@ -131,7 +184,7 @@ export function buildFeatureIndex(
     if (r.models && r.models.length > 0) {
       for (let i = 0; i < r.models.length; i++) {
         const m = r.models[i];
-        const name = m.modelName.trim();
+        const name = normalizeModelName(m.modelName, options?.aliasDictionary);
         if (!name) continue;
 
         const isAllHigh =
@@ -254,14 +307,15 @@ export function extractTargetCohorts<T extends {
 }
 
 /**
- * Calculates complete forecast from pre-indexed feature structures.
+ * Pre-aggregates all weight-independent statistics for a target date:
+ * cohorts (special event / same DOW / same tail), hall averages, model stats
+ * (primaryDiffs, allDiffs, win rates, games, allHighCount), and tail rankings.
  */
-export function calculateTargetDateRankingFromIndex(
-  targetDate: string,
+export function buildPreparedTargetDay(
   featureIndex: FeatureIndex,
-  priorDaysCount?: number,
-  weights: RankingWeights = DEFAULT_RANKING_WEIGHTS
-): TargetDateForecast | null {
+  targetDate: string,
+  priorDaysCount?: number
+): PreparedTargetDay | null {
   if (!targetDate || !featureIndex || featureIndex.records.length === 0) return null;
 
   const recordsToUse =
@@ -328,13 +382,13 @@ export function calculateTargetDateRankingFromIndex(
     }
   }
 
-  // Fast Set lookup for primary cohort (O(1) instead of linear scan)
+  // Fast Set lookup for primary cohort
   const primaryDateSet = new Set<string>();
   for (let i = 0; i < primaryCohort.length; i++) {
     primaryDateSet.add(primaryCohort[i].date);
   }
 
-  // --- MODEL RANKING CALCULATION ---
+  // --- MODEL AGGREGATION ---
   interface ModelCollector {
     modelName: string;
     totalMachinesMax: number;
@@ -367,8 +421,9 @@ export function calculateTargetDateRankingFromIndex(
       const name = m.modelName;
       if (!name) return;
 
-      if (!modelMap.has(name)) {
-        modelMap.set(name, {
+      let entry = modelMap.get(name);
+      if (!entry) {
+        entry = {
           modelName: name,
           totalMachinesMax: m.totalMachines || 1,
           primaryDiffs: [],
@@ -379,10 +434,10 @@ export function calculateTargetDateRankingFromIndex(
           allWins: [],
           allHighCount: 0,
           matchingHistory: [],
-        });
+        };
+        modelMap.set(name, entry);
       }
 
-      const entry = modelMap.get(name)!;
       if (m.totalMachines > entry.totalMachinesMax) {
         entry.totalMachinesMax = m.totalMachines;
       }
@@ -416,7 +471,7 @@ export function calculateTargetDateRankingFromIndex(
     });
   });
 
-  const scoredModels: ModelTargetScore[] = [];
+  const preparedModels: PreparedModelData[] = [];
 
   modelMap.forEach((entry) => {
     const sampleDays = entry.allDiffs.length;
@@ -444,64 +499,9 @@ export function calculateTargetDateRankingFromIndex(
       ? Math.round(entry.primaryGames.reduce((a, b) => a + b, 0) / entry.primaryGames.length)
       : Math.round(entry.allGames.reduce((a, b) => a + b, 0) / sampleDays);
 
-    const diffDivisor = weights?.diffCoinDivisor ?? 35;
-    const winRateMult = weights?.winRateMultiplier ?? 0.6;
-    const allHighMult = weights?.allHighMultiplier ?? 4.5;
-    const blendWeight = weights?.matchingBlendWeight ?? 0.75;
-    const useScaleFactor = weights?.scaleFactorEnabled ?? true;
-
-    // Blended Expected Diff Coins:
-    let expectedDiffCoins = allAvgDiff;
-    if (matchingDays >= 3) {
-      expectedDiffCoins = Math.round(matchingAvgDiff * blendWeight + allAvgDiff * (1 - blendWeight));
-    } else if (matchingDays > 0) {
-      expectedDiffCoins = Math.round(matchingAvgDiff * 0.5 + allAvgDiff * 0.5);
-    } else {
-      expectedDiffCoins = Math.round(allAvgDiff * 0.85);
-    }
-
-    let predictedWinRate = allWinRate;
-    if (matchingDays >= 3) {
-      predictedWinRate = Math.round((matchingWinRate * blendWeight + allWinRate * (1 - blendWeight)) * 10) / 10;
-    } else if (matchingDays > 0) {
-      predictedWinRate = Math.round((matchingWinRate * 0.5 + allWinRate * 0.5) * 10) / 10;
-    }
-
-    // Estimate Payout Rate:
-    const inCoins = Math.max(1500, avgGames * 3);
-    const outCoins = inCoins + expectedDiffCoins;
-    const predictedPayoutRate = Math.round((outCoins / inCoins) * 10000) / 100;
-
-    // Reliability & Machine Scale Multiplier
     const scaleFactor = Math.min(1.2, 0.85 + Math.log10(Math.max(1, machines)) * 0.25);
     const sampleFactor = Math.min(1.15, 0.75 + Math.min(matchingDays, 8) * 0.05);
 
-    // Composite ranking score (base around 50)
-    let compositeScore = 50;
-    compositeScore += (expectedDiffCoins / diffDivisor);
-    compositeScore += (predictedWinRate - 48) * winRateMult;
-    compositeScore += entry.allHighCount * allHighMult;
-    if (useScaleFactor) {
-      compositeScore = Math.round(compositeScore * scaleFactor * sampleFactor * 10) / 10;
-    } else {
-      compositeScore = Math.round(compositeScore * 10) / 10;
-    }
-
-    // Rank Grade
-    let rankGrade: ModelTargetScore['rankGrade'] = 'C';
-    if (compositeScore >= 80 && expectedDiffCoins > 250) {
-      rankGrade = 'S+';
-    } else if (compositeScore >= 68 && expectedDiffCoins > 120) {
-      rankGrade = 'S';
-    } else if (compositeScore >= 56 && expectedDiffCoins > 0) {
-      rankGrade = 'A';
-    } else if (compositeScore >= 45) {
-      rankGrade = 'B';
-    } else {
-      rankGrade = 'C';
-    }
-
-    // Determine Tags
     const tags: string[] = [];
     if (isSmartSlot(entry.modelName)) tags.push('スマスロ');
     if (isJuggler(entry.modelName)) tags.push('ジャグラー');
@@ -510,58 +510,25 @@ export function calculateTargetDateRankingFromIndex(
     else if (machines === 1) tags.push('バラエティ');
     else tags.push(`少台数(${machines}台)`);
 
-    // Tactical reason generation
-    let tacticalReason = '';
-    if (isSpecial) {
-      if (matchingDays > 0 && matchingAvgDiff >= 500) {
-        tacticalReason = `特日実績抜群（過去平均+${matchingAvgDiff}枚/勝率${matchingWinRate}%）。看板機種として優先度最高。`;
-      } else if (entry.allHighCount >= 2) {
-        tacticalReason = `過去に全台系・複数高設定投入の実績が${entry.allHighCount}回あり。一撃ツモが狙える本命候補。`;
-      } else if (matchingWinRate >= 60) {
-        tacticalReason = `同種特日での安定勝率${matchingWinRate}%。大崩れしにくく堅実な立ち回りに最適。`;
-      } else if (expectedDiffCoins > 0) {
-        tacticalReason = `特日平均差枚プラス圏。安定して高設定が配分される傾向あり。`;
-      } else {
-        tacticalReason = `通常配分想定。他機種が埋まった場合のリカバリー候補。`;
-      }
-    } else {
-      if (matchingAvgDiff >= 300) {
-        tacticalReason = `${dow}曜日の特定配分傾向あり（同曜日平均+${matchingAvgDiff}枚）。平日通常日の穴場狙い目。`;
-      } else if (expectedDiffCoins > 0) {
-        tacticalReason = `店舗全体でベース出率が高め。通常日でも単発高設定に期待。`;
-      } else {
-        tacticalReason = `通常営業配分。積極的な朝イチ確保は見送り推奨。`;
-      }
-    }
-
-    scoredModels.push({
+    preparedModels.push({
       modelName: entry.modelName,
-      rank: 0,
-      rankGrade,
       totalMachines: machines,
-      expectedDiffCoins,
-      predictedWinRate,
-      predictedPayoutRate,
-      avgGames,
-      compositeScore,
       sampleDays,
-      matchingDaysCount: matchingDays,
-      matchingAvgDiffCoins: matchingAvgDiff,
+      matchingDays,
+      matchingAvgDiff,
       matchingWinRate,
-      allHighDaysCount: entry.allHighCount,
-      tacticalReason,
+      allAvgDiff,
+      allWinRate,
+      avgGames,
+      allHighCount: entry.allHighCount,
+      scaleFactor,
+      sampleFactor,
       tags,
-      sampleRecords: entry.matchingHistory.sort((a, b) => b.date.localeCompare(a.date)),
+      matchingHistory: entry.matchingHistory.sort((a, b) => b.date.localeCompare(a.date)),
     });
   });
 
-  // Sort models by composite score descending
-  scoredModels.sort((a, b) => b.compositeScore - a.compositeScore);
-  scoredModels.forEach((m, idx) => {
-    m.rank = idx + 1;
-  });
-
-  // --- TAIL NUMBER RANKING (0..9 & Zoro) ---
+  // --- TAIL NUMBER AGGREGATION (0..9 & Zoro) ---
   interface TailCollector {
     tailName: string;
     tailNum: number | null;
@@ -653,26 +620,11 @@ export function calculateTargetDateRankingFromIndex(
     t.rank = idx + 1;
   });
 
-  // Tactical Advice Synthesis
-  const topModel1 = scoredModels[0]?.modelName || '主力機種';
-  const topModel2 = scoredModels[1]?.modelName || '対抗機種';
-  const topTail = tailRankings[0]?.tailName || '好調末尾';
-
-  const morningPriority = `【本命最優先】${topModel1} の確保を最優先に狙う。特に ${topTail} と重複する台番は激アツ期待度大。`;
-  const secondOption = `【対抗候補】抽選番号が振るわない場合は ${topModel2} または ${tailRankings[1]?.tailName || '第2末尾'} の主力台番へシフト。`;
-  const tailStrategy = isSpecial
-    ? `日付末尾 (${dayTail}日) と過去実績首位の「${topTail}」の合致率に注目。良番時はこの2つの末尾を優先選択。`
-    : `通常営業日のため、全体末尾の過信は禁物。機種単体の過去勝率を最重要視した立ち回りを推奨。`;
-
-  const summary = isSpecial
-    ? `${specialDayLabel} はホール全体での還元期待度が極めて高い勝負日。過去実績トップの「${topModel1}」を中心とした多台数メイン機種を攻めるのがセオリーです。`
-    : `${targetDate}（${dow}曜）は通常営業日の配分想定。ピンポイントでの単品高設定投入を狙う慎重な立ち回りが有効です。`;
-
   return {
     targetDate,
-    dayOfWeek: dow,
+    dow,
     isHoliday,
-    isSpecialDay: isSpecial,
+    isSpecial,
     dayTail,
     specialDayLabel,
     expectedHallStatus,
@@ -680,8 +632,157 @@ export function calculateTargetDateRankingFromIndex(
     expectedHallWinRate: hallWinRate,
     expectedHallPayoutRate: hallPayout,
     matchingHistoricalDaysCount: primaryCohort.length,
-    modelRankings: scoredModels,
+    models: preparedModels,
     tailRankings,
+  };
+}
+
+/**
+ * Calculates score, ranking, and forecast from prepared target day data and weights.
+ * Fast, pure scoring step for auto-tuning grid search and single evaluation.
+ */
+export function scoreFromPrepared(
+  prepared: PreparedTargetDay,
+  weights: RankingWeights = DEFAULT_RANKING_WEIGHTS
+): TargetDateForecast {
+  const diffDivisor = weights?.diffCoinDivisor ?? 35;
+  const winRateMult = weights?.winRateMultiplier ?? 0.6;
+  const allHighMult = weights?.allHighMultiplier ?? 4.5;
+  const blendWeight = weights?.matchingBlendWeight ?? 0.75;
+  const useScaleFactor = weights?.scaleFactorEnabled ?? true;
+
+  const scoredModels: ModelTargetScore[] = [];
+
+  for (let i = 0; i < prepared.models.length; i++) {
+    const m = prepared.models[i];
+
+    // Blended Expected Diff Coins:
+    let expectedDiffCoins = m.allAvgDiff;
+    if (m.matchingDays >= 3) {
+      expectedDiffCoins = Math.round(m.matchingAvgDiff * blendWeight + m.allAvgDiff * (1 - blendWeight));
+    } else if (m.matchingDays > 0) {
+      expectedDiffCoins = Math.round(m.matchingAvgDiff * 0.5 + m.allAvgDiff * 0.5);
+    } else {
+      expectedDiffCoins = Math.round(m.allAvgDiff * 0.85);
+    }
+
+    let predictedWinRate = m.allWinRate;
+    if (m.matchingDays >= 3) {
+      predictedWinRate = Math.round((m.matchingWinRate * blendWeight + m.allWinRate * (1 - blendWeight)) * 10) / 10;
+    } else if (m.matchingDays > 0) {
+      predictedWinRate = Math.round((m.matchingWinRate * 0.5 + m.allWinRate * 0.5) * 10) / 10;
+    }
+
+    // Estimate Payout Rate:
+    const inCoins = Math.max(1500, m.avgGames * 3);
+    const outCoins = inCoins + expectedDiffCoins;
+    const predictedPayoutRate = Math.round((outCoins / inCoins) * 10000) / 100;
+
+    // Composite ranking score (base around 50)
+    let compositeScore = 50;
+    compositeScore += (expectedDiffCoins / diffDivisor);
+    compositeScore += (predictedWinRate - 48) * winRateMult;
+    compositeScore += m.allHighCount * allHighMult;
+    if (useScaleFactor) {
+      compositeScore = Math.round(compositeScore * m.scaleFactor * m.sampleFactor * 10) / 10;
+    } else {
+      compositeScore = Math.round(compositeScore * 10) / 10;
+    }
+
+    // Rank Grade
+    let rankGrade: ModelTargetScore['rankGrade'] = 'C';
+    if (compositeScore >= 80 && expectedDiffCoins > 250) {
+      rankGrade = 'S+';
+    } else if (compositeScore >= 68 && expectedDiffCoins > 120) {
+      rankGrade = 'S';
+    } else if (compositeScore >= 56 && expectedDiffCoins > 0) {
+      rankGrade = 'A';
+    } else if (compositeScore >= 45) {
+      rankGrade = 'B';
+    } else {
+      rankGrade = 'C';
+    }
+
+    // Tactical reason generation
+    let tacticalReason = '';
+    if (prepared.isSpecial) {
+      if (m.matchingDays > 0 && m.matchingAvgDiff >= 500) {
+        tacticalReason = `特日実績抜群（過去平均+${m.matchingAvgDiff}枚/勝率${m.matchingWinRate}%）。看板機種として優先度最高。`;
+      } else if (m.allHighCount >= 2) {
+        tacticalReason = `過去に全台系・複数高設定投入の実績が${m.allHighCount}回あり。一撃ツモが狙える本命候補。`;
+      } else if (m.matchingWinRate >= 60) {
+        tacticalReason = `同種特日での安定勝率${m.matchingWinRate}%。大崩れしにくく堅実な立ち回りに最適。`;
+      } else if (expectedDiffCoins > 0) {
+        tacticalReason = `特日平均差枚プラス圏。安定して高設定が配分される傾向あり。`;
+      } else {
+        tacticalReason = `通常配分想定。他機種が埋まった場合のリカバリー候補。`;
+      }
+    } else {
+      if (m.matchingAvgDiff >= 300) {
+        tacticalReason = `${prepared.dow}曜日の特定配分傾向あり（同曜日平均+${m.matchingAvgDiff}枚）。平日通常日の穴場狙い目。`;
+      } else if (expectedDiffCoins > 0) {
+        tacticalReason = `店舗全体でベース出率が高め。通常日でも単発高設定に期待。`;
+      } else {
+        tacticalReason = `通常営業配分。積極的な朝イチ確保は見送り推奨。`;
+      }
+    }
+
+    scoredModels.push({
+      modelName: m.modelName,
+      rank: 0,
+      rankGrade,
+      totalMachines: m.totalMachines,
+      expectedDiffCoins,
+      predictedWinRate,
+      predictedPayoutRate,
+      avgGames: m.avgGames,
+      compositeScore,
+      sampleDays: m.sampleDays,
+      matchingDaysCount: m.matchingDays,
+      matchingAvgDiffCoins: m.matchingAvgDiff,
+      matchingWinRate: m.matchingWinRate,
+      allHighDaysCount: m.allHighCount,
+      tacticalReason,
+      tags: m.tags,
+      sampleRecords: m.matchingHistory,
+    });
+  }
+
+  // Sort models by composite score descending
+  scoredModels.sort((a, b) => b.compositeScore - a.compositeScore);
+  scoredModels.forEach((sm, idx) => {
+    sm.rank = idx + 1;
+  });
+
+  // Tactical Advice Synthesis
+  const topModel1 = scoredModels[0]?.modelName || '主力機種';
+  const topModel2 = scoredModels[1]?.modelName || '対抗機種';
+  const topTail = prepared.tailRankings[0]?.tailName || '好調末尾';
+
+  const morningPriority = `【本命最優先】${topModel1} の確保を最優先に狙う。特に ${topTail} と重複する台番は激アツ期待度大。`;
+  const secondOption = `【対抗候補】抽選番号が振るわない場合は ${topModel2} または ${prepared.tailRankings[1]?.tailName || '第2末尾'} の主力台番へシフト。`;
+  const tailStrategy = prepared.isSpecial
+    ? `日付末尾 (${prepared.dayTail}日) と過去実績首位の「${topTail}」の合致率に注目。良番時はこの2つの末尾を優先選択。`
+    : `通常営業日のため、全体末尾の過信は禁物。機種単体の過去勝率を最重要視した立ち回りを推奨。`;
+
+  const summary = prepared.isSpecial
+    ? `${prepared.specialDayLabel} はホール全体での還元期待度が極めて高い勝負日。過去実績トップの「${topModel1}」を中心とした多台数メイン機種を攻めるのがセオリーです。`
+    : `${prepared.targetDate}（${prepared.dow}曜）は通常営業日の配分想定。ピンポイントでの単品高設定投入を狙う慎重な立ち回りが有効です。`;
+
+  return {
+    targetDate: prepared.targetDate,
+    dayOfWeek: prepared.dow,
+    isHoliday: prepared.isHoliday,
+    isSpecialDay: prepared.isSpecial,
+    dayTail: prepared.dayTail,
+    specialDayLabel: prepared.specialDayLabel,
+    expectedHallStatus: prepared.expectedHallStatus,
+    expectedHallAvgDiffCoins: prepared.expectedHallAvgDiffCoins,
+    expectedHallWinRate: prepared.expectedHallWinRate,
+    expectedHallPayoutRate: prepared.expectedHallPayoutRate,
+    matchingHistoricalDaysCount: prepared.matchingHistoricalDaysCount,
+    modelRankings: scoredModels,
+    tailRankings: prepared.tailRankings,
     tacticalAdvice: {
       morningPriority,
       secondOption,
@@ -689,6 +790,21 @@ export function calculateTargetDateRankingFromIndex(
       summary,
     },
   };
+}
+
+/**
+ * Calculates complete forecast from pre-indexed feature structures.
+ * Public wrapper preserving signature and exact output.
+ */
+export function calculateTargetDateRankingFromIndex(
+  targetDate: string,
+  featureIndex: FeatureIndex,
+  priorDaysCount?: number,
+  weights: RankingWeights = DEFAULT_RANKING_WEIGHTS
+): TargetDateForecast | null {
+  const prepared = buildPreparedTargetDay(featureIndex, targetDate, priorDaysCount);
+  if (!prepared) return null;
+  return scoreFromPrepared(prepared, weights);
 }
 
 /**
@@ -700,9 +816,10 @@ export function calculateTargetDateRanking(
   dailyRecords: DailyRecord[],
   specialDayRules?: SpecialDayRules,
   oldEventDays: string = '',
-  weights: RankingWeights = DEFAULT_RANKING_WEIGHTS
+  weights: RankingWeights = DEFAULT_RANKING_WEIGHTS,
+  options?: FeatureIndexOptions
 ): TargetDateForecast | null {
   if (!targetDate || !dailyRecords || dailyRecords.length === 0) return null;
-  const featureIndex = buildFeatureIndex(dailyRecords, specialDayRules, oldEventDays);
+  const featureIndex = buildFeatureIndex(dailyRecords, specialDayRules, oldEventDays, options);
   return calculateTargetDateRankingFromIndex(targetDate, featureIndex, undefined, weights);
 }

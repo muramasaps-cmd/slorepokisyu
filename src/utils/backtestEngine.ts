@@ -1,6 +1,8 @@
 import { DailyRecord, DailyMachineRecord, SpecialDayRules, RankingWeights } from '../data/types';
 import {
   buildFeatureIndex,
+  buildPreparedTargetDay,
+  scoreFromPrepared,
   calculateTargetDateRanking,
   calculateTargetDateRankingFromIndex,
   DEFAULT_RANKING_WEIGHTS,
@@ -11,6 +13,7 @@ import {
   DEFAULT_MACHINE_RANKING_WEIGHTS,
   TargetMachineScore,
 } from './targetMachineRanking';
+import { normalizeModelName } from './modelName';
 
 export interface BacktestDayEvaluation {
   date: string;
@@ -167,7 +170,7 @@ export function runWalkForwardBacktest(
     // Actual day results map
     const actualModelMap = new Map<string, { avgDiffCoins: number; winRate: number | null }>();
     targetDay.models?.forEach((m) => {
-      actualModelMap.set(m.modelName.trim(), {
+      actualModelMap.set(normalizeModelName(m.modelName), {
         avgDiffCoins: m.avgDiffCoins,
         winRate: m.winRate,
       });
@@ -181,7 +184,7 @@ export function runWalkForwardBacktest(
 
     // Overlapping models for Spearman & MAE
     const commonModels = forecast.modelRankings.filter((m) =>
-      actualModelMap.has(m.modelName.trim())
+      actualModelMap.has(normalizeModelName(m.modelName))
     );
 
     if (commonModels.length === 0) continue;
@@ -189,7 +192,7 @@ export function runWalkForwardBacktest(
     // Engine Top-K
     const engineTopK = commonModels.slice(0, Math.min(k, commonModels.length));
     const engineTopKActualDiffs = engineTopK.map(
-      (m) => actualModelMap.get(m.modelName.trim())!.avgDiffCoins
+      (m) => actualModelMap.get(normalizeModelName(m.modelName))!.avgDiffCoins
     );
     const engineTopKActualAvgDiff =
       engineTopKActualDiffs.length > 0
@@ -206,13 +209,13 @@ export function runWalkForwardBacktest(
     // Engine Spearman
     const engineScores = commonModels.map((m) => m.compositeScore);
     const actualDiffs = commonModels.map(
-      (m) => actualModelMap.get(m.modelName.trim())!.avgDiffCoins
+      (m) => actualModelMap.get(normalizeModelName(m.modelName))!.avgDiffCoins
     );
     const engineSpearmanCorr = calculateSpearman(engineScores, actualDiffs);
 
     // Engine MAE
     const maeSum = commonModels.reduce((acc, m) => {
-      const act = actualModelMap.get(m.modelName.trim())!.avgDiffCoins;
+      const act = actualModelMap.get(normalizeModelName(m.modelName))!.avgDiffCoins;
       return acc + Math.abs(m.expectedDiffCoins - act);
     }, 0);
     const engineDiffCoinsMae = Math.round(maeSum / commonModels.length);
@@ -221,7 +224,7 @@ export function runWalkForwardBacktest(
     const baselineModelMap = new Map<string, { totalDiff: number; count: number }>();
     priorRecords.forEach((r) => {
       r.models?.forEach((m) => {
-        const name = m.modelName.trim();
+        const name = normalizeModelName(m.modelName);
         const existing = baselineModelMap.get(name) || { totalDiff: 0, count: 0 };
         existing.totalDiff += m.avgDiffCoins;
         existing.count += 1;
@@ -433,6 +436,26 @@ export function runAutoTuning(
     sorted.findIndex((r) => r.date === vd.date)
   );
 
+  // 1. Build PreparedTargetDay and actual maps ONCE for each train day
+  const trainPreparedDays = trainDays.map((td, i) =>
+    buildPreparedTargetDay(featureIndex, td.date, trainPriorCounts[i])
+  );
+  const trainActualMaps = trainDays.map((td) => {
+    const map = new Map<string, number>();
+    td.models?.forEach((m) => map.set(normalizeModelName(m.modelName), m.avgDiffCoins));
+    return map;
+  });
+
+  // 2. Build PreparedTargetDay and actual maps ONCE for each validation day
+  const valPreparedDays = valDays.map((vd, i) =>
+    buildPreparedTargetDay(featureIndex, vd.date, valPriorCounts[i])
+  );
+  const valActualMaps = valDays.map((vd) => {
+    const map = new Map<string, number>();
+    vd.models?.forEach((m) => map.set(normalizeModelName(m.modelName), m.avgDiffCoins));
+    return map;
+  });
+
   // Search grid on Train period
   const candidateDivisors = [25, 35, 50];
   const candidateWinMults = [0.3, 0.6, 1.0];
@@ -463,30 +486,26 @@ export function runAutoTuning(
             scaleFactorEnabled: true,
           };
 
-          // Fast lift evaluation on Train
+          // Fast lift evaluation on Train using scoreFromPrepared
           let sumLift = 0;
           let count = 0;
           for (let ti = 0; ti < trainDays.length; ti++) {
+            const prep = trainPreparedDays[ti];
+            if (!prep || prep.models.length === 0) continue;
+
             const targetDay = trainDays[ti];
-            const priorCount = trainPriorCounts[ti];
-            const fc = calculateTargetDateRankingFromIndex(
-              targetDay.date,
-              featureIndex,
-              priorCount,
-              w
-            );
+            const fc = scoreFromPrepared(prep, w);
             if (!fc || fc.modelRankings.length === 0) continue;
 
-            const actualMap = new Map<string, number>();
-            targetDay.models?.forEach((m) => actualMap.set(m.modelName.trim(), m.avgDiffCoins));
+            const actualMap = trainActualMaps[ti];
 
             const topModels = fc.modelRankings
-              .filter((m) => actualMap.has(m.modelName.trim()))
+              .filter((m) => actualMap.has(normalizeModelName(m.modelName)))
               .slice(0, k);
 
             if (topModels.length > 0) {
               const avgActual =
-                topModels.reduce((acc, m) => acc + actualMap.get(m.modelName.trim())!, 0) /
+                topModels.reduce((acc, m) => acc + actualMap.get(normalizeModelName(m.modelName))!, 0) /
                 topModels.length;
               sumLift += avgActual - targetDay.avgDiffCoins;
               count++;
@@ -512,23 +531,20 @@ export function runAutoTuning(
   let trainDefaultSumLift = 0;
   let trainDefaultCount = 0;
   for (let ti = 0; ti < trainDays.length; ti++) {
+    const prep = trainPreparedDays[ti];
+    if (!prep || prep.models.length === 0) continue;
+
     const targetDay = trainDays[ti];
-    const priorCount = trainPriorCounts[ti];
-    const fc = calculateTargetDateRankingFromIndex(
-      targetDay.date,
-      featureIndex,
-      priorCount,
-      DEFAULT_RANKING_WEIGHTS
-    );
+    const fc = scoreFromPrepared(prep, DEFAULT_RANKING_WEIGHTS);
     if (!fc || fc.modelRankings.length === 0) continue;
-    const actualMap = new Map<string, number>();
-    targetDay.models?.forEach((m) => actualMap.set(m.modelName.trim(), m.avgDiffCoins));
+
+    const actualMap = trainActualMaps[ti];
     const topModels = fc.modelRankings
-      .filter((m) => actualMap.has(m.modelName.trim()))
+      .filter((m) => actualMap.has(normalizeModelName(m.modelName)))
       .slice(0, k);
     if (topModels.length > 0) {
       const avgActual =
-        topModels.reduce((acc, m) => acc + actualMap.get(m.modelName.trim())!, 0) /
+        topModels.reduce((acc, m) => acc + actualMap.get(normalizeModelName(m.modelName))!, 0) /
         topModels.length;
       trainDefaultSumLift += avgActual - targetDay.avgDiffCoins;
       trainDefaultCount++;
@@ -539,49 +555,39 @@ export function runAutoTuning(
   const trainCandidateLift = Math.round(bestTrainLift);
   const trainLiftGain = trainCandidateLift - trainDefaultLift;
 
-  // Validation phase: Out-of-sample paired test on valDays
+  // Validation phase: Out-of-sample paired test on valDays using scoreFromPrepared
   const diffs: number[] = [];
   let valDefaultSum = 0;
   let valCandidateSum = 0;
   let valValidCount = 0;
 
   for (let vi = 0; vi < valDays.length; vi++) {
-    const targetDay = valDays[vi];
-    const priorCount = valPriorCounts[vi];
+    const prep = valPreparedDays[vi];
+    if (!prep || prep.models.length === 0) continue;
 
-    const actualMap = new Map<string, number>();
-    targetDay.models?.forEach((m) => actualMap.set(m.modelName.trim(), m.avgDiffCoins));
+    const targetDay = valDays[vi];
+    const actualMap = valActualMaps[vi];
 
     // Default
-    const fcDef = calculateTargetDateRankingFromIndex(
-      targetDay.date,
-      featureIndex,
-      priorCount,
-      DEFAULT_RANKING_WEIGHTS
-    );
+    const fcDef = scoreFromPrepared(prep, DEFAULT_RANKING_WEIGHTS);
     // Candidate
-    const fcCand = calculateTargetDateRankingFromIndex(
-      targetDay.date,
-      featureIndex,
-      priorCount,
-      bestCandidateWeights
-    );
+    const fcCand = scoreFromPrepared(prep, bestCandidateWeights);
 
     if (!fcDef || !fcCand) continue;
 
     const topDef = fcDef.modelRankings
-      .filter((m) => actualMap.has(m.modelName.trim()))
+      .filter((m) => actualMap.has(normalizeModelName(m.modelName)))
       .slice(0, k);
     const topCand = fcCand.modelRankings
-      .filter((m) => actualMap.has(m.modelName.trim()))
+      .filter((m) => actualMap.has(normalizeModelName(m.modelName)))
       .slice(0, k);
 
     if (topDef.length === 0 || topCand.length === 0) continue;
 
     const defAvg =
-      topDef.reduce((acc, m) => acc + actualMap.get(m.modelName.trim())!, 0) / topDef.length;
+      topDef.reduce((acc, m) => acc + actualMap.get(normalizeModelName(m.modelName))!, 0) / topDef.length;
     const candAvg =
-      topCand.reduce((acc, m) => acc + actualMap.get(m.modelName.trim())!, 0) / topCand.length;
+      topCand.reduce((acc, m) => acc + actualMap.get(normalizeModelName(m.modelName))!, 0) / topCand.length;
 
     const defLift = defAvg - targetDay.avgDiffCoins;
     const candLift = candAvg - targetDay.avgDiffCoins;
@@ -904,11 +910,12 @@ export function runMachineBacktest(
       hallDiffSum += m.diff;
       if (m.diff > 0) hallWinCount++;
 
-      const list = modelToMachines.get(m.modelName);
+      const normName = normalizeModelName(m.modelName);
+      const list = modelToMachines.get(normName);
       if (list) {
         list.push(m);
       } else {
-        modelToMachines.set(m.modelName, [m]);
+        modelToMachines.set(normName, [m]);
       }
     }
 
@@ -1042,7 +1049,7 @@ export function runMachineBacktest(
         let tDiff = 0;
         let tWin = 0;
         for (const p of observedMachines) {
-          const modelMachines = modelToMachines.get(p.modelName);
+          const modelMachines = modelToMachines.get(normalizeModelName(p.modelName));
           if (modelMachines && modelMachines.length > 0) {
             const mIdx = Math.floor(rng() * modelMachines.length);
             const rm = modelMachines[mIdx];
@@ -1067,7 +1074,7 @@ export function runMachineBacktest(
       let modelAvgDiffSum = 0;
       let modelWinRateSum = 0;
       for (const p of observedMachines) {
-        const modelMachines = modelToMachines.get(p.modelName);
+        const modelMachines = modelToMachines.get(normalizeModelName(p.modelName));
         if (modelMachines && modelMachines.length > 0) {
           const mSum = modelMachines.reduce((a, b) => a + b.diff, 0);
           const mWins = modelMachines.filter((m) => m.diff > 0).length;

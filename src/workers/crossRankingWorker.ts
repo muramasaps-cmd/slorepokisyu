@@ -1,5 +1,9 @@
 import { StoreProfile } from '../data/types';
-import { calculateCrossStoreRanking, CrossStoreRankingOptions, CrossStoreRankingResult } from '../utils/crossStoreRanking';
+import {
+  calculateCrossStoreRanking,
+  CrossStoreRankingOptions,
+  CrossStoreRankingResult,
+} from '../utils/crossStoreRanking';
 
 export interface CrossRankingWorkerRequest {
   type: 'CALCULATE_CROSS_RANKING';
@@ -18,8 +22,17 @@ self.onmessage = (event: MessageEvent<CrossRankingWorkerRequest>) => {
 
   if (type === 'CALCULATE_CROSS_RANKING') {
     try {
-      self.postMessage({ type: 'PROGRESS', progress: 30 } satisfies CrossRankingWorkerResponse);
-      const result = calculateCrossStoreRanking(stores, targetDate, options);
+      self.postMessage({ type: 'PROGRESS', progress: 5 } satisfies CrossRankingWorkerResponse);
+      const result = calculateCrossStoreRanking(stores, targetDate, {
+        ...options,
+        onProgress: (progress, currentStore) => {
+          self.postMessage({
+            type: 'PROGRESS',
+            progress,
+            currentStore,
+          } satisfies CrossRankingWorkerResponse);
+        },
+      });
       self.postMessage({ type: 'PROGRESS', progress: 100 } satisfies CrossRankingWorkerResponse);
       self.postMessage({ type: 'RESULT', result } satisfies CrossRankingWorkerResponse);
     } catch (err) {

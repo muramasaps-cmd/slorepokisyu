@@ -2,7 +2,7 @@ import { DailyRecord, StoreProfile } from '../data/types';
 import { parseRatesFromExchangeRate, parseSlorepoHtml } from './htmlParser';
 import { processStoreData } from './dataEngine';
 import { parseSpecialDayRulesFromText } from './specialDayRules';
-import { areStoresSame, normalizeStoreNameKey } from './storeStorage';
+import { areStoresSame, normalizeStoreNameKey, mergeDailyRecords } from './storeStorage';
 import { isCsvOrTsv, parseUnitLevelCsv } from './csvParser';
 
 export interface ParsedStoreGroup {
@@ -221,40 +221,8 @@ function aggregateParsedResults(
       });
     }
 
-    // Deduplicate by date
-    const dateMap = new Map<string, DailyRecord>();
-    for (const r of combinedDailyRecords) {
-      if (!dateMap.has(r.date)) {
-        dateMap.set(r.date, r);
-      } else {
-        const prev = dateMap.get(r.date)!;
-        const prevQuality =
-          (prev.totalMachines > 0 ? 2 : 0) +
-          (prev.winMachines !== null ? 2 : 0) +
-          (prev.machines && prev.machines.length > 0 ? 20 : 0) +
-          (prev.notable ? 1 : 0) +
-          (prev.models && prev.models.length > 0 ? 4 : 0);
-        const newQuality =
-          (r.totalMachines > 0 ? 2 : 0) +
-          (r.winMachines !== null ? 2 : 0) +
-          (r.machines && r.machines.length > 0 ? 20 : 0) +
-          (r.notable ? 1 : 0) +
-          (r.models && r.models.length > 0 ? 4 : 0);
-
-        if (newQuality >= prevQuality) {
-          const mergedMachines = (r.machines && r.machines.length > 0) ? r.machines : prev.machines;
-          dateMap.set(r.date, { ...r, machines: mergedMachines });
-        } else {
-          if ((!prev.machines || prev.machines.length === 0) && (r.machines && r.machines.length > 0)) {
-            dateMap.set(r.date, { ...prev, machines: r.machines });
-          }
-        }
-      }
-    }
-
-    const uniqueDailyRecords = Array.from(dateMap.values()).sort((a, b) =>
-      a.date.localeCompare(b.date)
-    );
+    // Deduplicate by date using unified mergeDailyRecords quality score logic
+    const uniqueDailyRecords = mergeDailyRecords([], combinedDailyRecords);
 
     let newRecordsCount = uniqueDailyRecords.length;
     if (existingMatch) {
@@ -401,7 +369,7 @@ export async function parseMultipleSlorepoHtmlAsync(
 
     try {
       if (isCsvOrTsv(f.content) || f.name.toLowerCase().endsWith('.csv') || f.name.toLowerCase().endsWith('.tsv')) {
-        const csvRes = parseUnitLevelCsv(f.content, f.name);
+        const csvRes = parseUnitLevelCsv(f.content, f.name, '', existingStores);
         if (!csvRes.success || csvRes.stores.length === 0) {
           errors.push({
             fileName: f.name,
@@ -468,7 +436,7 @@ export function parseMultipleSlorepoHtml(
     }
     try {
       if (isCsvOrTsv(f.content) || f.name.toLowerCase().endsWith('.csv') || f.name.toLowerCase().endsWith('.tsv')) {
-        const csvRes = parseUnitLevelCsv(f.content, f.name);
+        const csvRes = parseUnitLevelCsv(f.content, f.name, '', existingStores);
         if (!csvRes.success || csvRes.stores.length === 0) {
           errors.push({
             fileName: f.name,

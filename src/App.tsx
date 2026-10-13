@@ -130,25 +130,28 @@ export default function App() {
   // 8 Tabs State (including multi-store comparison and cross-store target)
   type ActiveTab = 'overview' | 'forecast' | 'models' | 'trends' | 'tables' | 'validation' | 'compare' | 'cross';
   const [activeTab, setActiveTab] = useState<ActiveTab>(() => {
-    const hash = window.location.hash.replace('#', '');
-    if (['overview', 'forecast', 'models', 'trends', 'tables', 'validation', 'compare', 'cross'].includes(hash)) {
-      return hash as ActiveTab;
+    const raw = window.location.hash.replace('#', '');
+    const tabPart = raw.split('?')[0].split('&')[0];
+    if (['overview', 'forecast', 'models', 'trends', 'tables', 'validation', 'compare', 'cross'].includes(tabPart)) {
+      return tabPart as ActiveTab;
     }
     return 'overview';
   });
 
-  // Synchronize activeTab with URL hash
+  // Synchronize activeTab with URL hash (preserve hash parameters if tab matches)
   useEffect(() => {
-    if (window.location.hash.replace('#', '') !== activeTab) {
+    const currentTab = window.location.hash.replace('#', '').split('?')[0].split('&')[0];
+    if (currentTab !== activeTab) {
       window.location.hash = `#${activeTab}`;
     }
   }, [activeTab]);
 
   useEffect(() => {
     const handleHashChange = () => {
-      const hash = window.location.hash.replace('#', '');
-      if (['overview', 'forecast', 'models', 'trends', 'tables', 'validation', 'compare', 'cross'].includes(hash)) {
-        setActiveTab(hash as ActiveTab);
+      const raw = window.location.hash.replace('#', '');
+      const tabPart = raw.split('?')[0].split('&')[0];
+      if (['overview', 'forecast', 'models', 'trends', 'tables', 'validation', 'compare', 'cross'].includes(tabPart)) {
+        setActiveTab(tabPart as ActiveTab);
       }
     };
     window.addEventListener('hashchange', handleHashChange);

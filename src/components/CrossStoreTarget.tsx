@@ -14,16 +14,10 @@ import {
   Building2,
   Calendar,
   Layers,
-  ArrowRight,
-  TrendingUp,
-  AlertTriangle,
   Sparkles,
   Trophy,
-  Coins,
   Cpu,
-  ChevronDown,
-  ChevronUp,
-  Filter,
+  AlertTriangle,
   CheckCircle2,
   HelpCircle,
   Play,
@@ -41,20 +35,25 @@ interface CrossStoreTargetProps {
 export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
   stores,
   initialTargetDate,
-  onSelectStore,
   activeFilterLabel,
   isModelFilterActive,
 }) => {
-  // Read initial values from URL hash if available (e.g. #targetDate=2026-05-17&stores=store1,store2)
+  // Read initial values from URL hash if available (e.g. #cross?crossDate=2026-05-17&crossStores=store1,store2)
   const getHashParams = () => {
     try {
       const hash = window.location.hash.slice(1);
-      const params = new URLSearchParams(hash);
+      const queryPart = hash.includes('?') ? hash.split('?')[1] : hash;
+      const params = new URLSearchParams(queryPart);
       return {
-        date: params.get('crossDate') || null,
-        stores: params.get('crossStores') ? params.get('crossStores')!.split(',') : null,
+        date: params.get('crossDate') || params.get('targetDate') || null,
+        stores: params.get('crossStores')
+          ? params.get('crossStores')!.split(',')
+          : params.get('stores')
+          ? params.get('stores')!.split(',')
+          : null,
       };
-    } catch {
+    } catch (err) {
+      console.warn('Failed to parse URL hash parameters:', err);
       return { date: null, stores: null };
     }
   };
@@ -70,7 +69,7 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
     return tom.toISOString().slice(0, 10);
   });
 
-  // Selected stores
+  // Selected stores state
   const [selectedStoreIds, setSelectedStoreIds] = useState<string[]>(() => {
     if (hashParams.stores && hashParams.stores.length > 0) {
       const validIds = hashParams.stores.filter((id) => stores.some((s) => s.id === id));
@@ -82,13 +81,12 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
   // Sync hash when targetDate or selectedStoreIds change
   useEffect(() => {
     try {
-      const currentHash = window.location.hash.slice(1);
-      const params = new URLSearchParams(currentHash);
+      const params = new URLSearchParams();
       params.set('crossDate', targetDate);
       params.set('crossStores', selectedStoreIds.join(','));
-      window.location.hash = params.toString();
-    } catch {
-      // ignore
+      window.location.hash = `#cross?${params.toString()}`;
+    } catch (err) {
+      console.warn('Failed to update URL hash:', err);
     }
   }, [targetDate, selectedStoreIds]);
 
@@ -101,21 +99,22 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
   // Active view: 'models' | 'machines'
   const [rankingView, setRankingView] = useState<'models' | 'machines'>('models');
 
-  // Low confidence toggle (Prompt 13: 既定除外、トグルで表示)
+  // Low confidence toggle (Prompt 13: 既定で除外、トグルで表示)
   const [includeLowConfidence, setIncludeLowConfidence] = useState<boolean>(false);
 
   // Worker calculation & progress
-  const [workerProgress, setWorkerProgress] = useState<number | null>(null);
+  const [workerProgress, setWorkerProgress] = useState<{ percent: number; store?: string } | null>(null);
   const workerRef = useRef<Worker | null>(null);
 
-  // Store backtest edge cache ({ [storeId]: { hasEdge: boolean; message: string; evaluatedDays: number } })
+  // Store backtest edge cache ({ [storeId]: { hasEdge: boolean; verdictMessage: string; evaluatedDays: number } })
   const [edgeCache, setEdgeCache] = useState<
     Record<string, { hasEdge: boolean; verdictMessage: string; evaluatedDays: number }>
   >(() => {
     try {
       const saved = localStorage.getItem('slorepo_cross_edge_cache');
       return saved ? JSON.parse(saved) : {};
-    } catch {
+    } catch (err) {
+      console.warn('Failed to load edge cache from localStorage:', err);
       return {};
     }
   });
@@ -149,6 +148,8 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
           }
           return next;
         });
+      } catch (err) {
+        console.error('Error running machine backtest for store:', store.name, err);
       } finally {
         setTestingStoreId(null);
       }
@@ -166,15 +167,16 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
       );
       workerRef.current = worker;
 
-      setWorkerProgress(20);
+      setWorkerProgress({ percent: 10 });
 
       worker.onmessage = (e: MessageEvent<CrossRankingWorkerResponse>) => {
         if (e.data.type === 'PROGRESS') {
-          setWorkerProgress(e.data.progress);
+          setWorkerProgress({ percent: e.data.progress, store: e.data.currentStore });
         } else if (e.data.type === 'RESULT') {
           setWorkerResult(e.data.result);
           setWorkerProgress(null);
         } else if (e.data.type === 'ERROR') {
+          console.error('Cross ranking worker failed:', e.data.error);
           setWorkerProgress(null);
         }
       };
@@ -197,7 +199,8 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
         worker.terminate();
         workerRef.current = null;
       };
-    } catch {
+    } catch (err) {
+      console.warn('Worker initialization failed, using sync calculateCrossStoreRanking:', err);
       setWorkerProgress(null);
     }
   }, [stores, targetDate, metricMode, displayCount, selectedStoreIds, includeLowConfidence]);
@@ -224,7 +227,6 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
     }
   };
 
-  // When only 1 store exists
   const isSingleStore = stores.length <= 1;
 
   return (
@@ -380,12 +382,12 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
           {/* Right: Metric Mode Toggle & Count & Low Confidence Toggle */}
           <div className="flex flex-wrap items-center gap-2 self-start lg:self-end shrink-0">
             {/* Low Confidence Toggle */}
-            <label className="flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer select-none bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-lg">
+            <label className="flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer select-none bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-lg hover:bg-slate-100 transition-colors">
               <input
                 type="checkbox"
                 checked={includeLowConfidence}
                 onChange={(e) => setIncludeLowConfidence(e.target.checked)}
-                className="rounded text-indigo-600 focus:ring-0"
+                className="rounded text-indigo-600 focus:ring-0 cursor-pointer"
               />
               <span className="font-bold">低信頼も表示</span>
             </label>
@@ -434,13 +436,15 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
         {workerProgress !== null && (
           <div className="space-y-1 animate-in fade-in">
             <div className="flex justify-between text-[11px] text-slate-500 font-bold">
-              <span>横断ランキングバックグラウンド計算中...</span>
-              <span>{workerProgress}%</span>
+              <span>
+                横断ランキングバックグラウンド計算中... {workerProgress.store ? `(${workerProgress.store})` : ''}
+              </span>
+              <span>{workerProgress.percent}%</span>
             </div>
             <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
               <div
                 className="bg-indigo-600 h-1.5 transition-all duration-200"
-                style={{ width: `${workerProgress}%` }}
+                style={{ width: `${workerProgress.percent}%` }}
               />
             </div>
           </div>
@@ -494,7 +498,7 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
         </div>
 
         <span className="text-[11px] text-slate-400 hidden sm:inline">
-          ※ {metricMode === 'yen' ? '各店舗の換金率を反映した期待収支(円)順' : '期待差枚・スコア順'}
+          ※ {metricMode === 'yen' ? '各店舗の換金率を反映した期待収支(円)降順' : '期待差枚(縮小済)降順'}
         </span>
       </div>
 
@@ -514,13 +518,14 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                   </th>
                   <th className="px-3 py-3 text-right font-bold">勝率</th>
                   <th className="px-3 py-3 text-right font-bold">機械割</th>
+                  <th className="px-3 py-3 text-right font-bold">店内スコア</th>
                   <th className="px-4 py-3 font-bold">選定理由・根拠</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {rankingResult.modelRankings.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="p-8 text-center text-slate-400">
+                    <td colSpan={9} className="p-8 text-center text-slate-400">
                       該当する機種ランキングデータがありません。
                     </td>
                   </tr>
@@ -566,7 +571,7 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                           </span>
                         ) : (
                           <span className={m.expectedDiffCoins >= 0 ? 'text-blue-600' : 'text-rose-600'}>
-                            {m.expectedDiffCoins >= 0 ? `+${m.expectedDiffCoins}` : m.expectedDiffCoins}枚
+                            {m.expectedDiffCoins >= 0 ? `+${formatNumber(m.expectedDiffCoins)}` : formatNumber(m.expectedDiffCoins)}枚
                           </span>
                         )}
                       </td>
@@ -576,8 +581,11 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                       <td className="px-3 py-3 text-right font-mono text-slate-600">
                         {m.predictedPayoutRate}%
                       </td>
-                      <td className="px-4 py-3 text-xs text-slate-500 max-w-xs truncate">
-                        {m.tacticalReason || `過去同条件${m.sampleDays}日の出玉実績`}
+                      <td className="px-3 py-3 text-right font-mono text-slate-400 text-[11px]">
+                        {m.compositeScore}pt
+                      </td>
+                      <td className="px-4 py-3 text-xs text-slate-600 max-w-sm truncate" title={m.tacticalReason}>
+                        {m.tacticalReason || '根拠が少ないため参考表示'}
                       </td>
                     </tr>
                   ))
@@ -601,17 +609,19 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                   <th className="px-4 py-3 font-bold">機種名</th>
                   <th className="px-3 py-3 text-center font-bold">信頼度</th>
                   <th className="px-3 py-3 text-right font-bold">
-                    {metricMode === 'yen' ? '期待収支 (円)' : '期待差枚 (枚)'}
+                    {metricMode === 'yen' ? '期待収支 (円)' : '期待差枚 (縮小済)'}
                   </th>
-                  <th className="px-3 py-3 text-right font-bold">総合スコア</th>
-                  <th className="px-4 py-3 font-bold">主要根拠</th>
+                  <th className="px-3 py-3 text-right font-bold">店内スコア</th>
+                  <th className="px-4 py-3 font-bold">選定理由・根拠</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {rankingResult.machineRankings.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="p-8 text-center text-slate-400">
-                      台番号別のランキングデータが存在しません（台番明細データを含む店舗をご利用ください）。
+                      {includeLowConfidence
+                        ? '台番号別のランキングデータが存在しません。'
+                        : '信頼度「中」以上の台番号別データがありません。「低信頼も表示」にチェックを入れると表示されます。'}
                     </td>
                   </tr>
                 ) : (
@@ -668,18 +678,18 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                             {mach.expectedYenProfit >= 0 ? `+${formatYen(mach.expectedYenProfit)}` : formatYen(mach.expectedYenProfit)}
                           </span>
                         ) : (
-                          <span className={mach.expectedDiffCoins >= 0 ? 'text-blue-600' : 'text-rose-600'}>
-                            {mach.expectedDiffCoins >= 0 ? `+${mach.expectedDiffCoins}` : mach.expectedDiffCoins}枚
+                          <span className={mach.shrunkDiff >= 0 ? 'text-blue-600' : 'text-rose-600'}>
+                            {mach.shrunkDiff >= 0 ? `+${formatNumber(mach.shrunkDiff)}` : formatNumber(mach.shrunkDiff)}枚
                           </span>
                         )}
                       </td>
-                      <td className="px-3 py-3 text-right font-mono font-bold text-slate-800">
+                      <td className="px-3 py-3 text-right font-mono text-slate-400 text-[11px]">
                         {mach.totalScore >= 0 ? `+${mach.totalScore}` : mach.totalScore}pt
                       </td>
                       <td className="px-4 py-3 text-xs text-slate-600">
                         <div className="space-y-0.5">
                           {mach.reasons.map((r, rIdx) => (
-                            <div key={rIdx} className="truncate max-w-xs">
+                            <div key={rIdx} className="truncate max-w-sm" title={r}>
                               • {r}
                             </div>
                           ))}

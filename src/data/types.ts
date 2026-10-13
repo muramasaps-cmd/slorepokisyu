@@ -13,6 +13,11 @@ export interface IslandDefinition {
   endNum: number;
 }
 
+export interface CategoryRateOverride {
+  rateLend?: number;
+  rateExchange?: number;
+}
+
 export interface StoreInfo {
   id?: string;
   name: string;
@@ -29,6 +34,9 @@ export interface StoreInfo {
   isPreset?: boolean;
   islandConfig?: string; // e.g. "A島: 101-120, B島: 121-140" or "101-120:メイン島"
   islandDefinitions?: IslandDefinition[];
+  modelAliasDictionary?: Record<string, string>;
+  categoryRates?: Record<string, CategoryRateOverride>;
+  includeReusedMachinesInStats?: boolean;
 }
 
 export interface RankingWeights {

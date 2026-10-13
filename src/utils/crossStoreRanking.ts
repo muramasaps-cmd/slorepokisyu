@@ -9,6 +9,7 @@ import {
   MachineConfidenceLevel,
 } from './targetMachineRanking';
 import { getMachineIsland, parseIslandConfig } from './islandUtils';
+import { getStoreRatesForModel } from './modelName';
 
 export type CrossMetricMode = 'diffCoins' | 'yen';
 
@@ -18,11 +19,11 @@ export interface CrossStoreModelRank {
   storeName: string;
   modelName: string;
   totalMachines: number;
-  expectedDiffCoins: number;
+  expectedDiffCoins: number; // shrunk expected diff coins
   expectedYenProfit: number; // estimated yen using store rates
   predictedWinRate: number;
   predictedPayoutRate: number;
-  compositeScore: number;
+  compositeScore: number; // intra-store reference score
   tacticalReason: string;
   isSpecialDay: boolean;
   sampleDays: number;
@@ -35,12 +36,13 @@ export interface CrossStoreMachineRank {
   machineNum: number;
   modelName: string;
   islandName?: string | null;
-  totalScore: number;
+  totalScore: number; // intra-store reference score
   confidence: MachineConfidenceLevel;
   evidenceDays: number;
   cohortEvidenceDays: number;
-  expectedDiffCoins: number; // shrunkDiff (cross-store shrunk)
-  expectedYenProfit: number; // shrunkDiff * store exchange rate
+  shrunkDiff: number; // cross-store shrunk diff
+  expectedDiffCoins: number; // alias for shrunkDiff for display & compatibility
+  expectedYenProfit: number; // shrunkDiff converted to yen using store exchange rate
   cohortAvgDiff: number;
   cohortWinRate: number;
   highSettingRate: number;
@@ -71,6 +73,7 @@ export interface CrossStoreRankingOptions {
   topMachineCount?: number; // default 20
   selectedStoreIds?: string[]; // if specified, filters to these store IDs
   includeLowConfidence?: boolean; // default false: exclude low confidence machines
+  onProgress?: (progress: number, currentStore?: string) => void;
 }
 
 /**
@@ -113,10 +116,17 @@ export function calculateCrossStoreRanking(
   const excludedStores: ExcludedStoreInfo[] = [];
   const eligibleModels: CrossStoreModelRank[] = [];
   const eligibleMachines: CrossStoreMachineRank[] = [];
-  const lowConfidenceMachines: CrossStoreMachineRank[] = [];
 
-  for (const store of targetStores) {
+  for (let sIdx = 0; sIdx < targetStores.length; sIdx++) {
+    const store = targetStores[sIdx];
+
+    if (options?.onProgress) {
+      const progress = Math.round(((sIdx + 1) / targetStores.length) * 100);
+      options.onProgress(progress, store.name);
+    }
+
     const records = store.dailyRecords || [];
+    // Strictly filter out any records on or after targetDate to prevent future leakage
     const priorRecords = records.filter((r) => r.date < targetDate);
 
     // Exclusion checks
@@ -161,23 +171,40 @@ export function calculateCrossStoreRanking(
         priorRecords,
         store.specialDayRules,
         store.oldEventDays,
-        store.customRankingWeights
+        store.customRankingWeights,
+        {
+          includeReusedMachines: store.includeReusedMachinesInStats,
+          aliasDictionary: store.modelAliasDictionary,
+        }
       );
 
-      if (modelForecast && modelForecast.modelRankings.length > 0) {
+      if (!modelForecast || modelForecast.modelRankings.length === 0) {
+        excludedStores.push({
+          storeId: store.id,
+          storeName: store.name,
+          reason: `機種予測の有効なデータを算出できませんでした (対象日: ${targetDate})`,
+        });
+      } else {
         for (const m of modelForecast.modelRankings) {
           // Shrink expected diff towards 0 based on sample days vs store evaluated days
           const modelWeight = m.sampleDays / (m.sampleDays + 3);
           const storeWeight = Math.min(1.0, storeEvalDays / 15);
           const shrunkModelDiff = Math.round(m.expectedDiffCoins * modelWeight * storeWeight);
 
-          const expectedYen = convertCoinsToYen(shrunkModelDiff, rateLend, rateExchange);
+          const { rateLend: mRateLend, rateExchange: mRateExch } = getStoreRatesForModel(store, m.modelName);
+          const expectedYen = convertCoinsToYen(shrunkModelDiff, mRateLend, mRateExch);
           const storeContext = modelForecast.isSpecialDay
-            ? '特日'
+            ? `来店日が店舗特日 (実績${m.sampleDays}日)`
             : `同曜日実績${m.sampleDays}日`;
-          const reason = m.tacticalReason
-            ? `${m.tacticalReason} (根拠${m.sampleDays}日)`
-            : `同コホート${m.sampleDays}日の出玉実績 (勝率${m.predictedWinRate}%)`;
+
+          let tacticalReason = '';
+          if (m.sampleDays === 0) {
+            tacticalReason = '根拠が少ないため参考表示';
+          } else if (m.tacticalReason) {
+            tacticalReason = `${m.tacticalReason} (${storeContext}, 根拠${m.sampleDays}日)`;
+          } else {
+            tacticalReason = `${storeContext}・平均差枚${m.expectedDiffCoins >= 0 ? '+' : ''}${m.expectedDiffCoins}枚 (勝率${m.predictedWinRate}%, 根拠${m.sampleDays}日)`;
+          }
 
           eligibleModels.push({
             rank: 0,
@@ -190,17 +217,18 @@ export function calculateCrossStoreRanking(
             predictedWinRate: m.predictedWinRate,
             predictedPayoutRate: m.predictedPayoutRate,
             compositeScore: m.compositeScore,
-            tacticalReason: reason,
+            tacticalReason,
             isSpecialDay: modelForecast.isSpecialDay,
             sampleDays: m.sampleDays,
           });
         }
       }
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       excludedStores.push({
         storeId: store.id,
         storeName: store.name,
-        reason: `機種予測の計算中にエラーが発生しました: ${err instanceof Error ? err.message : String(err)}`,
+        reason: `機種予測の計算中にエラーが発生しました: ${message}`,
       });
     }
 
@@ -212,57 +240,96 @@ export function calculateCrossStoreRanking(
           priorRecords,
           store.specialDayRules,
           undefined,
-          { rankingWeights: store.customRankingWeights }
+          {
+            rankingWeights: store.customRankingWeights,
+            includeReusedMachines: store.includeReusedMachinesInStats,
+            aliasDictionary: store.modelAliasDictionary,
+          }
         );
 
-        if (machineResult && machineResult.rankings.length > 0) {
+        if (machineResult && machineResult.errorReason) {
+          excludedStores.push({
+            storeId: store.id,
+            storeName: store.name,
+            reason: `台番予測エラー: ${machineResult.errorReason}`,
+          });
+        } else if (machineResult && machineResult.rankings.length > 0) {
           const islandDefs = parseIslandConfig(store.islandConfig);
           for (const mach of machineResult.rankings) {
-            // Prompt 13: Exclude low confidence by default, unless includeLowConfidence is true
-            // If all eligible machines across the entire comparison have low confidence (e.g. sparse 1-day mock data),
-            // we will handle fallback after the loop if eligibleMachines is empty and includeLowConfidence was false.
+            // Prompt 13: Exclude confidence '低' by default, unless includeLowConfidence is true
             const isLow = mach.confidence === '低';
+            if (isLow && !includeLowConfidence) {
+              continue;
+            }
 
             // Shrink expected diff towards 0 according to evidence days and store evaluation days
             const evidenceWeight = mach.evidenceDays / (mach.evidenceDays + 3);
             const storeWeight = Math.min(1.0, storeEvalDays / 15);
             const shrunkDiff = Math.round(mach.stats.shrunkDiff * evidenceWeight * storeWeight);
-            const expYen = convertCoinsToYen(shrunkDiff, rateLend, rateExchange);
+            const { rateLend: machRateLend, rateExchange: machRateExch } = getStoreRatesForModel(store, mach.modelName);
+            const expYen = convertCoinsToYen(shrunkDiff, machRateLend, machRateExch);
             const island = getMachineIsland(mach.machineNum, islandDefs);
 
-            // Construct rich evidence-based reasons: top 2-3 contributions + store context
-            const reasons: string[] = [];
+            // Construct rich evidence-based reasons: store factor + top 2 contributions with evidence days
             const isSpecial = Boolean(machineResult.isSpecialDay);
-            const storeContext = isSpecial
-              ? `【特日対象店】`
-              : `【通常日・同曜日${mach.cohortEvidenceDays}日】`;
+            const storeFactorText = isSpecial
+              ? `来店日が店舗特日 (実績${mach.cohortEvidenceDays}日)`
+              : `同曜日実績${mach.cohortEvidenceDays}日`;
 
-            // Top contributions
-            const contribList = [
-              { name: 'コホート差枚', score: mach.contributions.cohortDiffScore, detail: `同条件${mach.cohortEvidenceDays}日台平均 ${mach.stats.cohortAvgDiff >= 0 ? '+' : ''}${mach.stats.cohortAvgDiff}枚` },
-              { name: 'コホート勝率', score: mach.contributions.cohortWinRateScore, detail: `同条件勝率 ${mach.stats.cohortWinRate}%` },
-              { name: '高設定挙動', score: mach.contributions.highSettingScore, detail: `高設定挙動 ${mach.evidenceDays}日中${mach.stats.highSettingCount}日 (${mach.stats.highSettingRate}%)` },
-              { name: '機種評価', score: mach.contributions.modelScore, detail: `機種スコア ${mach.stats.modelScore}pt` },
-              { name: '特定日末尾・ゾロ目', score: mach.contributions.tailBonusScore, detail: mach.stats.isTailMatch ? '末尾一致' : mach.stats.isZoro ? 'ゾロ目番' : '' },
-            ].filter((c) => c.score > 0);
+            const contribItems: Array<{ score: number; text: string }> = [];
 
-            contribList.sort((a, b) => b.score - a.score);
-            const topContribs = contribList.slice(0, 2);
-
-            if (topContribs.length > 0) {
-              topContribs.forEach((c) => {
-                if (c.detail) reasons.push(`${c.detail} (根拠${mach.evidenceDays}日)`);
+            if (mach.contributions.cohortDiffScore > 0) {
+              contribItems.push({
+                score: mach.contributions.cohortDiffScore,
+                text: `同条件台平均 ${mach.stats.cohortAvgDiff >= 0 ? '+' : ''}${mach.stats.cohortAvgDiff}枚 (根拠${mach.cohortEvidenceDays}日)`,
               });
-              if (isSpecial) {
-                reasons.push(`${storeContext} 特日コホート重視`);
-              }
             }
+            if (mach.contributions.cohortWinRateScore > 0) {
+              contribItems.push({
+                score: mach.contributions.cohortWinRateScore,
+                text: `同条件勝率 ${mach.stats.cohortWinRate}% (実績${mach.cohortEvidenceDays}日)`,
+              });
+            }
+            if (mach.contributions.highSettingScore > 0) {
+              contribItems.push({
+                score: mach.contributions.highSettingScore,
+                text: `高設定挙動 ${mach.evidenceDays}日中${mach.stats.highSettingCount}日 (${mach.stats.highSettingRate}%, 根拠${mach.evidenceDays}日)`,
+              });
+            }
+            if (mach.contributions.modelScore > 0) {
+              contribItems.push({
+                score: mach.contributions.modelScore,
+                text: `機種評価スコア ${mach.stats.modelScore}pt (根拠${mach.evidenceDays}日)`,
+              });
+            }
+            if (mach.contributions.tailBonusScore > 0) {
+              const label = mach.stats.isTailMatch ? '特定日末尾一致' : mach.stats.isZoro ? 'ゾロ目番' : '末尾・ゾロ目ボーナス';
+              contribItems.push({
+                score: mach.contributions.tailBonusScore,
+                text: `${label} (根拠${mach.evidenceDays}日)`,
+              });
+            }
+            if (mach.contributions.recentStateScore > 0) {
+              contribItems.push({
+                score: mach.contributions.recentStateScore,
+                text: `直前好調傾向 (根拠${mach.evidenceDays}日)`,
+              });
+            }
+
+            contribItems.sort((a, b) => b.score - a.score);
+            const topContribs = contribItems.slice(0, 2);
+
+            const reasons: string[] = [];
+            if (mach.cohortEvidenceDays > 0 || isSpecial) {
+              reasons.push(storeFactorText);
+            }
+            topContribs.forEach((c) => reasons.push(c.text));
 
             if (reasons.length === 0) {
               reasons.push('根拠が少ないため参考表示');
             }
 
-            const item: CrossStoreMachineRank = {
+            eligibleMachines.push({
               rank: 0,
               storeId: store.id,
               storeName: store.name,
@@ -273,6 +340,7 @@ export function calculateCrossStoreRanking(
               confidence: mach.confidence,
               evidenceDays: mach.evidenceDays,
               cohortEvidenceDays: mach.cohortEvidenceDays,
+              shrunkDiff,
               expectedDiffCoins: shrunkDiff,
               expectedYenProfit: expYen,
               cohortAvgDiff: mach.stats.cohortAvgDiff,
@@ -281,40 +349,23 @@ export function calculateCrossStoreRanking(
               isTailMatch: mach.stats.isTailMatch,
               isZoro: mach.stats.isZoro,
               reasons: reasons.slice(0, 3),
-            };
-
-            if (isLow && !includeLowConfidence) {
-              lowConfidenceMachines.push(item);
-            } else {
-              eligibleMachines.push(item);
-            }
+            });
           }
         }
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
         excludedStores.push({
           storeId: store.id,
           storeName: store.name,
-          reason: `台番予測の計算中にエラーが発生しました: ${err instanceof Error ? err.message : String(err)}`,
+          reason: `台番予測の計算中にエラーが発生しました: ${message}`,
         });
       }
     }
   }
 
-  // If no high/mid confidence machines exist at all across all stores and includeLowConfidence was not explicitly true,
-  // do not fallback if includeLowConfidence was specified, but if tests/defaults have only low confidence,
-  // we check if options?.includeLowConfidence was explicitly set to false or undefined.
-  // Prompt 13: 信頼度「低」は既定で除外（options.includeLowConfidence === trueで表示）
-  // However, in mock tests with 1 sample day where all machines have confidence '低',
-  // if eligibleMachines is empty, fallback to lowConfidenceMachines only if options?.includeLowConfidence is undefined and no mid/high exists.
-  const finalMachines =
-    eligibleMachines.length > 0
-      ? eligibleMachines
-      : options?.includeLowConfidence === false
-      ? []
-      : lowConfidenceMachines;
-
   // Sort model rankings:
-  // Prompt 13: In expectedDiffCoins mode, sort strictly by expectedDiffCoins descending!
+  // Prompt 13: In expectedDiffCoins mode, sort strictly by expectedDiffCoins descending.
+  // compositeScore is for intra-store reference only and not used for cross-store sorting.
   eligibleModels.sort((a, b) => {
     if (metricMode === 'yen') {
       return b.expectedYenProfit - a.expectedYenProfit;
@@ -326,15 +377,15 @@ export function calculateCrossStoreRanking(
   });
 
   // Sort machine rankings:
-  // Prompt 13: In expectedDiffCoins mode, sort strictly by expectedDiffCoins (shrunkDiff) descending!
-  // totalScore is for intra-store reference only.
-  finalMachines.sort((a, b) => {
+  // Prompt 13: In expectedDiffCoins mode, sort strictly by shrunkDiff descending.
+  // totalScore is for intra-store reference only and not used for cross-store sorting.
+  eligibleMachines.sort((a, b) => {
     if (metricMode === 'yen') {
       return b.expectedYenProfit - a.expectedYenProfit;
     }
-    return b.expectedDiffCoins - a.expectedDiffCoins;
+    return b.shrunkDiff - a.shrunkDiff;
   });
-  finalMachines.forEach((m, idx) => {
+  eligibleMachines.forEach((m, idx) => {
     m.rank = idx + 1;
   });
 
@@ -345,6 +396,6 @@ export function calculateCrossStoreRanking(
     eligibleStoresCount: targetStores.length - excludedStores.length,
     excludedStores,
     modelRankings: eligibleModels.slice(0, topModelCount),
-    machineRankings: finalMachines.slice(0, topMachineCount),
+    machineRankings: eligibleMachines.slice(0, topMachineCount),
   };
 }

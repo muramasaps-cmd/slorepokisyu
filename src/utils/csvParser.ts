@@ -8,7 +8,8 @@ import {
 } from '../data/types';
 import { calculateDayOfWeek, isDateSpecialDay, processStoreData } from './dataEngine';
 import { parseSpecialDayRulesFromText } from './specialDayRules';
-import { areStoresSame } from './storeStorage';
+import { areStoresSame, mergeDailyRecords } from './storeStorage';
+import { normalizeModelName } from './modelName';
 
 export interface ParseCsvResult {
   success: boolean;
@@ -181,7 +182,8 @@ export function normalizeDateString(raw: string): string | null {
 export function parseUnitLevelCsv(
   csvContent: string,
   fileName: string = '',
-  defaultStoreName: string = ''
+  defaultStoreName: string = '',
+  existingStores: StoreProfile[] = []
 ): ParseCsvResult {
   const errors: string[] = [];
   const rows = parseDelimitedText(csvContent);
@@ -398,7 +400,9 @@ export function parseUnitLevelCsv(
     const rawDate = colDate !== -1 && cols[colDate] ? cols[colDate].trim() : '';
     const dateStr = normalizeDateString(rawDate) || normalizeDateString(fileName) || new Date().toISOString().substring(0, 10);
 
-    const modelName = (colModel !== -1 && cols[colModel] ? cols[colModel].trim() : '') || '不明機種';
+    const modelName = normalizeModelName(
+      (colModel !== -1 && cols[colModel] ? cols[colModel].trim() : '') || '不明機種'
+    );
     const rawMachNum = colMachine !== -1 && cols[colMachine] ? cols[colMachine].trim() : '0';
     const machineNum = parseInt(rawMachNum.replace(/[^0-9]/g, ''), 10);
 
@@ -668,7 +672,17 @@ export function parseUnitLevelCsv(
       dailyRecords.push(dRecord);
     }
 
-    const processed = processStoreData(dailyRecords, rateLend, rateExchange, cashRatio, specialDayRules);
+    const existingMatch = existingStores.find((s) => areStoresSame(s.name, storeName));
+    const mergedDaily = existingMatch?.dailyRecords && existingMatch.dailyRecords.length > 0
+      ? mergeDailyRecords(existingMatch.dailyRecords, dailyRecords)
+      : mergeDailyRecords([], dailyRecords);
+
+    const effLend = existingMatch?.rateLend || rateLend;
+    const effExchange = existingMatch?.rateExchange || rateExchange;
+    const effCash = existingMatch?.cashRatio ?? cashRatio;
+    const effRules = existingMatch?.specialDayRules || specialDayRules;
+
+    const processed = processStoreData(mergedDaily, effLend, effExchange, effCash, effRules);
 
     const firstDate = processed.dailyRecords[0]?.date || '';
     const lastDate = processed.dailyRecords[processed.dailyRecords.length - 1]?.date || '';
@@ -679,25 +693,31 @@ export function parseUnitLevelCsv(
     const approxMachines =
       processed.dailyRecords.length > 0
         ? Math.max(...processed.dailyRecords.map((r) => r.totalMachines))
-        : 160;
+        : (existingMatch?.totalMachinesApprox || 160);
 
-    const storeId = `store-${storeName.replace(/[\s\u3000]+/g, '-').toLowerCase()}-${Date.now().toString(36)}`;
+    const storeId = existingMatch?.id || `store-${storeName.replace(/[\s\u3000]+/g, '-').toLowerCase()}-${Date.now().toString(36)}`;
 
     const storeProfile: StoreProfile = {
       id: storeId,
       name: storeName,
-      address: '住所未登録',
-      oldEventDays,
-      exchangeRate: '46枚貸/52枚交換',
-      rateLend,
-      rateExchange,
-      cashRatio,
+      address: existingMatch?.address || '住所未登録',
+      oldEventDays: existingMatch?.oldEventDays || oldEventDays,
+      exchangeRate: existingMatch?.exchangeRate || `${effLend}枚貸/${effExchange}枚交換`,
+      rateLend: effLend,
+      rateExchange: effExchange,
+      cashRatio: effCash,
       totalMachinesApprox: approxMachines,
       dataRange,
       isPreset: false,
-      specialDayRules,
+      specialDayRules: effRules,
       dailyRecords: processed.dailyRecords,
-      createdAt: new Date().toISOString(),
+      customRankingWeights: existingMatch?.customRankingWeights,
+      islandConfig: existingMatch?.islandConfig,
+      islandDefinitions: existingMatch?.islandDefinitions,
+      modelAliasDictionary: existingMatch?.modelAliasDictionary,
+      categoryRates: existingMatch?.categoryRates,
+      includeReusedMachinesInStats: existingMatch?.includeReusedMachinesInStats,
+      createdAt: existingMatch?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
 

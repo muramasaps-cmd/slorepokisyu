@@ -9,6 +9,7 @@ import {
 import { calculateDayOfWeek, isDateSpecialDay, processStoreData } from './dataEngine';
 import { parseSpecialDayRulesFromText } from './specialDayRules';
 import { isCsvOrTsv, parseUnitLevelCsv, normalizeDateString } from './csvParser';
+import { normalizeModelName } from './modelName';
 
 export interface ParseHtmlResult {
   success: boolean;
@@ -184,7 +185,7 @@ export function extractMachinesFromHtmlTable(
     if (rawModelName.includes('機種名') || rawModelName === '機種' || rawModelName === '合計' || rawModelName === '平均') {
       continue;
     }
-    const modelName = rawModelName;
+    const modelName = normalizeModelName(rawModelName);
 
     const diffText = (colDiff !== -1 && tds[colDiff] ? tds[colDiff]?.textContent?.trim() : '') || '0';
     const diff = parseInt(diffText.replace(/[,+"]/g, '').replace(/▲/g, '-'), 10) || 0;
@@ -568,7 +569,7 @@ export function parseAnaSloDailyHtml(
       });
     } else {
       // Multi-machine model section
-      const modelName = headingTitle;
+      const modelName = normalizeModelName(headingTitle);
       const rows = Array.from(table.querySelectorAll('tr'));
 
       let modelTotalGames = 0;
@@ -1153,8 +1154,9 @@ export function parseSlorepoDailyHtml(doc: Document, rawHtml: string, fileName: 
           if (row.querySelector('th')) continue;
           const tds = Array.from(row.querySelectorAll('td'));
           if (tds.length >= 4) {
-            const modelName = tds[0].textContent?.trim() || '';
-            if (!modelName || modelName === '機種') continue;
+            const rawModel = tds[0].textContent?.trim() || '';
+            if (!rawModel || rawModel === '機種') continue;
+            const modelName = normalizeModelName(rawModel);
 
             const diff = parseInt(tds[1].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
             const games = parseInt(tds[2].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
@@ -1239,8 +1241,9 @@ export function parseSlorepoDailyHtml(doc: Document, rawHtml: string, fileName: 
       if (row.querySelector('th')) continue;
       const tds = Array.from(row.querySelectorAll('td'));
       if (tds.length >= 3) {
-        const modelName = tds[0].textContent?.trim() || '';
-        if (!modelName || modelName.includes('機種') || modelName.includes('平均') || modelName.includes('合計')) continue;
+        const rawModel = tds[0].textContent?.trim() || '';
+        if (!rawModel || rawModel.includes('機種') || rawModel.includes('平均') || rawModel.includes('合計')) continue;
+        const modelName = normalizeModelName(rawModel);
         const diff = parseInt(tds[1].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
         const games = parseInt(tds[2].textContent?.replace(/[,+]/g, '').trim() || '0', 10);
         let mWin = 0;

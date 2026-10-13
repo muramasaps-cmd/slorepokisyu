@@ -5,7 +5,9 @@ import {
   StoreProfile,
   AggregatedModelStat,
   AggregatedTailStat,
+  StoreInfo,
 } from '../data/types';
+import { normalizeModelName, getStoreRatesForModel } from './modelName';
 
 export const JAPANESE_DAYS = ['日', '月', '火', '水', '木', '金', '土'];
 
@@ -250,9 +252,12 @@ export function processStoreData(
     const label = `${year}年${month}月`;
 
     const daysCount = recs.length;
-    const avgMachines = Math.round(recs.reduce((acc, r) => acc + r.totalMachines, 0) / daysCount);
+    const totalDailyMachines = recs.reduce((acc, r) => acc + r.totalMachines, 0);
+    const avgMachines = daysCount > 0 ? Math.round(totalDailyMachines / daysCount) : 0;
     const totalDiffCoins = recs.reduce((acc, r) => acc + r.totalDiffCoins, 0);
-    const avgDiffCoins = Math.round((totalDiffCoins / (avgMachines * daysCount)) * 10) / 10;
+    const avgDiffCoins = totalDailyMachines > 0
+      ? Math.round((totalDiffCoins / totalDailyMachines) * 10) / 10
+      : 0;
 
     const hallCoinProfit = -totalDiffCoins;
     const playerCoinProfit = totalDiffCoins;
@@ -658,7 +663,8 @@ export function generateSyntheticStoreData(
 export function aggregateStoreModels(
   records: DailyRecord[],
   rateLend: number = 46,
-  rateExchange: number = 52
+  rateExchange: number = 52,
+  storeInfo?: Partial<StoreInfo>
 ): AggregatedModelStat[] {
   const modelMap = new Map<
     string,
@@ -690,7 +696,7 @@ export function aggregateStoreModels(
   records.forEach((rec) => {
     if (!rec.models || rec.models.length === 0) return;
     rec.models.forEach((m) => {
-      const name = m.modelName.trim();
+      const name = normalizeModelName(m.modelName, storeInfo?.modelAliasDictionary);
       if (!name) return;
 
       if (!modelMap.has(name)) {
@@ -742,11 +748,15 @@ export function aggregateStoreModels(
     });
   });
 
-  const lendYen = 1000 / (rateLend || 46);
-  const exchYen = 1000 / (rateExchange || 52);
-
   const stats: AggregatedModelStat[] = [];
   for (const [name, val] of modelMap.entries()) {
+    const { rateLend: effLend, rateExchange: effExch } = getStoreRatesForModel(
+      storeInfo || { rateLend, rateExchange },
+      name
+    );
+    const lendYen = 1000 / (effLend || 46);
+    const exchYen = 1000 / (effExch || 52);
+
     const avgMachinesPerDay = Math.round((val.totalMachineDays / val.daysCount) * 10) / 10;
     const avgDiffCoinsPerMachine = val.totalMachineDays > 0 ? Math.round(val.totalDiffCoins / val.totalMachineDays) : 0;
     const totalHallCoinProfit = -val.totalDiffCoins;

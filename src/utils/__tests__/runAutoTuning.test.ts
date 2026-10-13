@@ -126,4 +126,53 @@ describe('runAutoTuning', () => {
       }
     });
   });
+
+  describe('Prompt 2b: PreparedTargetDay parity & benchmark (300日×40機種, seed=7)', () => {
+    it('produces identical output between calculateTargetDateRankingFromIndex and scoreFromPrepared(buildPreparedTargetDay)', async () => {
+      const {
+        buildFeatureIndex,
+        buildPreparedTargetDay,
+        scoreFromPrepared,
+        calculateTargetDateRankingFromIndex,
+      } = await import('../targetRankingEngine');
+
+      const records = generateSyntheticDailyRecords(7, 30, 10, rules);
+      const featureIndex = buildFeatureIndex(records, rules);
+      const targetDate = '2024-01-25';
+
+      const direct = calculateTargetDateRankingFromIndex(targetDate, featureIndex, 20);
+      const prep = buildPreparedTargetDay(featureIndex, targetDate, 20);
+      expect(prep).not.toBeNull();
+      const scored = scoreFromPrepared(prep!);
+
+      expect(scored).toEqual(direct);
+    });
+
+    it('matches exact tuning results and executes in under half of baseline on 300 days x 40 models seed=7', () => {
+      const records = generateSyntheticDailyRecords(7, 300, 40, rules);
+      const start = Date.now();
+      const result = runAutoTuning(records, rules, '', 3);
+      const elapsed = Date.now() - start;
+
+      expect(result).not.toBeNull();
+      if (!result) return;
+
+      // Exact output parity with baseline
+      expect(result.candidateWeights).toEqual({
+        diffCoinDivisor: 35,
+        winRateMultiplier: 0.3,
+        allHighMultiplier: 2.0,
+        matchingBlendWeight: 0.75,
+        scaleFactorEnabled: true,
+      });
+      expect(result.trainLiftGain).toBe(2);
+      expect(result.valLiftGain).toBe(3);
+      expect(result.tValue).toBe(1.67);
+      expect(result.valStdError).toBe(1.6);
+      expect(result.isRecommended).toBe(false);
+
+      // Must be under half of 12 seconds (< 6000ms, typically ~800-1500ms)
+      expect(elapsed).toBeLessThan(6000);
+    });
+  });
 });

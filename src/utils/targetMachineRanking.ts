@@ -6,6 +6,7 @@ import {
   DEFAULT_RANKING_WEIGHTS,
 } from './targetRankingEngine';
 import { isAType, isJuggler } from './modelFilterUtils';
+import { normalizeModelName } from './modelName';
 import { HIGH_SETTING_THRESHOLDS } from './highSettingConfig';
 export { HIGH_SETTING_THRESHOLDS } from './highSettingConfig';
 
@@ -37,6 +38,10 @@ export interface TargetMachineRankingOptions {
   rankingWeights?: RankingWeights; // custom weights for underlying model score engine
   /** 直近N日以内に出現した台も対象にする（既定値: undefined = 基準日当日に存在した台のみ） */
   activeWithinDays?: number;
+  /** 台数補完日（isReusedMachines）を含めるか（既定値: false = 機種別・台番別データがある日のみ） */
+  includeReusedMachines?: boolean;
+  /** 機種名の別名辞書 */
+  aliasDictionary?: Record<string, string>;
 }
 
 export type MachineConfidenceLevel = '高' | '中' | '低';
@@ -177,7 +182,8 @@ export function getMachineTailDigit(machineNum: number, recordTail?: number): nu
  * of the latest model change onwards are kept as that machine's history.
  */
 export function extractMachineHistoryByModelChange(
-  pastRecords: DailyRecord[]
+  pastRecords: DailyRecord[],
+  aliasDictionary?: Record<string, string>
 ): Map<number, {
   machineNum: number;
   currentModel: string;
@@ -220,13 +226,13 @@ export function extractMachineHistoryByModelChange(
 
     // Instances are sorted by date ascending
     const latestInstance = instances[instances.length - 1];
-    const currentModel = (latestInstance.machine.modelName || '').trim();
+    const currentModel = normalizeModelName(latestInstance.machine.modelName || '', aliasDictionary);
 
     // Scan backwards from the latest instance: find the start of the contiguous latest model
     let startIdx = instances.length - 1;
     while (
       startIdx > 0 &&
-      (instances[startIdx - 1].machine.modelName || '').trim() === currentModel
+      normalizeModelName(instances[startIdx - 1].machine.modelName || '', aliasDictionary) === currentModel
     ) {
       startIdx--;
     }
@@ -280,7 +286,12 @@ export function calculateTargetMachineRanking(
   }
 
   // 1. Strictly use historical records strictly before targetDate (NO FUTURE DATA)
-  const pastRecords = (dailyRecords || []).filter((r) => r.date < targetDate);
+  const rawPast = (dailyRecords || []).filter((r) => r.date < targetDate);
+  // By default, only use days with machine-level data and exclude machine-imputed days (isReusedMachines)
+  const filteredPast = options?.includeReusedMachines
+    ? rawPast
+    : rawPast.filter((r) => !r.isReusedMachines && r.machines && r.machines.length > 0);
+  const pastRecords = filteredPast.length > 0 ? filteredPast : rawPast;
   pastRecords.sort((a, b) => a.date.localeCompare(b.date));
 
   // Determine target date metadata
@@ -350,7 +361,7 @@ export function calculateTargetMachineRanking(
   const primaryCohortDateSet = new Set(primaryCohort.map((r) => r.date));
 
   // 2. Extract machine histories respecting model replacement cutoffs
-  const machineDataMap = extractMachineHistoryByModelChange(pastRecords);
+  const machineDataMap = extractMachineHistoryByModelChange(pastRecords, options?.aliasDictionary);
 
   // 3. Obtain model scores from existing target ranking engine
   const rankingWeights = options?.rankingWeights || DEFAULT_RANKING_WEIGHTS;
@@ -359,14 +370,18 @@ export function calculateTargetMachineRanking(
     pastRecords,
     specialDayRules,
     '',
-    rankingWeights
+    rankingWeights,
+    {
+      includeReusedMachines: options?.includeReusedMachines,
+      aliasDictionary: options?.aliasDictionary,
+    }
   );
 
   const modelScoreMap = new Map<string, number>();
   if (modelForecast?.modelRankings) {
     for (let i = 0; i < modelForecast.modelRankings.length; i++) {
       const mr = modelForecast.modelRankings[i];
-      modelScoreMap.set(mr.modelName.trim(), mr.compositeScore);
+      modelScoreMap.set(normalizeModelName(mr.modelName, options?.aliasDictionary), mr.compositeScore);
     }
   }
 
@@ -385,7 +400,7 @@ export function calculateTargetMachineRanking(
 
     for (let i = 0; i < rec.machines.length; i++) {
       const mach = rec.machines[i];
-      const model = (mach.modelName || '').trim();
+      const model = normalizeModelName(mach.modelName || '', options?.aliasDictionary);
       if (!model) continue;
 
       let overall = modelOverallMap.get(model);

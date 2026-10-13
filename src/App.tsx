@@ -2,17 +2,35 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { StoreProfile, MonthlyStat, DailyRecord, RankingWeights, MachineRankingWeights } from './data/types';
 import { Header, ProfitModelType, UnitMode } from './components/Header';
 import { KpiCards } from './components/KpiCards';
-import { ProfitChart } from './components/ProfitChart';
-import { HighPayoutAnalysis } from './components/HighPayoutAnalysis';
-import { TailNumberAnalysis } from './components/TailNumberAnalysis';
-import { DayOfWeekAnalysis } from './components/DayOfWeekAnalysis';
-import { SpecialDayPatterns } from './components/SpecialDayPatterns';
-import { MonthlyTable } from './components/MonthlyTable';
-import { DailyModal } from './components/DailyModal';
-import { ConfirmModal } from './components/ConfirmModal';
-import { ModelMultiSelectModal } from './components/ModelMultiSelectModal';
 import { StorageToast } from './components/StorageToast';
 
+const ProfitChart = React.lazy(() =>
+  import('./components/ProfitChart').then((m) => ({ default: m.ProfitChart }))
+);
+const HighPayoutAnalysis = React.lazy(() =>
+  import('./components/HighPayoutAnalysis').then((m) => ({ default: m.HighPayoutAnalysis }))
+);
+const TailNumberAnalysis = React.lazy(() =>
+  import('./components/TailNumberAnalysis').then((m) => ({ default: m.TailNumberAnalysis }))
+);
+const DayOfWeekAnalysis = React.lazy(() =>
+  import('./components/DayOfWeekAnalysis').then((m) => ({ default: m.DayOfWeekAnalysis }))
+);
+const SpecialDayPatterns = React.lazy(() =>
+  import('./components/SpecialDayPatterns').then((m) => ({ default: m.SpecialDayPatterns }))
+);
+const MonthlyTable = React.lazy(() =>
+  import('./components/MonthlyTable').then((m) => ({ default: m.MonthlyTable }))
+);
+const DailyModal = React.lazy(() =>
+  import('./components/DailyModal').then((m) => ({ default: m.DailyModal }))
+);
+const ConfirmModal = React.lazy(() =>
+  import('./components/ConfirmModal').then((m) => ({ default: m.ConfirmModal }))
+);
+const ModelMultiSelectModal = React.lazy(() =>
+  import('./components/ModelMultiSelectModal').then((m) => ({ default: m.ModelMultiSelectModal }))
+);
 const StoreManagerModal = React.lazy(() =>
   import('./components/StoreManagerModal').then((m) => ({ default: m.StoreManagerModal }))
 );
@@ -1234,6 +1252,7 @@ export default function App() {
               unit={unit}
               rateLend={currentStore.rateLend}
               rateExchange={currentStore.rateExchange}
+              specialDayRules={currentStore?.specialDayRules}
               globalModelPreset={modelPreset}
               globalSelectedModelNames={selectedModelNames}
               activeFilterLabel={activeFilterLabel}
@@ -1363,15 +1382,17 @@ export default function App() {
 
       {/* Daily Records Modal */}
       {selectedMonthModal && (
-        <DailyModal
-          yearMonth={selectedMonthModal}
-          monthlyStats={processedData.monthlyStats}
-          dailyRecords={processedData.dailyRecords}
-          perspective={perspective}
-          unit={unit}
-          profitModel={profitModel}
-          onClose={() => setSelectedMonthModal(null)}
-        />
+        <React.Suspense fallback={null}>
+          <DailyModal
+            yearMonth={selectedMonthModal}
+            monthlyStats={processedData.monthlyStats}
+            dailyRecords={processedData.dailyRecords}
+            perspective={perspective}
+            unit={unit}
+            profitModel={profitModel}
+            onClose={() => setSelectedMonthModal(null)}
+          />
+        </React.Suspense>
       )}
 
       {/* Store Manager & Data Import Modal */}
@@ -1393,47 +1414,53 @@ export default function App() {
       )}
 
       {/* Confirm Reset All Stores Modal */}
-      <ConfirmModal
-        isOpen={isResetConfirmOpen}
-        title="すべての店舗データを初期化・削除しますか？"
-        message="登録されているすべての店舗データ（全営業日・集計データ）を完全に削除し、初期状態（店舗登録・インポート画面）に戻します。この操作は取り消せません。"
-        confirmText="全データを削除してリセット"
-        cancelText="キャンセル"
-        isDestructive={true}
-        onConfirm={() => {
-          handleResetAllStores();
-          setIsResetConfirmOpen(false);
-        }}
-        onCancel={() => setIsResetConfirmOpen(false)}
-      />
+      {isResetConfirmOpen && (
+        <React.Suspense fallback={null}>
+          <ConfirmModal
+            isOpen={isResetConfirmOpen}
+            title="すべての店舗データを初期化・削除しますか？"
+            message="登録されているすべての店舗データ（全営業日・集計データ）を完全に削除し、初期状態（店舗登録・インポート画面）に戻します。この操作は取り消せません。"
+            confirmText="全データを削除してリセット"
+            cancelText="キャンセル"
+            isDestructive={true}
+            onConfirm={() => {
+              handleResetAllStores();
+              setIsResetConfirmOpen(false);
+            }}
+            onCancel={() => setIsResetConfirmOpen(false)}
+          />
+        </React.Suspense>
+      )}
 
       {/* Model Multi-Select Modal */}
       {isMultiSelectModalOpen && (
-        <ModelMultiSelectModal
-          isOpen={isMultiSelectModalOpen}
-          onClose={() => setIsMultiSelectModalOpen(false)}
-          allModels={allAvailableModels}
-          selectedModelNames={
-            modelPreset === 'all'
-              ? []
-              : modelPreset === 'smart_slot'
-              ? allAvailableModels.filter((m) => isSmartSlot(m.modelName)).map((m) => m.modelName)
-              : modelPreset === 'a_type'
-              ? allAvailableModels.filter((m) => isAType(m.modelName)).map((m) => m.modelName)
-              : modelPreset === 'juggler'
-              ? allAvailableModels.filter((m) => isJuggler(m.modelName)).map((m) => m.modelName)
-              : selectedModelNames
-          }
-          onApplySelection={(selected) => {
-            if (selected.length === 0 || selected.length === allAvailableModels.length) {
-              handleSelectModelPreset('all');
-            } else {
-              setSelectedModelNames(selected);
-              setModelPreset('custom');
+        <React.Suspense fallback={null}>
+          <ModelMultiSelectModal
+            isOpen={isMultiSelectModalOpen}
+            onClose={() => setIsMultiSelectModalOpen(false)}
+            allModels={allAvailableModels}
+            selectedModelNames={
+              modelPreset === 'all'
+                ? []
+                : modelPreset === 'smart_slot'
+                ? allAvailableModels.filter((m) => isSmartSlot(m.modelName)).map((m) => m.modelName)
+                : modelPreset === 'a_type'
+                ? allAvailableModels.filter((m) => isAType(m.modelName)).map((m) => m.modelName)
+                : modelPreset === 'juggler'
+                ? allAvailableModels.filter((m) => isJuggler(m.modelName)).map((m) => m.modelName)
+                : selectedModelNames
             }
-            setIsMultiSelectModalOpen(false);
-          }}
-        />
+            onApplySelection={(selected) => {
+              if (selected.length === 0 || selected.length === allAvailableModels.length) {
+                handleSelectModelPreset('all');
+              } else {
+                setSelectedModelNames(selected);
+                setModelPreset('custom');
+              }
+              setIsMultiSelectModalOpen(false);
+            }}
+          />
+        </React.Suspense>
       )}
 
       {/* Persistent Storage Status Toast Notifications */}

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { DailyRecord } from '../data/types';
+import { DailyRecord, SpecialDayRules } from '../data/types';
 import { formatYen, formatCoins, formatNumber } from '../utils/formatters';
 import { UnitMode } from './Header';
 import {
@@ -35,7 +35,7 @@ interface TailNumberAnalysisProps {
   unit: UnitMode;
   setUnit?: (u: UnitMode) => void;
   oldEventDays?: string;
-  specialDayRules?: any;
+  specialDayRules?: SpecialDayRules;
   onSelectDate?: (date: string) => void;
 }
 
@@ -353,7 +353,13 @@ export const TailNumberAnalysis: React.FC<TailNumberAnalysisProps> = ({
     );
   };
 
-  const CustomChartTooltip = ({ active, payload }: any) => {
+  const CustomChartTooltip = ({
+    active,
+    payload,
+  }: {
+    active?: boolean;
+    payload?: readonly { payload: (typeof tailStats)[0] }[];
+  }) => {
     if (active && payload && payload.length) {
       const data: typeof tailStats[0] = payload[0].payload;
       const isHall = perspective === 'hall';

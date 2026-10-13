@@ -15,17 +15,30 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes('node_modules')) {
-            if (id.includes('recharts') || id.includes('d3-') || id.includes('victory')) {
+            if (
+              id.includes('recharts') ||
+              id.includes('d3-') ||
+              id.includes('victory') ||
+              id.includes('@reduxjs/toolkit') ||
+              id.includes('immer') ||
+              id.includes('react-redux') ||
+              id.includes('reselect') ||
+              id.includes('decimal.js-light') ||
+              id.includes('es-toolkit')
+            ) {
               return 'vendor-recharts';
             }
             if (id.includes('lucide-react')) {
               return 'vendor-lucide';
             }
-            return 'vendor-framework';
+            if (id.includes('react') || id.includes('scheduler')) {
+              return 'vendor-react';
+            }
+            return 'vendor-misc';
           }
         },
       },
     },
-    chunkSizeWarningLimit: 700,
+    chunkSizeWarningLimit: 500,
   },
 });

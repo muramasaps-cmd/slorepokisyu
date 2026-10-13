@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { DailyRecord } from '../data/types';
+import { DailyRecord, SpecialDayRules } from '../data/types';
 import { formatYen, formatCoins, formatNumber } from '../utils/formatters';
 import { isJapaneseHoliday } from '../utils/holidayUtils';
 import { UnitMode } from './Header';
@@ -34,7 +34,7 @@ interface DayOfWeekAnalysisProps {
   unit: UnitMode;
   setUnit?: (u: UnitMode) => void;
   oldEventDays?: string;
-  specialDayRules?: any;
+  specialDayRules?: SpecialDayRules;
 }
 
 export const DayOfWeekAnalysis: React.FC<DayOfWeekAnalysisProps> = ({
@@ -342,7 +342,13 @@ export const DayOfWeekAnalysis: React.FC<DayOfWeekAnalysisProps> = ({
     );
   };
 
-  const CustomChartTooltip = ({ active, payload }: any) => {
+  const CustomChartTooltip = ({
+    active,
+    payload,
+  }: {
+    active?: boolean;
+    payload?: readonly { payload: (typeof dowStats)[0] }[];
+  }) => {
     if (active && payload && payload.length) {
       const data: typeof dowStats[0] = payload[0].payload;
       const isHall = perspective === 'hall';

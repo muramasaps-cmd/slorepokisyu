@@ -31,7 +31,7 @@ interface DailyModalProps {
   dailyRecords: DailyRecord[];
   perspective: 'hall' | 'player';
   unit: UnitMode;
-  profitModel?: any;
+  profitModel?: ProfitModelType;
   onClose: () => void;
 }
 

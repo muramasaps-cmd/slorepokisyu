@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { DailyRecord } from '../data/types';
+import { DailyRecord, SpecialDayRules } from '../data/types';
 import { UnitMode } from './Header';
 import { formatCoins, formatNumber, formatYen } from '../utils/formatters';
 import {
@@ -58,7 +58,7 @@ interface HighPayoutAnalysisProps {
   rateLend?: number;
   rateExchange?: number;
   oldEventDays?: string;
-  specialDayRules?: any;
+  specialDayRules?: SpecialDayRules;
 }
 
 type ActiveTab =

@@ -2,12 +2,13 @@ import React from 'react';
 import { MonthlyStat } from '../data/types';
 import { formatYen, formatCoins, formatNumber } from '../utils/formatters';
 import { TrendingUp, TrendingDown, DollarSign, CalendarCheck, Zap, Award, Calculator, Percent } from 'lucide-react';
+import { ProfitModelType } from './Header';
 
 interface KpiCardsProps {
   monthlyStats: MonthlyStat[];
   perspective: 'hall' | 'player';
   unit: 'yen' | 'coins' | 'avgDiff' | 'payoutRate';
-  profitModel?: any;
+  profitModel?: ProfitModelType;
 }
 
 export const KpiCards: React.FC<KpiCardsProps> = ({

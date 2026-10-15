@@ -20,9 +20,13 @@ import { ModelSettingSpec, resolveSettingNum } from './settingSpecs';
 import { isDateSpecialDay } from './dataEngine';
 import { calculateSpearman } from './backtestEngine';
 
+export type GameWeightMode = 'raw' | 'cap3000' | 'constant';
+
 export interface EstimationOptions {
   /** 最小回転数閾値 (既定 0G: 全台日) */
   minGames?: number;
+  /** 回転数の重み付け方式: そのまま (raw) / 上限3,000G (cap3000) / 一定 (constant) (既定 'raw') */
+  gameWeightMode?: GameWeightMode;
   /** 高設定判定の閾値 (既定 4 以上) */
   highSettingThreshold?: number;
   /** レコード記載の payoutRate を優先使用するか (既定 false: 3枚掛け計算) */
@@ -382,6 +386,12 @@ export interface SensitivityAnalysisRow {
   evaluatedRecords: number;
   excludedCount: number;
   inWeightedPayoutRate: number;
+  /** 回転数重み: そのまま での高設定(4+)比率 */
+  rateRaw: number;
+  /** 回転数重み: 上限3,000G での高設定(4+)比率 */
+  rateCap3000: number;
+  /** 回転数重み: 一定 での高設定(4+)比率 */
+  rateConstant: number;
   distribution: Array<{ label: string; proportion: number }>;
   highSettingRate: number;
 }
@@ -398,7 +408,8 @@ export interface SensitivityAnalysisResult {
 export const DEFAULT_SENSITIVITY_THRESHOLDS = [0, 1000, 2000, 3000, 5000];
 
 /**
- * 最小回転数条件による感度分析 (点推定EMのみで高速一括計算)
+ * 最小回転数 (0/1000/2000/3000/5000G) × 回転数の重み (そのまま/上限3000G/一定) による感度分析
+ * (点推定EMのみで高速一括計算: 全15条件)
  */
 export function runSensitivityAnalysis(
   modelName: string,
@@ -431,11 +442,28 @@ export function runSensitivityAnalysis(
   }
 
   const rows: SensitivityAnalysisRow[] = [];
+  const allObservedRates: number[] = [];
 
   for (const th of thresholds) {
-    const est = estimateModelSettingDistribution(modelName, dailyRecords, spec, {
+    // 3種類の重み付けで点推定を一括実行
+    const estRaw = estimateModelSettingDistribution(modelName, dailyRecords, spec, {
       ...options,
       minGames: th,
+      gameWeightMode: 'raw',
+      pointEstimateOnly: true,
+    });
+
+    const estCap3000 = estimateModelSettingDistribution(modelName, dailyRecords, spec, {
+      ...options,
+      minGames: th,
+      gameWeightMode: 'cap3000',
+      pointEstimateOnly: true,
+    });
+
+    const estConstant = estimateModelSettingDistribution(modelName, dailyRecords, spec, {
+      ...options,
+      minGames: th,
+      gameWeightMode: 'constant',
       pointEstimateOnly: true,
     });
 
@@ -443,24 +471,33 @@ export function runSensitivityAnalysis(
     const inWeightedPayoutRate = calculateInWeightedPayoutRate(matchingRecords);
     const label = th === 0 ? '全台日(0)' : `${th.toLocaleString()}G`;
 
+    if (estRaw.evaluatedRecords > 0) {
+      allObservedRates.push(
+        estRaw.highSettingOverallRate,
+        estCap3000.highSettingOverallRate,
+        estConstant.highSettingOverallRate
+      );
+    }
+
     rows.push({
       minGames: th,
       label,
-      evaluatedRecords: est.evaluatedRecords,
-      excludedCount: est.excludedCount,
+      evaluatedRecords: estRaw.evaluatedRecords,
+      excludedCount: estRaw.excludedCount,
       inWeightedPayoutRate,
-      distribution: est.distribution.map((d) => ({
+      rateRaw: estRaw.highSettingOverallRate,
+      rateCap3000: estCap3000.highSettingOverallRate,
+      rateConstant: estConstant.highSettingOverallRate,
+      distribution: estRaw.distribution.map((d) => ({
         label: d.label,
         proportion: d.proportion,
       })),
-      highSettingRate: est.highSettingOverallRate,
+      highSettingRate: estRaw.highSettingOverallRate,
     });
   }
 
-  const validRows = rows.filter((r) => r.evaluatedRecords > 0);
-  const highRates = validRows.map((r) => r.highSettingRate);
-  const maxHighSettingRate = highRates.length > 0 ? Math.max(...highRates) : 0;
-  const minHighSettingRate = highRates.length > 0 ? Math.min(...highRates) : 0;
+  const maxHighSettingRate = allObservedRates.length > 0 ? Math.max(...allObservedRates) : 0;
+  const minHighSettingRate = allObservedRates.length > 0 ? Math.min(...allObservedRates) : 0;
   const rateSpread = Number((maxHighSettingRate - minHighSettingRate).toFixed(1));
   const isHighSensitivity = rateSpread >= 30.0;
 
@@ -471,8 +508,145 @@ export function runSensitivityAnalysis(
     rateSpread,
     isHighSensitivity,
     warningMessage: isHighSensitivity
-      ? '条件によって結果が大きく変わります。この機種の設定分布は、参考程度にしてください。'
+      ? 'このデータでは設定の分布を推定できません（条件で結果が大きく変わります）。'
       : '',
+  };
+}
+
+export interface RotationIntervalStat {
+  label: string;
+  minGames: number;
+  maxGames: number;
+  count: number;
+  ratio: number;
+  inWeightedPayoutRate: number;
+  totalGames: number;
+  totalDiff: number;
+}
+
+export interface RotationDependencyDiagnosis {
+  intervals: RotationIntervalStat[];
+  spearmanCorr: number | null;
+  isDependent: boolean;
+  warningMessage: string;
+}
+
+/**
+ * 回転数と出率の依存診断 (回転数区間ごとの出率とSpearman相関)
+ */
+export function calculateRotationDependencyDiagnosis(
+  modelRecords: Array<{ games: number; diff: number; payoutRate?: number }>
+): RotationDependencyDiagnosis {
+  const total = modelRecords.length;
+  const intervalDefs = [
+    { label: '〜1,000G', minGames: 0, maxGames: 1000 },
+    { label: '1,000〜2,000G', minGames: 1000, maxGames: 2000 },
+    { label: '2,000〜3,000G', minGames: 2000, maxGames: 3000 },
+    { label: '3,000〜5,000G', minGames: 3000, maxGames: 5000 },
+    { label: '5,000G〜', minGames: 5000, maxGames: Infinity },
+  ];
+
+  const intervals: RotationIntervalStat[] = intervalDefs.map((def) => {
+    const matched = modelRecords.filter(
+      (r) => r.games >= def.minGames && r.games < def.maxGames
+    );
+    const count = matched.length;
+    const ratio = total > 0 ? Number(((count / total) * 100).toFixed(1)) : 0;
+    const inWeightedPayoutRate = calculateInWeightedPayoutRate(matched);
+    const totalGames = matched.reduce((s, r) => s + r.games, 0);
+    const totalDiff = matched.reduce((s, r) => s + r.diff, 0);
+    return {
+      label: def.label,
+      minGames: def.minGames,
+      maxGames: def.maxGames,
+      count,
+      ratio,
+      inWeightedPayoutRate,
+      totalGames,
+      totalDiff,
+    };
+  });
+
+  let spearmanCorr: number | null = null;
+  if (total >= 5) {
+    const gamesArr = modelRecords.map((r) => r.games);
+    const payoutsArr = modelRecords.map((r) =>
+      r.payoutRate !== undefined ? r.payoutRate : calculatePayoutRate(r.games, r.diff)
+    );
+    spearmanCorr = calculateSpearman(gamesArr, payoutsArr);
+  }
+
+  const isDependent = spearmanCorr !== null && spearmanCorr >= 0.2;
+  const warningMessage = isDependent
+    ? '回転数が結果に依存しています（勝つ台ほど回ります）。出率だけの推定は高設定側に偏ります。'
+    : '';
+
+  return {
+    intervals,
+    spearmanCorr,
+    isDependent,
+    warningMessage,
+  };
+}
+
+export interface DataVolumeWarningItem {
+  type: 'few_machines' | 'few_days' | 'no_bonus';
+  title: string;
+  message: string;
+}
+
+export interface DataVolumeWarningResult {
+  hasWarning: boolean;
+  uniqueMachineCount: number;
+  evaluatedRecords: number;
+  hasBonusData: boolean;
+  warnings: DataVolumeWarningItem[];
+}
+
+/**
+ * データ量・形式に関する警告診断
+ * (台数5台未満、台日300台日未満、ボーナス回数なし)
+ */
+export function checkDataVolumeWarnings(
+  uniqueMachineCount: number,
+  evaluatedRecords: number,
+  hasBonusData: boolean,
+  thresholds: { minMachines?: number; minDays?: number } = {}
+): DataVolumeWarningResult {
+  const minMachines = thresholds.minMachines ?? 5;
+  const minDays = thresholds.minDays ?? 300;
+  const warnings: DataVolumeWarningItem[] = [];
+
+  if (uniqueMachineCount < minMachines && uniqueMachineCount > 0) {
+    warnings.push({
+      type: 'few_machines',
+      title: `設置台数が少ない (${uniqueMachineCount}台 < 推奨${minMachines}台)`,
+      message: `この機種は${uniqueMachineCount}台のみです。設定の『分布』ではなく、${uniqueMachineCount}台の日ごとの推定として読んでください。`,
+    });
+  }
+
+  if (evaluatedRecords < minDays && evaluatedRecords > 0) {
+    warnings.push({
+      type: 'few_days',
+      title: `観測データが少なめ (${evaluatedRecords}台日 < 推奨${minDays}台日)`,
+      message: `観測データが${evaluatedRecords}台日と少なめです（推奨${minDays}台日以上）。信頼区間が広くなり、推定のばらつきが大きくなります。`,
+    });
+  }
+
+  if (!hasBonusData) {
+    warnings.push({
+      type: 'no_bonus',
+      title: 'ボーナス回数（BB・RB）データなし',
+      message: 'ボーナス回数（BB・RB）のデータがありません。出玉率（差枚数）のみからの推定となり、回転数と出率の相関によるバイアスを受けやすくなります。',
+    });
+  }
+
+  return {
+    hasWarning: warnings.length > 0,
+    uniqueMachineCount,
+    evaluatedRecords,
+    hasBonusData,
+    warnings,
   };
 }
 
@@ -502,6 +676,7 @@ export function runEMEstimation(
   records: PreparedMachineRecord[],
   spec: ModelSettingSpec,
   options: {
+    gameWeightMode?: GameWeightMode;
     usePoissonBonus?: boolean;
     poissonWeight?: number;
     useTDistribution?: boolean;
@@ -526,6 +701,14 @@ export function runEMEstimation(
   const lambda = options.poissonWeight ?? 0.5;
   const useT = options.useTDistribution ?? false;
   const nu = options.tDistributionDf ?? 5;
+  const weightMode = options.gameWeightMode ?? 'raw';
+
+  const getEffGames = (g: number): number => {
+    const base = Math.max(1, g);
+    if (weightMode === 'cap3000') return Math.min(base, 3000);
+    if (weightMode === 'constant') return 3000;
+    return base;
+  };
 
   if (M === 0 || K === 0) {
     return {
@@ -548,7 +731,8 @@ export function runEMEstimation(
   if (!initialVar) {
     let sumDev = 0;
     for (const r of records) {
-      sumDev += r.games * (r.payoutRate - meanRate) * (r.payoutRate - meanRate);
+      const eff = getEffGames(r.games);
+      sumDev += eff * (r.payoutRate - meanRate) * (r.payoutRate - meanRate);
     }
     initialVar = Math.max(400, Math.min(250000, sumDev / M));
   }
@@ -612,7 +796,7 @@ export function runEMEstimation(
     // E-Step
     for (let i = 0; i < M; i++) {
       const rec = records[i];
-      const effGames = Math.max(1, rec.games);
+      const effGames = getEffGames(rec.games);
       const logLik = new Float64Array(K);
       let maxLog = -Infinity;
       const var_i = sigma2 / effGames;
@@ -675,14 +859,15 @@ export function runEMEstimation(
     let nextSigma2Denom = 0;
 
     for (let i = 0; i < M; i++) {
+      const effGames = getEffGames(records[i].games);
       for (let s = 0; s < K; s++) {
         const gamma_is = responsibilities[i][s];
         let u_is = 1.0;
         if (useT) {
-          const z2 = (records[i].games * sqDiffs[i][s]) / sigma2;
+          const z2 = (effGames * sqDiffs[i][s]) / sigma2;
           u_is = (nu + 1) / (nu + z2);
         }
-        nextSigma2Num += gamma_is * u_is * records[i].games * sqDiffs[i][s];
+        nextSigma2Num += gamma_is * u_is * effGames * sqDiffs[i][s];
         nextSigma2Denom += gamma_is;
       }
     }
@@ -1385,6 +1570,7 @@ export function estimateModelSettingDistribution(
 
   // 3. EMアルゴリズムによる π と σ の推定
   const em = runEMEstimation(prepared, spec, {
+    gameWeightMode: options.gameWeightMode,
     usePoissonBonus: options.usePoissonBonus,
     poissonWeight: options.poissonWeight,
     useTDistribution: options.useTDistribution,
@@ -1416,14 +1602,16 @@ export function estimateModelSettingDistribution(
   }
 
   // 5. ブロックブートストラップによる 95% 区間算出
-  const intervals = runBlockBootstrap(prepared, spec, em.pi, em.sigma, {
-    replicates: options.bootstrapReps,
-    seed: options.bootstrapSeed,
-    usePoissonBonus: options.usePoissonBonus,
-    poissonWeight: options.poissonWeight,
-    useTDistribution: options.useTDistribution,
-    tDistributionDf: options.tDistributionDf,
-  });
+  const intervals = options.pointEstimateOnly
+    ? spec.settings.map((_, idx) => [em.pi[idx], em.pi[idx]] as [number, number])
+    : runBlockBootstrap(prepared, spec, em.pi, em.sigma, {
+        replicates: options.bootstrapReps,
+        seed: options.bootstrapSeed,
+        usePoissonBonus: options.usePoissonBonus,
+        poissonWeight: options.poissonWeight,
+        useTDistribution: options.useTDistribution,
+        tDistributionDf: options.tDistributionDf,
+      });
 
   const distribution: SettingDistItem[] = spec.settings.map((s, idx) => ({
     label: s.label,
@@ -1483,8 +1671,10 @@ export function estimateModelSettingDistribution(
   }
 
   // 8. 実データ妥当性検証 (キャリブレーション)
-  const calibration = calculateCalibrationValidation(machineEstimations, spec);
-  if (calibration.warning) {
+  const calibration = options.pointEstimateOnly
+    ? undefined
+    : calculateCalibrationValidation(machineEstimations, spec);
+  if (calibration?.warning) {
     warnings.push(calibration.warning);
   }
 
@@ -1603,107 +1793,110 @@ export function estimateModelSettingDistribution(
   }
 
   // 9. 条件別の比較 (日単位ブロックブートストラップ + Benjamini–Hochberg 多重検定補正)
-  const rawConditionComparisons: ConditionComparisonItem[] = [];
-  const bootstrapOpts = {
-    blockLength: 7,
-    replicates: options.bootstrapReps ?? 2000,
-    seed: options.bootstrapSeed ?? 42,
-  };
+  let conditionComparisons: ConditionComparisonItem[] = [];
+  if (!options.pointEstimateOnly) {
+    const rawConditionComparisons: ConditionComparisonItem[] = [];
+    const bootstrapOpts = {
+      blockLength: 7,
+      replicates: options.bootstrapReps ?? 2000,
+      seed: options.bootstrapSeed ?? 42,
+    };
 
-  // 9.1 特日 vs 通常日
-  const specialCheckRecords = machineEstimations.map((r) => ({
-    date: r.date,
-    highSettingProb: r.highSettingProb,
-    inCategory: Boolean(r.isSpecialDay),
-  }));
-  const specialCount = specialCheckRecords.filter((r) => r.inCategory).length;
-  const normalCount = specialCheckRecords.filter((r) => !r.inCategory).length;
-
-  if (specialCount >= 3 && normalCount >= 3) {
-    const res = runConditionBlockBootstrap(specialCheckRecords, {
-      ...bootstrapOpts,
-      seed: (bootstrapOpts.seed + 101) >>> 0,
-    });
-    rawConditionComparisons.push({
-      conditionType: 'special_day',
-      categoryKey: 'special_day',
-      categoryLabel: '旧イベント日 (特日)',
-      machineDaysCount: specialCount,
-      highSettingRate: res.catMean,
-      baselineRate: res.baseMean,
-      diffRate: res.diffRate,
-      isSignificant: false, // BH補正後に確定
-      significanceLabel: '誤差の範囲',
-      pValue: res.pValue,
-      diffCi95: res.diffCi95,
-    });
-  }
-
-  // 9.2 曜日別
-  const dowOrder = ['月', '火', '水', '木', '金', '土', '日'];
-  dowOrder.forEach((dow, idx) => {
-    const dowCheckRecords = machineEstimations.map((r) => ({
+    // 9.1 特日 vs 通常日
+    const specialCheckRecords = machineEstimations.map((r) => ({
       date: r.date,
       highSettingProb: r.highSettingProb,
-      inCategory: r.dayOfWeek.includes(dow),
+      inCategory: Boolean(r.isSpecialDay),
     }));
-    const dowCount = dowCheckRecords.filter((r) => r.inCategory).length;
-    const otherCount = dowCheckRecords.filter((r) => !r.inCategory).length;
+    const specialCount = specialCheckRecords.filter((r) => r.inCategory).length;
+    const normalCount = specialCheckRecords.filter((r) => !r.inCategory).length;
 
-    if (dowCount >= 3 && otherCount >= 3) {
-      const res = runConditionBlockBootstrap(dowCheckRecords, {
+    if (specialCount >= 3 && normalCount >= 3) {
+      const res = runConditionBlockBootstrap(specialCheckRecords, {
         ...bootstrapOpts,
-        seed: (bootstrapOpts.seed + 200 + idx * 17) >>> 0,
+        seed: (bootstrapOpts.seed + 101) >>> 0,
       });
       rawConditionComparisons.push({
-        conditionType: 'day_of_week',
-        categoryKey: dow,
-        categoryLabel: `${dow}曜日`,
-        machineDaysCount: dowCount,
+        conditionType: 'special_day',
+        categoryKey: 'special_day',
+        categoryLabel: '旧イベント日 (特日)',
+        machineDaysCount: specialCount,
         highSettingRate: res.catMean,
         baselineRate: res.baseMean,
         diffRate: res.diffRate,
-        isSignificant: false,
+        isSignificant: false, // BH補正後に確定
         significanceLabel: '誤差の範囲',
         pValue: res.pValue,
         diffCi95: res.diffCi95,
       });
     }
-  });
 
-  // 9.3 末尾番号別 (0〜9)
-  for (let t = 0; t <= 9; t++) {
-    const tailCheckRecords = machineEstimations.map((r) => ({
-      date: r.date,
-      highSettingProb: r.highSettingProb,
-      inCategory: r.tailDigit === t,
-    }));
-    const tailCount = tailCheckRecords.filter((r) => r.inCategory).length;
-    const otherCount = tailCheckRecords.filter((r) => !r.inCategory).length;
+    // 9.2 曜日別
+    const dowOrder = ['月', '火', '水', '木', '金', '土', '日'];
+    dowOrder.forEach((dow, idx) => {
+      const dowCheckRecords = machineEstimations.map((r) => ({
+        date: r.date,
+        highSettingProb: r.highSettingProb,
+        inCategory: r.dayOfWeek.includes(dow),
+      }));
+      const dowCount = dowCheckRecords.filter((r) => r.inCategory).length;
+      const otherCount = dowCheckRecords.filter((r) => !r.inCategory).length;
 
-    if (tailCount >= 3 && otherCount >= 3) {
-      const res = runConditionBlockBootstrap(tailCheckRecords, {
-        ...bootstrapOpts,
-        seed: (bootstrapOpts.seed + 300 + t * 23) >>> 0,
-      });
-      rawConditionComparisons.push({
-        conditionType: 'tail_digit',
-        categoryKey: t.toString(),
-        categoryLabel: `末尾 ${t}`,
-        machineDaysCount: tailCount,
-        highSettingRate: res.catMean,
-        baselineRate: res.baseMean,
-        diffRate: res.diffRate,
-        isSignificant: false,
-        significanceLabel: '誤差の範囲',
-        pValue: res.pValue,
-        diffCi95: res.diffCi95,
-      });
+      if (dowCount >= 3 && otherCount >= 3) {
+        const res = runConditionBlockBootstrap(dowCheckRecords, {
+          ...bootstrapOpts,
+          seed: (bootstrapOpts.seed + 200 + idx * 17) >>> 0,
+        });
+        rawConditionComparisons.push({
+          conditionType: 'day_of_week',
+          categoryKey: dow,
+          categoryLabel: `${dow}曜日`,
+          machineDaysCount: dowCount,
+          highSettingRate: res.catMean,
+          baselineRate: res.baseMean,
+          diffRate: res.diffRate,
+          isSignificant: false,
+          significanceLabel: '誤差の範囲',
+          pValue: res.pValue,
+          diffCi95: res.diffCi95,
+        });
+      }
+    });
+
+    // 9.3 末尾番号別 (0〜9)
+    for (let t = 0; t <= 9; t++) {
+      const tailCheckRecords = machineEstimations.map((r) => ({
+        date: r.date,
+        highSettingProb: r.highSettingProb,
+        inCategory: r.tailDigit === t,
+      }));
+      const tailCount = tailCheckRecords.filter((r) => r.inCategory).length;
+      const otherCount = tailCheckRecords.filter((r) => !r.inCategory).length;
+
+      if (tailCount >= 3 && otherCount >= 3) {
+        const res = runConditionBlockBootstrap(tailCheckRecords, {
+          ...bootstrapOpts,
+          seed: (bootstrapOpts.seed + 300 + t * 23) >>> 0,
+        });
+        rawConditionComparisons.push({
+          conditionType: 'tail_digit',
+          categoryKey: t.toString(),
+          categoryLabel: `末尾 ${t}`,
+          machineDaysCount: tailCount,
+          highSettingRate: res.catMean,
+          baselineRate: res.baseMean,
+          diffRate: res.diffRate,
+          isSignificant: false,
+          significanceLabel: '誤差の範囲',
+          pValue: res.pValue,
+          diffCi95: res.diffCi95,
+        });
+      }
     }
-  }
 
-  // 9.4 Benjamini–Hochberg 法による多重検定補正
-  const conditionComparisons = applyBenjaminiHochberg(rawConditionComparisons);
+    // 9.4 Benjamini–Hochberg 法による多重検定補正
+    conditionComparisons = applyBenjaminiHochberg(rawConditionComparisons);
+  }
 
   return {
     modelName,

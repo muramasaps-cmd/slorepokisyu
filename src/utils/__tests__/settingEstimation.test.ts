@@ -3,7 +3,13 @@ import {
   estimateModelSettingDistribution,
   runEMEstimation,
   calculatePayoutRate,
+  calculateInWeightedPayoutRate,
+  checkSurvivorBiasWarning,
+  formatSettingCi95,
+  runSensitivityAnalysis,
   createSeededRandom,
+  calculateRotationDependencyDiagnosis,
+  checkDataVolumeWarnings,
 } from '../settingEstimation';
 import { ModelSettingSpec, validateModelSettingSpec } from '../settingSpecs';
 import { DailyRecord, DailyMachineRecord } from '../../data/types';
@@ -368,5 +374,249 @@ describe('settingEstimation pure functions', () => {
       expect(specialComparison.isSignificant).toBe(false);
       expect(specialComparison.significanceLabel).toBe('誤差の範囲');
     }
+  });
+
+  describe('Prompt 27: minimum games, survivor bias & sensitivity analysis', () => {
+    it('correctly checks survivor bias warning when excluded ratio >= 20% or payout elevated >= 1.0pt', () => {
+      // 1. No exclusion, no payout difference -> no warning
+      const res1 = checkSurvivorBiasWarning(100, 0, 100.0, 100.0);
+      expect(res1.shouldWarn).toBe(false);
+      expect(res1.warningMessage).toBe('');
+
+      // 2. Excluded ratio >= 20% (25/100 = 25%) -> warning
+      const res2 = checkSurvivorBiasWarning(100, 25, 100.0, 100.5);
+      expect(res2.shouldWarn).toBe(true);
+      expect(res2.isExcludedRateHigh).toBe(true);
+      expect(res2.isPayoutElevated).toBe(false);
+      expect(res2.warningMessage).toContain('負けてやめられた台日が除かれ');
+
+      // 3. Payout elevated by >= 1.0pt (101.2 vs 100.0) -> warning
+      const res3 = checkSurvivorBiasWarning(100, 10, 100.0, 101.2);
+      expect(res3.shouldWarn).toBe(true);
+      expect(res3.isExcludedRateHigh).toBe(false);
+      expect(res3.isPayoutElevated).toBe(true);
+      expect(res3.warningMessage).toContain('負けてやめられた台日が除かれ');
+
+      // 4. Minor exclusion and minor payout change (<20% and <1.0pt) -> no warning
+      const res4 = checkSurvivorBiasWarning(100, 15, 100.0, 100.6);
+      expect(res4.shouldWarn).toBe(false);
+    });
+
+    it('formats setting CI with boundary notes when stuck at 0% or 100%', () => {
+      // 0% boundary
+      const ciZero = formatSettingCi95([0.0, 0.0]);
+      expect(ciZero.isBoundary).toBe(true);
+      expect(ciZero.text).toBe('0%（境界）');
+      expect(ciZero.boundaryNote).toBe('確実に0という意味ではありません');
+
+      // 100% boundary
+      const ciOne = formatSettingCi95([1.0, 1.0]);
+      expect(ciOne.isBoundary).toBe(true);
+      expect(ciOne.text).toBe('100%（境界）');
+      expect(ciOne.boundaryNote).toBe('確実に100%という意味ではありません');
+
+      // Normal interval
+      const ciNormal = formatSettingCi95([0.052, 0.248]);
+      expect(ciNormal.isBoundary).toBe(false);
+      expect(ciNormal.text).toBe('[5.2% 〜 24.8%]');
+    });
+
+    it('runs pointEstimateOnly=true without bootstrap and matches normal point estimates', () => {
+      const records: DailyRecord[] = [
+        createMockDailyRecord({
+          date: '2024-05-01',
+          day: 1,
+          machines: [
+            { machineNum: 1, modelName: MOCK_6_SETTING_SPEC.modelName, games: 4000, diff: -500 },
+            { machineNum: 2, modelName: MOCK_6_SETTING_SPEC.modelName, games: 5000, diff: 1200 },
+          ],
+        }),
+      ];
+
+      // Point estimate only
+      const pointEst = estimateModelSettingDistribution(
+        MOCK_6_SETTING_SPEC.modelName,
+        records,
+        MOCK_6_SETTING_SPEC,
+        {
+          minGames: 0,
+          pointEstimateOnly: true,
+        }
+      );
+
+      // Normal estimate
+      const normalEst = estimateModelSettingDistribution(
+        MOCK_6_SETTING_SPEC.modelName,
+        records,
+        MOCK_6_SETTING_SPEC,
+        {
+          minGames: 0,
+          pointEstimateOnly: false,
+          bootstrapReps: 10,
+        }
+      );
+
+      // Point estimate skips bootstrap (intervals set to point estimate)
+      expect(pointEst.calibration).toBeUndefined();
+      expect(pointEst.conditionComparisons.length).toBe(0);
+
+      // π and high setting overall rate match between normal and pointEstimateOnly
+      for (let s = 0; s < 6; s++) {
+        expect(pointEst.distribution[s].proportion).toBe(normalEst.distribution[s].proportion);
+      }
+      expect(pointEst.highSettingOverallRate).toBe(normalEst.highSettingOverallRate);
+      expect(pointEst.expectedSettingOverall).toBe(normalEst.expectedSettingOverall);
+    });
+
+    it('matches hand-calculated metrics on small synthetic sensitivity analysis dataset', () => {
+      const SPEC_2_SETTING: ModelSettingSpec = {
+        modelName: '小型テスト機',
+        settings: [
+          { label: '設定1', settingNum: 1, payoutRate: 97.0 },
+          { label: '設定6', settingNum: 6, payoutRate: 108.0 },
+        ],
+      };
+
+      const dailyRecords: DailyRecord[] = [
+        createMockDailyRecord({
+          date: '2024-05-01',
+          day: 1,
+          machines: [
+            { machineNum: 1, modelName: SPEC_2_SETTING.modelName, games: 500, diff: -100 },
+            { machineNum: 2, modelName: SPEC_2_SETTING.modelName, games: 1500, diff: -300 },
+          ],
+        }),
+        createMockDailyRecord({
+          date: '2024-05-02',
+          day: 2,
+          machines: [
+            { machineNum: 1, modelName: SPEC_2_SETTING.modelName, games: 3500, diff: 1000 },
+            { machineNum: 2, modelName: SPEC_2_SETTING.modelName, games: 6000, diff: 1800 },
+          ],
+        }),
+      ];
+
+      // Hand calculation:
+      // th=0: games = 500, 1500, 3500, 6000 => 4 recs, 0 excluded.
+      //       IN = 11500 * 3 = 34500, OUT = 34500 + 2400 = 36900 => payout = 106.96%
+      // th=1000: games = 1500, 3500, 6000 => 3 recs, 1 excluded (500G).
+      // th=2000: games = 3500, 6000 => 2 recs, 2 excluded.
+      // th=3000: games = 3500, 6000 => 2 recs, 2 excluded.
+      // th=5000: games = 6000 => 1 rec, 3 excluded.
+
+      const res = runSensitivityAnalysis(
+        SPEC_2_SETTING.modelName,
+        dailyRecords,
+        SPEC_2_SETTING,
+        { highSettingThreshold: 6 },
+        [0, 1000, 2000, 3000, 5000]
+      );
+
+      expect(res.rows.length).toBe(5);
+
+      // 0G
+      expect(res.rows[0].evaluatedRecords).toBe(4);
+      expect(res.rows[0].excludedCount).toBe(0);
+      expect(res.rows[0].inWeightedPayoutRate).toBe(106.96);
+
+      // 1000G
+      expect(res.rows[1].evaluatedRecords).toBe(3);
+      expect(res.rows[1].excludedCount).toBe(1);
+
+      // 2000G
+      expect(res.rows[2].evaluatedRecords).toBe(2);
+      expect(res.rows[2].excludedCount).toBe(2);
+
+      // 3000G
+      expect(res.rows[3].evaluatedRecords).toBe(2);
+      expect(res.rows[3].excludedCount).toBe(2);
+
+      // 5000G
+      expect(res.rows[4].evaluatedRecords).toBe(1);
+      expect(res.rows[4].excludedCount).toBe(3);
+    });
+
+    it('demonstrates >= 30 point sensitivity spread on synthetic 2 machines x 90 days dataset with correlated games and payouts', () => {
+      // Background:
+      // 実データ（プラザ515・ジャグラーガールズSS、2台×90日）で、
+      // 最小回転数を0G→3,000Gに変えると、高設定（4以上）の推定比率が52%→99.9%に変わった。
+      const JUGGLER_GIRLS_SPEC: ModelSettingSpec = {
+        modelName: 'ジャグラーガールズSS',
+        settings: [
+          { label: '設定1', settingNum: 1, payoutRate: 97.0, bbDenom: 273.1, rbDenom: 381.0 },
+          { label: '設定2', settingNum: 2, payoutRate: 97.9, bbDenom: 270.8, rbDenom: 358.1 },
+          { label: '設定3', settingNum: 3, payoutRate: 99.9, bbDenom: 268.6, rbDenom: 334.4 },
+          { label: '設定4', settingNum: 4, payoutRate: 102.1, bbDenom: 257.0, rbDenom: 300.6 },
+          { label: '設定5', settingNum: 5, payoutRate: 104.5, bbDenom: 247.4, rbDenom: 270.8 },
+          { label: '設定6', settingNum: 6, payoutRate: 107.5, bbDenom: 240.9, rbDenom: 240.9 },
+        ],
+      };
+
+      const rng = createSeededRandom(515);
+      const dailyRecords: DailyRecord[] = [];
+
+      // 2台 × 90日 = 180台日
+      // 48%は低設定(設定1〜2: 負けやめで回転数少 400〜1400G, 出率 ~94〜97%)
+      // 52%は高設定(設定4〜6: 終日稼働 6500〜8500G, 出率 ~103〜108%)
+      for (let day = 1; day <= 90; day++) {
+        const machineRecs: DailyMachineRecord[] = [];
+        for (let m = 1; m <= 2; m++) {
+          const isHigh = rng() < 0.52;
+          let games: number;
+          let payout: number;
+
+          if (isHigh) {
+            // 高設定日: 粘られて高回転
+            games = Math.round(6500 + rng() * 2000);
+            payout = 104.0 + (rng() * 4.0 - 1.0); // 103% ~ 107%
+          } else {
+            // 低設定日: 負けて途中でやめられた
+            games = Math.round(400 + rng() * 1000); // 400G ~ 1400G
+            payout = 94.0 + (rng() * 3.5); // 94% ~ 97.5%
+          }
+
+          const diff = Math.round((payout / 100.0) * games * 3 - games * 3);
+          machineRecs.push({
+            machineNum: 100 + m,
+            modelName: JUGGLER_GIRLS_SPEC.modelName,
+            games,
+            diff,
+            payoutRate: Number(payout.toFixed(2)),
+          });
+        }
+
+        dailyRecords.push(
+          createMockDailyRecord({
+            date: `2024-01-${day < 10 ? '0' + day : day}`,
+            day,
+            machines: machineRecs,
+          })
+        );
+      }
+
+      const res = runSensitivityAnalysis(
+        JUGGLER_GIRLS_SPEC.modelName,
+        dailyRecords,
+        JUGGLER_GIRLS_SPEC,
+        { highSettingThreshold: 4 },
+        [0, 1000, 2000, 3000, 5000]
+      );
+
+      // 0G condition uses all 180 machine-days
+      const row0 = res.rows.find((r) => r.minGames === 0)!;
+      expect(row0.evaluatedRecords).toBe(180);
+      expect(row0.highSettingRate).toBeGreaterThan(45);
+      expect(row0.highSettingRate).toBeLessThan(65);
+
+      // 3000G condition excludes all low-games days (<1400G), retaining only high-rotation winning days
+      const row3000 = res.rows.find((r) => r.minGames === 3000)!;
+      expect(row3000.excludedCount).toBeGreaterThan(60);
+      expect(row3000.highSettingRate).toBeGreaterThan(95);
+
+      // Rate spread is > 30 points (e.g. ~52% to >95%)
+      expect(res.rateSpread).toBeGreaterThanOrEqual(30.0);
+      expect(res.isHighSensitivity).toBe(true);
+      expect(res.warningMessage).toContain('条件によって結果が大きく変わります');
+    });
   });
 });

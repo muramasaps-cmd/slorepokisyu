@@ -61,6 +61,23 @@ export const ATypeSettingDistributionCard: React.FC<ATypeSettingDistributionCard
     });
   }, [stat.modelName, dailyRecords, priorDistribution]);
 
+  const uniqueMachineCount = useMemo(() => {
+    if (machineDistributions.length > 0) return machineDistributions.length;
+    if (dailyRecords && dailyRecords.length > 0) {
+      const s = new Set<number>();
+      for (const dr of dailyRecords) {
+        const list = dr.machines || (dr as any).machineRecords;
+        if (list) {
+          for (const mr of list) {
+            if (mr.modelName === stat.modelName) s.add(mr.machineNum);
+          }
+        }
+      }
+      if (s.size > 0) return s.size;
+    }
+    return Math.round(stat.avgMachinesPerDay) || 0;
+  }, [machineDistributions, dailyRecords, stat.modelName, stat.avgMachinesPerDay]);
+
   if (!analysis) return null;
 
   const { overall, eventDays, normalDays, settingLiftDelta, displayName, isKnownCatalog } = analysis;
@@ -238,8 +255,11 @@ export const ATypeSettingDistributionCard: React.FC<ATypeSettingDistributionCard
 
           {/* 観測データ規模 */}
           <div className="p-3 bg-gradient-to-br from-slate-50 to-gray-50 rounded-xl border border-slate-200">
-            <div className="text-[11px] font-bold text-slate-700">
-              観測G数 / 総差枚
+            <div className="text-[11px] font-bold text-slate-700 flex items-center justify-between">
+              <span>観測G数 / 総差枚</span>
+              {uniqueMachineCount > 0 && (
+                <span className="text-[10px] text-slate-500 font-sans font-normal">実台数: {uniqueMachineCount}台</span>
+              )}
             </div>
             <div className="mt-1 flex items-baseline gap-1">
               <span className="text-base font-black text-slate-800 font-mono">
@@ -297,7 +317,7 @@ export const ATypeSettingDistributionCard: React.FC<ATypeSettingDistributionCard
                     <div className="flex items-center gap-3 font-mono">
                       {item.estimatedMachineCount !== undefined && stat.avgMachinesPerDay > 0 && (
                         <span className="text-[11px] text-slate-500 hidden sm:inline">
-                          約 <strong className="text-slate-800">{item.estimatedMachineCount}</strong> 台相当
+                          約 <strong className="text-slate-800">{item.estimatedMachineCount}</strong> 台日相当
                         </span>
                       )}
                       <span className="font-black text-sm text-slate-900 w-14 text-right">

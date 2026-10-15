@@ -135,6 +135,7 @@ export default function App() {
           categoryRates: existing.categoryRates || s.categoryRates,
           includeReusedMachinesInStats: existing.includeReusedMachinesInStats ?? s.includeReusedMachinesInStats,
           customRankingWeights: existing.customRankingWeights || s.customRankingWeights,
+          customMachineRankingWeights: existing.customMachineRankingWeights || s.customMachineRankingWeights,
           updatedAt: new Date().toISOString(),
         };
       }
@@ -1190,12 +1191,14 @@ export default function App() {
             </div>
 
             {/* Monthly Profit Chart: Full Width with High Visibility */}
-            <div className="w-full min-h-[360px]">
+            <div className="w-full">
               <ProfitChart
                 monthlyStats={filteredMonthlyStats}
                 perspective={perspective}
                 unit={unit}
                 profitModel={profitModel}
+                selectedYear={selectedYear}
+                onResetYearFilter={() => setSelectedYear('all')}
                 onSelectMonth={(ym) => setSelectedMonthModal(ym)}
               />
             </div>

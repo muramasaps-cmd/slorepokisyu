@@ -1,8 +1,17 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   calculateCrossStoreRanking,
   convertCoinsToYen,
+  calculateUncertainty80,
+  filterAndRollupTargetList,
+  loadTargetCheckStatus,
+  saveTargetCheckStatus,
+  generateTargetListCopyText,
+  generateTargetListCsv,
+  calculateStorePastPerformance,
+  CrossStoreMachineRank,
 } from '../crossStoreRanking';
+import { runMachineBacktest } from '../backtestEngine';
 import { StoreProfile, DailyRecord } from '../../data/types';
 
 function createMockStore(
@@ -343,5 +352,277 @@ describe('crossStoreRanking utils', () => {
     expect(resOrig.modelRankings[0].expectedDiffCoins).toBe(
       resTampered.modelRankings[0].expectedDiffCoins
     );
+  });
+
+  // 6. 幅の計算: 80%不確実性区間
+  describe('不確実性の幅の計算 (calculateUncertainty80)', () => {
+    it('標準誤差から約80%範囲 (1.28 * SE) が正しく計算される', () => {
+      // expectedDiff: 1000, SE: 200 -> margin = round(1.28 * 200) = 256
+      const unc = calculateUncertainty80(1000, 200);
+      expect(unc.margin).toBe(256);
+      expect(unc.min).toBe(744);
+      expect(unc.max).toBe(1256);
+      expect(unc.isWide).toBe(false);
+
+      // Large SE: 600 -> margin = round(1.28 * 600) = 768 >= 700 -> isWide: true
+      const uncWide = calculateUncertainty80(1000, 600);
+      expect(uncWide.margin).toBe(768);
+      expect(uncWide.min).toBe(232);
+      expect(uncWide.max).toBe(1768);
+      expect(uncWide.isWide).toBe(true);
+    });
+
+    it('calculateCrossStoreRanking の結果に uncertainty80 が含まれる', () => {
+      const store = createMockStore(
+        'store-unc',
+        '不確実性検証店',
+        50,
+        [{ name: 'スマスロ北斗の拳', diff: 800, machines: 5 }],
+        [{ num: 101, model: 'スマスロ北斗の拳', diff: 2000 }],
+        3
+      );
+
+      const result = calculateCrossStoreRanking([store], '2025-01-02', {
+        includeLowConfidence: true,
+      });
+
+      expect(result.machineRankings.length).toBeGreaterThan(0);
+      const mach = result.machineRankings[0];
+      expect(mach.uncertainty80).toBeDefined();
+      expect(mach.uncertainty80.margin).toBeGreaterThan(0);
+      expect(mach.uncertainty80.min).toBeLessThanOrEqual(mach.shrunkDiff);
+      expect(mach.uncertainty80.max).toBeGreaterThanOrEqual(mach.shrunkDiff);
+
+      expect(result.modelRankings.length).toBeGreaterThan(0);
+      const model = result.modelRankings[0];
+      expect(model.uncertainty80).toBeDefined();
+      expect(model.uncertainty80.margin).toBeGreaterThan(0);
+    });
+  });
+
+  // 7. 狙い台リスト: チェック除外と繰り上がり、保存と復元
+  describe('狙い台リスト (チェック除外・繰り上がり・保存復元)', () => {
+    let mockStorage: Record<string, string> = {};
+
+    beforeEach(() => {
+      mockStorage = {};
+      globalThis.localStorage = {
+        getItem: (k: string) => mockStorage[k] ?? null,
+        setItem: (k: string, v: string) => {
+          mockStorage[k] = String(v);
+        },
+        removeItem: (k: string) => {
+          delete mockStorage[k];
+        },
+        clear: () => {
+          mockStorage = {};
+        },
+        key: (i: number) => Object.keys(mockStorage)[i] ?? null,
+        length: 0,
+      } as Storage;
+    });
+
+    const mockMachines: CrossStoreMachineRank[] = [
+      {
+        rank: 1,
+        storeId: 'store-1',
+        storeName: '店舗1',
+        machineNum: 101,
+        modelName: '北斗',
+        totalScore: 50,
+        confidence: '高',
+        evidenceDays: 5,
+        cohortEvidenceDays: 5,
+        shrunkDiff: 1200,
+        expectedDiffCoins: 1200,
+        expectedYenProfit: 24000,
+        cohortAvgDiff: 1200,
+        cohortWinRate: 70,
+        highSettingRate: 40,
+        isTailMatch: false,
+        isZoro: false,
+        reasons: ['特日実績あり'],
+        uncertainty80: { margin: 300, min: 900, max: 1500, isWide: false },
+      },
+      {
+        rank: 2,
+        storeId: 'store-1',
+        storeName: '店舗1',
+        machineNum: 102,
+        modelName: 'ジャグラー',
+        totalScore: 40,
+        confidence: '中',
+        evidenceDays: 4,
+        cohortEvidenceDays: 4,
+        shrunkDiff: 800,
+        expectedDiffCoins: 800,
+        expectedYenProfit: 16000,
+        cohortAvgDiff: 800,
+        cohortWinRate: 60,
+        highSettingRate: 30,
+        isTailMatch: false,
+        isZoro: false,
+        reasons: ['同曜日実績あり'],
+        uncertainty80: { margin: 250, min: 550, max: 1050, isWide: false },
+      },
+      {
+        rank: 3,
+        storeId: 'store-1',
+        storeName: '店舗1',
+        machineNum: 103,
+        modelName: 'モンキーターン',
+        totalScore: 30,
+        confidence: '中',
+        evidenceDays: 3,
+        cohortEvidenceDays: 3,
+        shrunkDiff: 600,
+        expectedDiffCoins: 600,
+        expectedYenProfit: 12000,
+        cohortAvgDiff: 600,
+        cohortWinRate: 55,
+        highSettingRate: 20,
+        isTailMatch: false,
+        isZoro: false,
+        reasons: ['実績あり'],
+        uncertainty80: { margin: 200, min: 400, max: 800, isWide: false },
+      },
+    ];
+
+    it('チェックした台が除外され、次点の台が繰り上がる', () => {
+      // 101番台を「空いていない」としてチェック
+      const checkedState = { 101: 'unavailable' as const };
+      const res = filterAndRollupTargetList(mockMachines, checkedState, 2);
+
+      // アクティブ候補から101が外れ、102が1位、103が2位に繰り上がる
+      expect(res.activeCandidates).toHaveLength(2);
+      expect(res.activeCandidates[0].machineNum).toBe(102);
+      expect(res.activeCandidates[0].rank).toBe(1);
+      expect(res.activeCandidates[0].originalRank).toBe(2);
+
+      expect(res.activeCandidates[1].machineNum).toBe(103);
+      expect(res.activeCandidates[1].rank).toBe(2);
+      expect(res.activeCandidates[1].originalRank).toBe(3);
+
+      expect(res.checkedCandidates).toHaveLength(1);
+      expect(res.checkedCandidates[0].machineNum).toBe(101);
+      expect(res.checkedCandidates[0].checkStatus).toBe('unavailable');
+    });
+
+    it('日付×店ごとのチェック状態が localStorage に保存され復元される', () => {
+      const targetDate = '2025-01-02';
+      const storeId = 'store-test-storage';
+
+      // 初期状態は空
+      expect(loadTargetCheckStatus(targetDate, storeId)).toEqual({});
+
+      // 状態保存
+      const state = { 101: 'unavailable' as const, 102: 'played' as const };
+      saveTargetCheckStatus(targetDate, storeId, state);
+
+      // 復元確認
+      const loaded = loadTargetCheckStatus(targetDate, storeId);
+      expect(loaded).toEqual(state);
+
+      // 別の日付や別の店では独立している
+      expect(loadTargetCheckStatus('2025-01-03', storeId)).toEqual({});
+      expect(loadTargetCheckStatus(targetDate, 'another-store')).toEqual({});
+
+      // 全解除
+      saveTargetCheckStatus(targetDate, storeId, {});
+      expect(loadTargetCheckStatus(targetDate, storeId)).toEqual({});
+    });
+  });
+
+  // 8. テキストコピーとCSV書き出し
+  describe('テキストコピーとCSV書き出し', () => {
+    const sampleItems = [
+      {
+        rank: 1,
+        modelName: 'スマスロ北斗の拳',
+        machineNum: 101,
+        expectedDiffCoins: 850,
+        expectedYenProfit: 17000,
+        confidence: '高',
+        uncertainty80: { margin: 350, min: 500, max: 1200, isWide: false },
+        reasons: ['来店日が店舗特日 (実績5日)', '同条件台平均 +920枚'],
+        islandName: '中央通路',
+      },
+      {
+        rank: 2,
+        modelName: 'マイジャグラーV',
+        machineNum: 202,
+        expectedDiffCoins: 500,
+        expectedYenProfit: 10000,
+        confidence: '中',
+        uncertainty80: { margin: 200, min: 300, max: 700, isWide: false },
+        reasons: ['同曜日実績3日'],
+        islandName: null,
+      },
+    ];
+
+    it('テキストコピー文に店名・来店日・順位・機種・台番・期待差枚・理由の要約が含まれる', () => {
+      const text = generateTargetListCopyText('テスト店舗A', '2025-01-02', sampleItems);
+
+      expect(text).toContain('テスト店舗A');
+      expect(text).toContain('2025-01-02');
+      expect(text).toContain('1位: スマスロ北斗の拳 101番台');
+      expect(text).toContain('+850枚');
+      expect(text).toContain('来店日が店舗特日 (実績5日)');
+      expect(text).toContain('2位: マイジャグラーV 202番台');
+    });
+
+    it('CSV書き出しが正しいヘッダとフォーマットで生成される', () => {
+      const csv = generateTargetListCsv('テスト店舗A', '2025-01-02', sampleItems);
+
+      expect(csv).toContain('店舗名,来店日,順位,機種名,台番,島名,信頼度,期待差枚(枚),不確実性(±枚),80%予測下限(枚),80%予測上限(枚),選定理由要約');
+      expect(csv).toContain('"テスト店舗A","2025-01-02",1,"スマスロ北斗の拳",101,"中央通路","高","+850",350,"+500","+1200"');
+      expect(csv).toContain('"テスト店舗A","2025-01-02",2,"マイジャグラーV",202,"","中","+500",200,"+300","+700"');
+    });
+  });
+
+  // 9. 過去成績がバックテストの結果と一致する
+  describe('過去成績の表示 (calculateStorePastPerformance)', () => {
+    it('直近N日の過去成績が runMachineBacktest の結果と完全に一致する', () => {
+      // 5日分の台番データを持つモック店舗を作成
+      const machinesList = [
+        { num: 101, model: 'スマスロ北斗の拳', diff: 3000 },
+        { num: 102, model: 'スマスロ北斗の拳', diff: -500 },
+        { num: 103, model: 'マイジャグラーV', diff: 1500 },
+        { num: 104, model: 'マイジャグラーV', diff: -200 },
+      ];
+
+      const store = createMockStore(
+        'store-backtest-match',
+        '検証店舗',
+        50,
+        [{ name: 'スマスロ北斗の拳', diff: 1000, machines: 2 }],
+        machinesList,
+        5
+      );
+
+      const targetDate = '2025-01-02';
+      const recentDays = 30;
+
+      // 過去成績関数を実行
+      const pastPerf = calculateStorePastPerformance(store, targetDate, recentDays);
+
+      // 直接 runMachineBacktest を同一データ・パラメータで実行
+      const priorRecords = store.dailyRecords.filter((r) => r.date < targetDate);
+      const targetSlice = priorRecords.slice(-recentDays);
+      const backtestRes = runMachineBacktest(targetSlice, store.specialDayRules, {
+        topN: 10,
+        minEvidenceDays: 3,
+        bootstrapIterations: 1000,
+        weights: store.customMachineRankingWeights,
+      });
+
+      // 両者の集計結果が一致することを検証
+      expect(pastPerf.actualDaysCount).toBe(backtestRes.evaluatedDaysCount);
+      expect(pastPerf.top10AvgDiff).toBe(backtestRes.withFilter.avgActualDiff);
+      expect(pastPerf.hallAvgDiff).toBe(backtestRes.withFilter.hallAvgDiff);
+      expect(pastPerf.lift).toBe(backtestRes.withFilter.avgLift);
+      expect(pastPerf.hasEdge).toBe(backtestRes.withFilter.hasEdge);
+      expect(pastPerf.isReferenceOnly).toBe(!backtestRes.withFilter.hasEdge);
+    });
   });
 });

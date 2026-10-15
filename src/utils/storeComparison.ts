@@ -74,15 +74,13 @@ export interface CommonModelComparison {
   }>;
 }
 
-export interface StoreSignificanceTest {
-  storeAId: string;
-  storeAName: string;
-  storeBId: string;
-  storeBName: string;
-  diffDiff: number; // avgDiffA - avgDiffB
-  ci95: [number, number]; // 95% bootstrap CI of difference
-  isSignificant: boolean; // 95% interval does not include 0
-  label: '差あり' | '誤差内';
+export interface DigitDayStoreMetric {
+  digit: string; // '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '0' | 'ゾロ目'
+  digitLabel: string; // '1のつく日', ..., '0のつく日', 'ゾロ目の日'
+  daysCount: number;
+  totalDiffCoins: number;
+  totalMachineDays: number;
+  avgDiffPerMachine: number;
 }
 
 export interface StoreSummaryStatement {
@@ -95,8 +93,8 @@ export interface StoreComparisonResult {
   periodMode: 'common' | 'all';
   commonPeriod: StoreCommonPeriod;
   evaluatedStores: StorePerMachineMetrics[];
-  significanceTests: StoreSignificanceTest[];
   monthlyTrends: Record<string, MonthlyStoreTrend[]>; // storeId -> trends
+  digitDayHeatmaps: Record<string, DigitDayStoreMetric[]>; // storeId -> 11 digit days
   dowHeatmaps: Record<string, DayOfWeekStoreMetric[]>; // storeId -> 7 days
   categoryCompositions: Record<string, CategoryComposition[]>; // storeId -> categories
   commonModels: CommonModelComparison[];
@@ -481,111 +479,123 @@ export function calculateStoreCategoryComposition(
   ];
 }
 
+export const DIGIT_DAY_COLUMNS = [
+  { key: '1', label: '1のつく日', shortLabel: '1日' },
+  { key: '2', label: '2のつく日', shortLabel: '2日' },
+  { key: '3', label: '3のつく日', shortLabel: '3日' },
+  { key: '4', label: '4のつく日', shortLabel: '4日' },
+  { key: '5', label: '5のつく日', shortLabel: '5日' },
+  { key: '6', label: '6のつく日', shortLabel: '6日' },
+  { key: '7', label: '7のつく日', shortLabel: '7日' },
+  { key: '8', label: '8のつく日', shortLabel: '8日' },
+  { key: '9', label: '9のつく日', shortLabel: '9日' },
+  { key: '0', label: '0のつく日', shortLabel: '0日' },
+  { key: 'ゾロ目', label: 'ゾロ目の日', shortLabel: 'ゾロ目' },
+] as const;
+
 /**
- * Calculates pairwise bootstrap confidence intervals between stores to test if difference in
- * per-machine daily diff is statistically significant (versus zero-straddling noise).
+ * Shared color classification for Heatmap cells (used in both Digit Day and Day of Week heatmaps).
  */
-export function testStoreSignificanceBootstrap(
-  storeA: StoreProfile,
-  recordsA: DailyRecord[],
-  storeB: StoreProfile,
-  recordsB: DailyRecord[],
-  iterations = 1000,
-  seed = 42
-): StoreSignificanceTest {
-  // Map records by date to compute daily paired differences when on identical dates
-  const mapB = new Map<string, DailyRecord>();
-  for (const r of recordsB) mapB.set(r.date, r);
+export function getDiffHeatmapColor(
+  diff: number,
+  daysCount = 3
+): {
+  bgClass: string;
+  isFewDays: boolean;
+} {
+  const isFewDays = daysCount > 0 && daysCount < 3;
+  let bgClass = 'bg-slate-50 text-slate-600';
+  if (daysCount === 0) {
+    bgClass = 'bg-slate-50/50 text-slate-400';
+  } else if (diff >= 300) {
+    bgClass = 'bg-blue-600 text-white font-bold';
+  } else if (diff >= 100) {
+    bgClass = 'bg-blue-100 text-blue-900 font-bold';
+  } else if (diff <= -300) {
+    bgClass = 'bg-rose-600 text-white font-bold';
+  } else if (diff <= -100) {
+    bgClass = 'bg-rose-100 text-rose-900 font-bold';
+  }
+  return { bgClass, isFewDays };
+}
 
-  const pairedDiffs: number[] = [];
-  for (const rA of recordsA) {
-    const rB = mapB.get(rA.date);
-    if (rB) {
-      const mA = rA.totalMachines > 0 ? rA.totalMachines : storeA.totalMachinesApprox || 1;
-      const mB = rB.totalMachines > 0 ? rB.totalMachines : storeB.totalMachinesApprox || 1;
-      const diffA = (rA.totalDiffCoins || rA.avgDiffCoins * mA) / mA;
-      const diffB = (rB.totalDiffCoins || rB.avgDiffCoins * mB) / mB;
-      pairedDiffs.push(diffA - diffB);
+/**
+ * Pure function: Computes Digit Day ('のつく日' 1..9, 0 + 'ゾロ目の日') heatmap metrics for a store.
+ * - 'Nのつく日': Day with units digit = N (1..9, 0). (e.g. 1のつく日 = 1, 11, 21, 31日, 0のつく日 = 10, 20, 30日)
+ * - 'ゾロ目の日': Day where tens digit == units digit (11, 22日). Month does not affect this.
+ * - Excludes data outside the common period when period is specified.
+ */
+export function calculateStoreDigitDayHeatmap(
+  records: DailyRecord[],
+  period?: { startDate?: string; endDate?: string; hasCommonPeriod?: boolean } | null,
+  store?: StoreProfile
+): DigitDayStoreMetric[] {
+  let targetRecords = records || [];
+
+  if (period && period.startDate && period.endDate && period.hasCommonPeriod !== false) {
+    targetRecords = targetRecords.filter(
+      (r) => r.date >= period.startDate! && r.date <= period.endDate!
+    );
+  }
+
+  // Group records by digit day keys
+  const recordsByKey = new Map<string, DailyRecord[]>();
+  for (const col of DIGIT_DAY_COLUMNS) {
+    recordsByKey.set(col.key, []);
+  }
+
+  for (const r of targetRecords) {
+    const day = r.day ?? parseInt(r.date.split('-')[2] || '0', 10);
+    if (!day || isNaN(day) || day < 1 || day > 31) continue;
+
+    const unit = day % 10;
+    const unitKey = unit.toString();
+    if (recordsByKey.has(unitKey)) {
+      recordsByKey.get(unitKey)!.push(r);
+    }
+
+    // ゾロ目の日: 日の十の位と一の位が同じ日 (11, 22日)
+    const isZorome = day >= 10 && Math.floor(day / 10) === unit;
+    if (isZorome) {
+      recordsByKey.get('ゾロ目')!.push(r);
     }
   }
 
-  // Fallback: If no paired dates, use independent two-sample bootstrap
-  let ciLower = 0;
-  let ciUpper = 0;
-  let observedDiff = 0;
-
-  let s = seed >>> 0;
-  const rng = () => {
-    s = (s * 1664525 + 1013904223) >>> 0;
-    return s / 4294967296;
-  };
-
-  if (pairedDiffs.length >= 5) {
-    observedDiff =
-      pairedDiffs.reduce((a, b) => a + b, 0) / pairedDiffs.length;
-
-    const bootstrapMeans: number[] = [];
-    const N = pairedDiffs.length;
-    for (let it = 0; it < iterations; it++) {
-      let sum = 0;
-      for (let i = 0; i < N; i++) {
-        const idx = Math.floor(rng() * N);
-        sum += pairedDiffs[idx];
-      }
-      bootstrapMeans.push(sum / N);
+  return DIGIT_DAY_COLUMNS.map((col) => {
+    const list = recordsByKey.get(col.key) || [];
+    if (list.length === 0) {
+      return {
+        digit: col.key,
+        digitLabel: col.label,
+        daysCount: 0,
+        totalDiffCoins: 0,
+        totalMachineDays: 0,
+        avgDiffPerMachine: 0,
+      };
     }
-    bootstrapMeans.sort((a, b) => a - b);
-    const lowIdx = Math.floor(iterations * 0.025);
-    const upIdx = Math.floor(iterations * 0.975);
-    ciLower = Math.round(bootstrapMeans[lowIdx]);
-    ciUpper = Math.round(bootstrapMeans[upIdx]);
-  } else {
-    // Independent two-sample bootstrap
-    const sampleA = recordsA.map((r) => {
-      const m = r.totalMachines > 0 ? r.totalMachines : storeA.totalMachinesApprox || 1;
-      return (r.totalDiffCoins || r.avgDiffCoins * m) / m;
-    });
-    const sampleB = recordsB.map((r) => {
-      const m = r.totalMachines > 0 ? r.totalMachines : storeB.totalMachinesApprox || 1;
-      return (r.totalDiffCoins || r.avgDiffCoins * m) / m;
-    });
 
-    const meanA = sampleA.length > 0 ? sampleA.reduce((a, b) => a + b, 0) / sampleA.length : 0;
-    const meanB = sampleB.length > 0 ? sampleB.reduce((a, b) => a + b, 0) / sampleB.length : 0;
-    observedDiff = meanA - meanB;
+    let totalMachineDays = 0;
+    let totalDiffCoins = 0;
 
-    const bootstrapDiffs: number[] = [];
-    for (let it = 0; it < iterations; it++) {
-      let sumA = 0;
-      for (let i = 0; i < sampleA.length; i++) {
-        sumA += sampleA[Math.floor(rng() * sampleA.length)];
-      }
-      let sumB = 0;
-      for (let i = 0; i < sampleB.length; i++) {
-        sumB += sampleB[Math.floor(rng() * sampleB.length)];
-      }
-      const bMeanA = sampleA.length > 0 ? sumA / sampleA.length : 0;
-      const bMeanB = sampleB.length > 0 ? sumB / sampleB.length : 0;
-      bootstrapDiffs.push(bMeanA - bMeanB);
+    for (const r of list) {
+      const machines = r.totalMachines > 0 ? r.totalMachines : (store?.totalMachinesApprox || 1);
+      totalMachineDays += machines;
+      const dayDiff = r.totalDiffCoins !== 0 ? r.totalDiffCoins : (r.avgDiffCoins || 0) * machines;
+      totalDiffCoins += dayDiff;
     }
-    bootstrapDiffs.sort((a, b) => a - b);
-    ciLower = Math.round(bootstrapDiffs[Math.floor(iterations * 0.025)]);
-    ciUpper = Math.round(bootstrapDiffs[Math.floor(iterations * 0.975)]);
-  }
 
-  // Significant if 95% confidence interval does NOT straddle 0
-  const isSignificant = (ciLower > 0 && ciUpper > 0) || (ciLower < 0 && ciUpper < 0);
+    const avgDiffPerMachine =
+      totalMachineDays > 0 ? Math.round((totalDiffCoins / totalMachineDays) * 10) / 10 : 0;
 
-  return {
-    storeAId: storeA.id,
-    storeAName: storeA.name,
-    storeBId: storeB.id,
-    storeBName: storeB.name,
-    diffDiff: Math.round(observedDiff),
-    ci95: [ciLower, ciUpper],
-    isSignificant,
-    label: isSignificant ? '差あり' : '誤差内',
-  };
+    return {
+      digit: col.key,
+      digitLabel: col.label,
+      daysCount: list.length,
+      totalDiffCoins: Math.round(totalDiffCoins),
+      totalMachineDays,
+      avgDiffPerMachine,
+    };
+  });
 }
 
 /**
@@ -729,8 +739,6 @@ export function compareStores(
   }
 ): StoreComparisonResult {
   const periodMode = options?.periodMode || 'common';
-  const iterations = options?.bootstrapIterations || 1000;
-  const seed = options?.seed || 42;
 
   const warnings: string[] = [];
   const commonPeriod = calculateCommonPeriod(stores);
@@ -744,6 +752,7 @@ export function compareStores(
   const storeRecordsMap = new Map<string, DailyRecord[]>();
   const evaluatedStores: StorePerMachineMetrics[] = [];
   const monthlyTrends: Record<string, MonthlyStoreTrend[]> = {};
+  const digitDayHeatmaps: Record<string, DigitDayStoreMetric[]> = {};
   const dowHeatmaps: Record<string, DayOfWeekStoreMetric[]> = {};
   const categoryCompositions: Record<string, CategoryComposition[]> = {};
 
@@ -762,26 +771,9 @@ export function compareStores(
     evaluatedStores.push(m);
 
     monthlyTrends[store.id] = calculateStoreMonthlyTrends(store, filtered);
+    digitDayHeatmaps[store.id] = calculateStoreDigitDayHeatmap(raw, commonPeriod, store);
     dowHeatmaps[store.id] = calculateStoreDowHeatmap(store, filtered);
     categoryCompositions[store.id] = calculateStoreCategoryComposition(filtered);
-  }
-
-  // Pairwise significance tests
-  const significanceTests: StoreSignificanceTest[] = [];
-  for (let i = 0; i < stores.length; i++) {
-    for (let j = i + 1; j < stores.length; j++) {
-      const sA = stores[i];
-      const sB = stores[j];
-      const test = testStoreSignificanceBootstrap(
-        sA,
-        storeRecordsMap.get(sA.id) || [],
-        sB,
-        storeRecordsMap.get(sB.id) || [],
-        iterations,
-        seed
-      );
-      significanceTests.push(test);
-    }
   }
 
   // Common models
@@ -794,8 +786,8 @@ export function compareStores(
     periodMode,
     commonPeriod,
     evaluatedStores,
-    significanceTests,
     monthlyTrends,
+    digitDayHeatmaps,
     dowHeatmaps,
     categoryCompositions,
     commonModels,

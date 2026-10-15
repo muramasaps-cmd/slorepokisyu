@@ -102,6 +102,7 @@ export interface TargetMachineScore {
     isZoro: boolean;
     priorDayDiff: number | null;
     priorDayDate: string | null;
+    standardError?: number;
   };
   history: MachineHistoryEntry[];
 }
@@ -695,6 +696,7 @@ export class MachineHistoryAccumulator {
         ) / 100) || 0;
 
       let confidence: MachineConfidenceLevel = '低';
+      let standardError = 0;
       if (diffs.length > 0) {
         const mean = mState.diffSum / diffs.length;
         let varSum = 0;
@@ -703,7 +705,7 @@ export class MachineHistoryAccumulator {
         }
         const variance = varSum / Math.max(1, diffs.length - 1);
         const stdDev = Math.sqrt(variance);
-        const standardError = stdDev / Math.sqrt(Math.max(1, diffs.length));
+        standardError = stdDev / Math.sqrt(Math.max(1, diffs.length));
         if (cohortEvidenceDays >= 5 && standardError <= 650) {
           confidence = '高';
         } else if (
@@ -762,6 +764,7 @@ export class MachineHistoryAccumulator {
           isZoro,
           priorDayDiff: lastDiff,
           priorDayDate: lastDate,
+          standardError: Math.round(standardError * 10) / 10,
         },
         history: fullHistoryEntries,
       });

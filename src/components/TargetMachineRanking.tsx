@@ -150,9 +150,11 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
       dailyRecords,
       customMachineWeights,
       specialDayRules,
-      backtestOptions
+      backtestOptions,
+      aliasDictionary,
+      includeReusedMachines
     );
-  }, [storeId, dailyRecords, customMachineWeights, specialDayRules, backtestOptions, hasMachineData]);
+  }, [storeId, dailyRecords, customMachineWeights, specialDayRules, backtestOptions, hasMachineData, aliasDictionary, includeReusedMachines]);
 
   // Backtest state: check memory cache synchronously first (Requirement 1a)
   const [backtestResult, setBacktestResult] = useState<MachineBacktestResult | null>(() => {
@@ -222,7 +224,7 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
               setBacktestProgress(data.progress);
             } else if (data.type === 'RESULT') {
               setMemoryBacktestCache(cacheKey, data.result);
-              putBacktestToIdb(cacheKey, data.result).catch(() => {});
+              putBacktestToIdb(cacheKey, data.result, storeId).catch(() => {});
               setBacktestResult(data.result);
               setIsBacktestRunning(false);
               setBacktestProgress(null);
@@ -252,7 +254,7 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
               });
               if (isCancelled) return;
               setMemoryBacktestCache(cacheKey, res);
-              putBacktestToIdb(cacheKey, res).catch(() => {});
+              putBacktestToIdb(cacheKey, res, storeId).catch(() => {});
               setBacktestResult(res);
             } catch (err) {
               console.error('Fallback backtest error:', err);

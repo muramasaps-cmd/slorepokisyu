@@ -4,6 +4,8 @@ import {
   compareStores,
   StoreComparisonResult,
   StorePerMachineMetrics,
+  DIGIT_DAY_COLUMNS,
+  getDiffHeatmapColor,
 } from '../utils/storeComparison';
 import { formatNumber, formatYen } from '../utils/formatters';
 import {
@@ -14,7 +16,6 @@ import {
   TrendingUp,
   TrendingDown,
   AlertTriangle,
-  CheckCircle2,
   Sparkles,
   BarChart3,
   HelpCircle,
@@ -195,7 +196,7 @@ export const StoreComparison: React.FC<StoreComparisonProps> = ({
           <div className="flex flex-wrap gap-2">
             {stores.map((s, idx) => {
               const isSelected = selectedStoreIds.includes(s.id);
-              const colorIdx = comparedStores.findIndex((cs) => cs.id === s.id);
+              const colorIdx = comparisonResult?.evaluatedStores.findIndex((cs) => cs.storeId === s.id) ?? -1;
               const color = colorIdx >= 0 ? STORE_COLORS[colorIdx % STORE_COLORS.length] : '#94a3b8';
 
               return (
@@ -336,65 +337,7 @@ export const StoreComparison: React.FC<StoreComparisonProps> = ({
             </div>
           </div>
 
-          {/* 3. Statistical Significance Check (Bootstrap Confidence Intervals) */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                <span>店間差の統計的有意性判定（ブートストラップ95%信頼区間）</span>
-              </div>
-              <span className="text-[11px] text-slate-400">
-                区間が0をまたがない場合は「差あり」と判定
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {comparisonResult.significanceTests.map((t, idx) => (
-                <div
-                  key={idx}
-                  className={`p-3.5 rounded-xl border flex flex-col justify-between gap-2 ${
-                    t.isSignificant
-                      ? 'bg-emerald-50/60 border-emerald-300'
-                      : 'bg-slate-50 border-slate-200'
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="text-xs font-bold text-slate-800">
-                      {t.storeAName} vs {t.storeBName}
-                    </span>
-                    <span
-                      className={`px-2 py-0.5 rounded-full text-2xs font-black ${
-                        t.isSignificant
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-slate-200 text-slate-700'
-                      }`}
-                    >
-                      {t.label}
-                    </span>
-                  </div>
-
-                  <div className="space-y-1 text-xs">
-                    <div className="flex justify-between text-slate-600">
-                      <span>差枚差 (A - B):</span>
-                      <strong className="text-slate-900 font-mono">
-                        {t.diffDiff >= 0 ? `+${t.diffDiff}` : t.diffDiff} 枚/台
-                      </strong>
-                    </div>
-                    <div className="flex justify-between text-slate-500 text-[11px]">
-                      <span>95%信頼区間:</span>
-                      <span className="font-mono">
-                        [{t.ci95[0] >= 0 ? '+' : ''}
-                        {t.ci95[0]}枚, {t.ci95[1] >= 0 ? '+' : ''}
-                        {t.ci95[1]}枚]
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* 4. Monthly Trend Overlaid Chart */}
+          {/* 3. Monthly Trend Overlaid Chart */}
           <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3">
             <div className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
               <TrendingUp className="w-4 h-4 text-indigo-600" />
@@ -433,6 +376,91 @@ export const StoreComparison: React.FC<StoreComparisonProps> = ({
             </div>
           </div>
 
+          {/* 4. Digit Day Heatmap Grid (店舗 × のつく日) */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3">
+            <div className="space-y-1">
+              <div className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-indigo-600" />
+                <span>店舗 × のつく日 ヒートマップ（台あたり平均差枚）</span>
+              </div>
+              <p className="text-xs text-slate-500">
+                「Nのつく日」は、日付の一の位が N の日とする（N=1〜9、0）。例: 1のつく日＝1・11・21・31日、0のつく日＝10・20・30日。ゾロ目は日の十の位と一の位が同じ日（11・22日）。共通期間のみ集計。
+              </p>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-center border-collapse">
+                <thead>
+                  <tr className="bg-slate-100 text-slate-600 text-[11px]">
+                    <th className="p-2.5 text-left sticky left-0 bg-slate-100 z-10 whitespace-nowrap min-w-[100px]">
+                      店舗名
+                    </th>
+                    {DIGIT_DAY_COLUMNS.map((col) => (
+                      <th key={col.key} className="p-2 font-bold whitespace-nowrap min-w-[58px]">
+                        {col.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {comparisonResult.evaluatedStores.map((m) => {
+                    const digitStats = comparisonResult.digitDayHeatmaps[m.storeId] || [];
+                    const validStats = digitStats.filter((d) => d.daysCount > 0);
+                    const maxDiff =
+                      validStats.length > 0
+                        ? Math.max(...validStats.map((d) => d.avgDiffPerMachine))
+                        : null;
+
+                    return (
+                      <tr key={m.storeId} className="hover:bg-slate-50">
+                        <td className="p-2.5 text-left font-bold text-slate-900 sticky left-0 bg-white hover:bg-slate-50 z-10 whitespace-nowrap">
+                          {m.storeName}
+                        </td>
+                        {digitStats.map((d) => {
+                          const isMax =
+                            maxDiff !== null && d.daysCount > 0 && d.avgDiffPerMachine === maxDiff;
+                          const { bgClass, isFewDays } = getDiffHeatmapColor(
+                            d.avgDiffPerMachine,
+                            d.daysCount
+                          );
+
+                          const tooltipText =
+                            d.daysCount === 0
+                              ? `${m.storeName} - ${d.digitLabel}: 該当日なし`
+                              : `【${m.storeName} - ${d.digitLabel}】\n・該当日数: ${d.daysCount}日\n・総差枚: ${d.totalDiffCoins >= 0 ? '+' : ''}${formatNumber(d.totalDiffCoins)}枚\n・総台数: ${formatNumber(d.totalMachineDays)}台\n・台あたり平均差枚: ${d.avgDiffPerMachine >= 0 ? '+' : ''}${d.avgDiffPerMachine}枚/台${isFewDays ? '\n※3日未満のため参考値' : ''}`;
+
+                          return (
+                            <td key={d.digit} className="p-1 sm:p-1.5">
+                              <div
+                                title={tooltipText}
+                                className={`p-2 rounded-lg text-xs relative transition-all select-none ${bgClass} ${
+                                  isFewDays ? 'opacity-65' : ''
+                                } ${isMax ? 'ring-2 ring-indigo-600 ring-offset-1 font-black shadow-xs' : ''}`}
+                              >
+                                <div className={isMax ? 'font-black' : ''}>
+                                  {d.daysCount === 0
+                                    ? '-'
+                                    : d.avgDiffPerMachine >= 0
+                                      ? `+${d.avgDiffPerMachine}`
+                                      : d.avgDiffPerMachine}
+                                </div>
+                                {isFewDays && (
+                                  <span className="block text-[9px] leading-tight font-normal text-amber-700 bg-amber-50/80 rounded px-0.5 mt-0.5 whitespace-nowrap">
+                                    日数少
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
           {/* 5. Day of Week Heatmap Grid (店 × 曜日) */}
           <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3">
             <div className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
@@ -444,32 +472,38 @@ export const StoreComparison: React.FC<StoreComparisonProps> = ({
               <table className="w-full text-xs text-center border-collapse">
                 <thead>
                   <tr className="bg-slate-100 text-slate-600 text-[11px]">
-                    <th className="p-2.5 text-left">店舗名</th>
+                    <th className="p-2.5 text-left sticky left-0 bg-slate-100 z-10 whitespace-nowrap min-w-[100px]">
+                      店舗名
+                    </th>
                     {['月', '火', '水', '木', '金', '土', '日'].map((dow) => (
-                      <th key={dow} className="p-2.5 font-bold">
+                      <th key={dow} className="p-2.5 font-bold min-w-[50px]">
                         {dow}
                       </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {comparedStores.map((s) => {
-                    const dowStats = comparisonResult.dowHeatmaps[s.id] || [];
+                  {comparisonResult.evaluatedStores.map((m) => {
+                    const dowStats = comparisonResult.dowHeatmaps[m.storeId] || [];
                     return (
-                      <tr key={s.id} className="hover:bg-slate-50">
-                        <td className="p-2.5 text-left font-bold text-slate-900">{s.name}</td>
+                      <tr key={m.storeId} className="hover:bg-slate-50">
+                        <td className="p-2.5 text-left font-bold text-slate-900 sticky left-0 bg-white hover:bg-slate-50 z-10 whitespace-nowrap">
+                          {m.storeName}
+                        </td>
                         {dowStats.map((d) => {
-                          const diff = d.avgDiffPerMachine;
-                          let bg = 'bg-slate-50 text-slate-600';
-                          if (diff >= 300) bg = 'bg-blue-600 text-white font-bold';
-                          else if (diff >= 100) bg = 'bg-blue-100 text-blue-900 font-bold';
-                          else if (diff <= -300) bg = 'bg-rose-600 text-white font-bold';
-                          else if (diff <= -100) bg = 'bg-rose-100 text-rose-900 font-bold';
+                          const { bgClass } = getDiffHeatmapColor(d.avgDiffPerMachine, d.daysCount);
 
                           return (
                             <td key={d.dayOfWeek} className="p-1.5">
-                              <div className={`p-2 rounded-lg text-xs ${bg}`}>
-                                {diff >= 0 ? `+${diff}` : diff}
+                              <div
+                                title={`【${m.storeName} - ${d.dayOfWeek}曜日】\n・該当日数: ${d.daysCount}日\n・台あたり平均差枚: ${d.avgDiffPerMachine >= 0 ? '+' : ''}${d.avgDiffPerMachine}枚/台`}
+                                className={`p-2 rounded-lg text-xs ${bgClass}`}
+                              >
+                                {d.daysCount === 0
+                                  ? '-'
+                                  : d.avgDiffPerMachine >= 0
+                                    ? `+${d.avgDiffPerMachine}`
+                                    : d.avgDiffPerMachine}
                               </div>
                             </td>
                           );

@@ -9,6 +9,9 @@ import {
 } from './targetRankingEngine';
 import {
   calculateTargetMachineRanking,
+  calculateTargetMachineRankingFromIndex,
+  buildMachineFeatureIndex,
+  MachineFeatureIndex,
   MachineRankingWeights,
   DEFAULT_MACHINE_RANKING_WEIGHTS,
   TargetMachineScore,
@@ -1017,6 +1020,8 @@ export interface MachineBacktestDayEvaluation {
   };
 }
 
+export type MachineAblationVerdict = 'contributing' | 'better_removed' | 'inconclusive';
+
 export interface MachineAblationItem {
   variantKey: string;
   variantName: string;
@@ -1025,6 +1030,14 @@ export interface MachineAblationItem {
   winRate: number;
   liftDelta: number;
   recommendZeroWeight: boolean;
+  deltaCi95?: [number, number];
+  verdict?: MachineAblationVerdict;
+  verdictLabel?: string;
+  pValue?: number;
+  holmPValue?: number;
+  holmCi95?: [number, number];
+  diagnosisMessage?: string;
+  isShortPeriodWarning?: boolean;
 }
 
 export interface MachineBacktestEvaluation {
@@ -1069,6 +1082,8 @@ export interface MachineBacktestOptions {
   weights?: MachineRankingWeights;
   minPriorDays?: number; // default: 3
   onProgress?: (progress: number) => void;
+  featureIndex?: FeatureIndex;
+  machineIndex?: MachineFeatureIndex;
 }
 
 /**
@@ -1132,6 +1147,137 @@ export function computeBlockBootstrapCI(
     ciUpper,
     mean: Math.round(originalMean * 10) / 10,
   };
+}
+
+/**
+ * Normal CDF approximation using Abramowitz & Stegun 7.1.26
+ */
+export function normalCdf(z: number): number {
+  if (z < 0) return 1 - normalCdf(-z);
+  const p = 0.2316419;
+  const b1 = 0.31938153;
+  const b2 = -0.356563782;
+  const b3 = 1.781477937;
+  const b4 = -1.821255978;
+  const b5 = 1.330274429;
+  const t = 1 / (1 + p * z);
+  const poly = ((((b5 * t + b4) * t + b3) * t + b2) * t + b1) * t;
+  const pdf = Math.exp(-0.5 * z * z) / Math.sqrt(2 * Math.PI);
+  return 1 - pdf * poly;
+}
+
+/**
+ * Computes Moving Block Bootstrap CI and distribution for paired daily lift differences (all - variant).
+ * Uses fixed seed and block length (default: 7 days, 2000 iterations).
+ */
+export function computePairedBlockBootstrap(
+  pairDiffs: number[],
+  blockLength: number = 7,
+  iterations: number = 2000,
+  seed: number = 42
+): {
+  deltaMean: number;
+  ciLower: number;
+  ciUpper: number;
+  pValue: number;
+  bootstrapMeans: number[];
+} {
+  const n = pairDiffs.length;
+  if (n === 0) {
+    return { deltaMean: 0, ciLower: 0, ciUpper: 0, pValue: 1.0, bootstrapMeans: [0] };
+  }
+  const originalMean = pairDiffs.reduce((a, b) => a + b, 0) / n;
+  if (n < 2) {
+    const rounded = Math.round(originalMean * 10) / 10;
+    return {
+      deltaMean: rounded,
+      ciLower: rounded,
+      ciUpper: rounded,
+      pValue: originalMean === 0 ? 1.0 : 0.05,
+      bootstrapMeans: [rounded],
+    };
+  }
+
+  const rng = createSeededRandom(seed);
+  const effectiveBlockLength = Math.max(1, Math.min(blockLength, n));
+  const numBlocks = Math.ceil(n / effectiveBlockLength);
+  const bootstrapMeans: number[] = new Array(iterations);
+
+  for (let b = 0; b < iterations; b++) {
+    let sum = 0;
+    let count = 0;
+    for (let k = 0; k < numBlocks && count < n; k++) {
+      const startIdx = Math.floor(rng() * n);
+      for (let j = 0; j < effectiveBlockLength && count < n; j++) {
+        sum += pairDiffs[(startIdx + j) % n];
+        count++;
+      }
+    }
+    bootstrapMeans[b] = sum / n;
+  }
+
+  bootstrapMeans.sort((a, b) => a - b);
+  const lowerIdx = Math.floor(iterations * 0.025);
+  const upperIdx = Math.min(iterations - 1, Math.floor(iterations * 0.975));
+
+  const ciLower = Math.round(bootstrapMeans[lowerIdx] * 10) / 10;
+  const ciUpper = Math.round(bootstrapMeans[upperIdx] * 10) / 10;
+  const deltaMean = Math.round(originalMean * 10) / 10;
+
+  // Compute standard error from bootstrap distribution to get two-sided p-value
+  const bMean = bootstrapMeans.reduce((a, b) => a + b, 0) / iterations;
+  const bVariance = bootstrapMeans.reduce((acc, m) => acc + (m - bMean) ** 2, 0) / (iterations - 1);
+  const bSE = Math.sqrt(bVariance);
+  const z = bSE > 0 ? Math.abs(originalMean) / bSE : (originalMean !== 0 ? 99 : 0);
+  const pValue = Math.max(0, Math.min(1.0, 2 * (1 - normalCdf(z))));
+
+  return {
+    deltaMean,
+    ciLower,
+    ciUpper,
+    pValue,
+    bootstrapMeans,
+  };
+}
+
+/**
+ * Adjusts p-values and confidence intervals using Holm-Bonferroni step-down method
+ * across simultaneous hypothesis tests (m variants).
+ */
+export function computeHolmAdjustments(
+  variants: { pValue: number; bootstrapMeans: number[] }[],
+  iterations: number = 2000
+): { adjustedPVals: number[]; adjustedCIs: [number, number][] } {
+  const m = variants.length;
+  if (m === 0) return { adjustedPVals: [], adjustedCIs: [] };
+
+  const sorted = variants
+    .map((v, idx) => ({ idx, pValue: v.pValue }))
+    .sort((a, b) => a.pValue - b.pValue);
+
+  const adjustedPVals: number[] = new Array(m);
+  const adjustedCIs: [number, number][] = new Array(m);
+
+  let prevAdjP = 0;
+  for (let rank = 0; rank < m; rank++) {
+    const { idx, pValue } = sorted[rank];
+    const multiplier = m - rank;
+    const rawAdjP = Math.min(1.0, multiplier * pValue);
+    const monotonicAdjP = Math.max(prevAdjP, rawAdjP);
+    prevAdjP = monotonicAdjP;
+    adjustedPVals[idx] = Math.round(monotonicAdjP * 1000) / 1000;
+
+    const alphaRank = 0.05 / multiplier;
+    const bMeans = variants[idx].bootstrapMeans;
+    const bLen = bMeans.length;
+    const lowerIdx = Math.max(0, Math.floor(bLen * (alphaRank / 2)));
+    const upperIdx = Math.min(bLen - 1, Math.floor(bLen * (1 - alphaRank / 2)));
+    const ciLow = Math.round(bMeans[lowerIdx] * 10) / 10;
+    const ciHigh = Math.round(bMeans[upperIdx] * 10) / 10;
+    adjustedCIs[idx] = [ciLow, ciHigh];
+  }
+
+  return { adjustedPVals, adjustedCIs };
 }
 
 /**
@@ -1216,15 +1362,40 @@ export function runMachineBacktest(
     };
   }
 
+  const featureIndex =
+    options?.featureIndex || buildFeatureIndex(sortedRecords, specialDayRules, '');
+  const machineIndex =
+    options?.machineIndex ||
+    buildMachineFeatureIndex(sortedRecords, specialDayRules, { featureIndex });
+
   const rng = createSeededRandom(seed);
 
   const unfilteredDays: MachineBacktestDayEvaluation[] = [];
   const filteredDays: MachineBacktestDayEvaluation[] = [];
 
+  // Data structures for tracking ablation variant day lifts in a single pass
+  const variantDayLiftsMap: Record<string, number[]> = {
+    cohortDiffOnly: [],
+    noHighSetting: [],
+    noModelScore: [],
+    noTailZoro: [],
+  };
+  const variantWinSums: Record<string, number> = {
+    cohortDiffOnly: 0,
+    noHighSetting: 0,
+    noModelScore: 0,
+    noTailZoro: 0,
+  };
+  const variantValidCounts: Record<string, number> = {
+    cohortDiffOnly: 0,
+    noHighSetting: 0,
+    noModelScore: 0,
+    noTailZoro: 0,
+  };
+
   for (let step = 0; step < evalIndices.length; step++) {
     const evalIdx = evalIndices[step];
     const evalDay = sortedRecords[evalIdx];
-    const priorRecords = sortedRecords.slice(0, evalIdx);
     const prevDay = sortedRecords[evalIdx - 1];
 
     const dayMachines = evalDay.machines!;
@@ -1264,10 +1435,10 @@ export function runMachineBacktest(
     let bRandomDiffSum = 0;
     let bRandomWinCount = 0;
     const trials = 100;
+    const sampleSize = Math.min(topN, totalMachines);
     for (let t = 0; t < trials; t++) {
       let tDiff = 0;
       let tWin = 0;
-      const sampleSize = Math.min(topN, totalMachines);
       for (let s = 0; s < sampleSize; s++) {
         const idx = Math.floor(rng() * totalMachines);
         const rm = dayMachines[idx];
@@ -1308,11 +1479,10 @@ export function runMachineBacktest(
           }
         : { avgDiff: hallAvgDiff, avgLift: 0, avgWinRate: hallWinRate };
 
-    // Run prediction engine using prior records only
-    const rankingResult = calculateTargetMachineRanking(
+    // Run prediction engine using pre-indexed features for days before evalDay.date (Requirement 2, 3a, 3d)
+    const rankingResult = calculateTargetMachineRankingFromIndex(
       evalDay.date,
-      priorRecords,
-      specialDayRules,
+      machineIndex,
       weights,
       { minEvidenceDays: 0 }
     );
@@ -1375,24 +1545,34 @@ export function runMachineBacktest(
       // Baseline 1: Random within same models (100 trials, seed-fixed) evaluated for observed
       let bModelRandDiffSum = 0;
       let bModelRandWinCount = 0;
+      const modelLookup: (DailyMachineRecord[] | null)[] = [];
+      const fallbackLookup: DailyMachineRecord[] = [];
+      for (let i = 0; i < observedMachines.length; i++) {
+        const p = observedMachines[i];
+        const mList = modelToMachines.get(normalizeModelName(p.modelName));
+        modelLookup.push(mList && mList.length > 0 ? mList : null);
+        fallbackLookup.push(dayMachinesMap.get(p.machineNum)!);
+      }
+
+      const obsCount = observedMachines.length;
       for (let t = 0; t < trials; t++) {
         let tDiff = 0;
         let tWin = 0;
-        for (const p of observedMachines) {
-          const modelMachines = modelToMachines.get(normalizeModelName(p.modelName));
-          if (modelMachines && modelMachines.length > 0) {
-            const mIdx = Math.floor(rng() * modelMachines.length);
-            const rm = modelMachines[mIdx];
+        for (let i = 0; i < obsCount; i++) {
+          const mList = modelLookup[i];
+          if (mList) {
+            const mIdx = Math.floor(rng() * mList.length);
+            const rm = mList[mIdx];
             tDiff += rm.diff;
             if (rm.diff > 0) tWin++;
           } else {
-            const actualM = dayMachinesMap.get(p.machineNum)!;
+            const actualM = fallbackLookup[i];
             tDiff += actualM.diff;
             if (actualM.diff > 0) tWin++;
           }
         }
-        bModelRandDiffSum += tDiff / observedMachines.length;
-        bModelRandWinCount += (tWin / observedMachines.length) * 100;
+        bModelRandDiffSum += tDiff / obsCount;
+        bModelRandWinCount += (tWin / obsCount) * 100;
       }
       const baselineRandomWithinModel: MachineBaselineMetrics = {
         avgDiff: Math.round(bModelRandDiffSum / trials),
@@ -1403,23 +1583,40 @@ export function runMachineBacktest(
       // Baseline 2: Model Average evaluated for observed
       let modelAvgDiffSum = 0;
       let modelWinRateSum = 0;
-      for (const p of observedMachines) {
-        const modelMachines = modelToMachines.get(normalizeModelName(p.modelName));
-        if (modelMachines && modelMachines.length > 0) {
-          const mSum = modelMachines.reduce((a, b) => a + b.diff, 0);
-          const mWins = modelMachines.filter((m) => m.diff > 0).length;
-          modelAvgDiffSum += mSum / modelMachines.length;
-          modelWinRateSum += (mWins / modelMachines.length) * 100;
-        } else {
-          const actualM = dayMachinesMap.get(p.machineNum)!;
-          modelAvgDiffSum += actualM.diff;
-          modelWinRateSum += actualM.diff > 0 ? 100 : 0;
+      const modelStatsCache = new Map<string, { avgDiff: number; winRate: number }>();
+      for (let i = 0; i < obsCount; i++) {
+        const p = observedMachines[i];
+        const normName = normalizeModelName(p.modelName);
+        let stats = modelStatsCache.get(normName);
+        if (!stats) {
+          const modelMachines = modelToMachines.get(normName);
+          if (modelMachines && modelMachines.length > 0) {
+            let mSum = 0;
+            let mWins = 0;
+            for (let j = 0; j < modelMachines.length; j++) {
+              mSum += modelMachines[j].diff;
+              if (modelMachines[j].diff > 0) mWins++;
+            }
+            stats = {
+              avgDiff: mSum / modelMachines.length,
+              winRate: (mWins / modelMachines.length) * 100,
+            };
+          } else {
+            const actualM = fallbackLookup[i];
+            stats = {
+              avgDiff: actualM.diff,
+              winRate: actualM.diff > 0 ? 100 : 0,
+            };
+          }
+          modelStatsCache.set(normName, stats);
         }
+        modelAvgDiffSum += stats.avgDiff;
+        modelWinRateSum += stats.winRate;
       }
       const baselineModelAverage: MachineBaselineMetrics = {
-        avgDiff: Math.round(modelAvgDiffSum / observedMachines.length),
-        avgLift: Math.round(modelAvgDiffSum / observedMachines.length - hallAvgDiff),
-        avgWinRate: Math.round((modelWinRateSum / observedMachines.length) * 10) / 10,
+        avgDiff: Math.round(modelAvgDiffSum / obsCount),
+        avgLift: Math.round(modelAvgDiffSum / obsCount - hallAvgDiff),
+        avgWinRate: Math.round((modelWinRateSum / obsCount) * 10) / 10,
       };
 
       return {
@@ -1453,6 +1650,52 @@ export function runMachineBacktest(
       (r) => r.evidenceDays >= minEvidenceThreshold
     );
     filteredDays.push(evaluateSelection(filteredSelection));
+
+    // Collect ablation variant day lifts in the same single pass (Requirement 3)
+    const baseRankings = rankingResult.rankings;
+    for (const vKey of ['cohortDiffOnly', 'noHighSetting', 'noModelScore', 'noTailZoro'] as const) {
+      const vRankings = baseRankings.slice();
+      vRankings.sort((a, b) => {
+        let scoreA = a.totalScore;
+        let scoreB = b.totalScore;
+        if (vKey === 'cohortDiffOnly') {
+          scoreA = a.contributions.cohortDiffScore;
+          scoreB = b.contributions.cohortDiffScore;
+        } else if (vKey === 'noHighSetting') {
+          scoreA = Math.round((a.totalScore - a.contributions.highSettingScore) * 100) / 100 || 0;
+          scoreB = Math.round((b.totalScore - b.contributions.highSettingScore) * 100) / 100 || 0;
+        } else if (vKey === 'noModelScore') {
+          scoreA = Math.round((a.totalScore - a.contributions.modelScore) * 100) / 100 || 0;
+          scoreB = Math.round((b.totalScore - b.contributions.modelScore) * 100) / 100 || 0;
+        } else if (vKey === 'noTailZoro') {
+          scoreA = Math.round((a.totalScore - a.contributions.tailBonusScore) * 100) / 100 || 0;
+          scoreB = Math.round((b.totalScore - b.contributions.tailBonusScore) * 100) / 100 || 0;
+        }
+        if (scoreB !== scoreA) return scoreB - scoreA;
+        if (b.evidenceDays !== a.evidenceDays) return b.evidenceDays - a.evidenceDays;
+        return a.machineNum - b.machineNum;
+      });
+
+      const topCandidates = vRankings.slice(0, topN);
+      const observed = topCandidates.filter((c) => dayMachinesMap.has(c.machineNum));
+      if (observed.length > 0) {
+        let sumDiff = 0;
+        let wins = 0;
+        for (let o = 0; o < observed.length; o++) {
+          const rec = dayMachinesMap.get(observed[o].machineNum);
+          const diff = rec?.diff ?? 0;
+          sumDiff += diff;
+          if (diff > 0) wins++;
+        }
+        const avgD = Math.round(sumDiff / observed.length);
+        const lift = avgD - hallAvgDiff;
+        variantDayLiftsMap[vKey].push(lift);
+        variantWinSums[vKey] += (wins / observed.length) * 100;
+        variantValidCounts[vKey]++;
+      } else {
+        variantDayLiftsMap[vKey].push(0);
+      }
+    }
 
     if (onProgress) {
       onProgress(Math.round(((step + 1) / evalIndices.length) * 100));
@@ -1583,6 +1826,8 @@ export function runMachineBacktest(
 
   // Prompt 14: Ablation analysis over the evaluated days
   // Variants: all, cohortDiffOnly, noHighSetting, noModelScore, noTailZoro
+  const baseWeights = weights;
+
   const ablationVariants: {
     key: 'all' | 'cohortDiffOnly' | 'noHighSetting' | 'noModelScore' | 'noTailZoro';
     name: string;
@@ -1591,13 +1836,13 @@ export function runMachineBacktest(
     {
       key: 'all',
       name: '全要素（既定）',
-      weights: DEFAULT_MACHINE_RANKING_WEIGHTS,
+      weights: baseWeights,
     },
     {
       key: 'cohortDiffOnly',
       name: 'コホート差枚のみ',
       weights: {
-        ...DEFAULT_MACHINE_RANKING_WEIGHTS,
+        ...baseWeights,
         winRateWeight: 0,
         highSettingWeight: 0,
         modelScoreWeight: 0,
@@ -1610,7 +1855,7 @@ export function runMachineBacktest(
       key: 'noHighSetting',
       name: '高設定挙動なし',
       weights: {
-        ...DEFAULT_MACHINE_RANKING_WEIGHTS,
+        ...baseWeights,
         highSettingWeight: 0,
       },
     },
@@ -1618,7 +1863,7 @@ export function runMachineBacktest(
       key: 'noModelScore',
       name: '機種スコアなし',
       weights: {
-        ...DEFAULT_MACHINE_RANKING_WEIGHTS,
+        ...baseWeights,
         modelScoreWeight: 0,
       },
     },
@@ -1626,7 +1871,7 @@ export function runMachineBacktest(
       key: 'noTailZoro',
       name: '末尾・ゾロ目なし',
       weights: {
-        ...DEFAULT_MACHINE_RANKING_WEIGHTS,
+        ...baseWeights,
         tailMatchBonus: 0,
         zoroBonus: 0,
       },
@@ -1635,60 +1880,14 @@ export function runMachineBacktest(
 
   const baseEval = aggregateEvaluation(unfilteredDays);
   const baseAvgLift = baseEval.avgLift;
+  const baseDayLifts = unfilteredDays.map((d) => d.actualLift);
 
-  const ablationResults: MachineAblationItem[] = ablationVariants.map((variant) => {
-    if (variant.key === 'all') {
-      return {
-        variantKey: 'all',
-        variantName: variant.name,
-        avgLift: baseEval.avgLift,
-        ci95: baseEval.ci95,
-        winRate: baseEval.avgWinRate,
-        liftDelta: 0,
-        recommendZeroWeight: false,
-      };
-    }
-
-    // Run rankings for this variant over the evaluated days
-    const variantDayLifts: number[] = [];
-    let variantWinSum = 0;
-    let variantValidDayCount = 0;
-
-    for (const evalIdx of evalIndices) {
-      const evalDay = sortedRecords[evalIdx];
-      const recordsBefore = sortedRecords.slice(0, evalIdx);
-      const dayMachinesMap = new Map<number, DailyMachineRecord>();
-      (evalDay.machines || []).forEach((m) => dayMachinesMap.set(m.machineNum, m));
-      const hallAvgDiff = evalDay.avgDiffCoins ?? 0;
-
-      const ranking = calculateTargetMachineRanking(
-        evalDay.date,
-        recordsBefore,
-        specialDayRules,
-        variant.weights,
-        {
-          minEvidenceDays: 0,
-        }
-      );
-
-      const topCandidates = ranking.rankings.slice(0, topN);
-      const observed = topCandidates.filter((c) => dayMachinesMap.has(c.machineNum));
-      if (observed.length > 0) {
-        const sumDiff = observed.reduce((acc, m) => {
-          const rec = dayMachinesMap.get(m.machineNum);
-          return acc + (rec?.diff ?? 0);
-        }, 0);
-        const avgD = Math.round(sumDiff / observed.length);
-        const lift = avgD - hallAvgDiff;
-        variantDayLifts.push(lift);
-
-        const wins = observed.filter((m) => (dayMachinesMap.get(m.machineNum)?.diff ?? 0) > 0).length;
-        variantWinSum += (wins / observed.length) * 100;
-        variantValidDayCount++;
-      } else {
-        variantDayLifts.push(0);
-      }
-    }
+  // Compute ablation variant lifts across the same evaluation days
+  const nonAllVariants = ablationVariants.filter((v) => v.key !== 'all');
+  const evaluatedNonAll = nonAllVariants.map((variant, vIdx) => {
+    const variantDayLifts = variantDayLiftsMap[variant.key] || [];
+    const variantWinSum = variantWinSums[variant.key] || 0;
+    const variantValidDayCount = variantValidCounts[variant.key] || 0;
 
     const varAvgLift =
       variantDayLifts.length > 0
@@ -1699,26 +1898,132 @@ export function runMachineBacktest(
         ? Math.round((variantWinSum / variantValidDayCount) * 10) / 10
         : 0;
 
-    const { ciLower, ciUpper } = computeBlockBootstrapCI(
+    const { ciLower: varCiLower, ciUpper: varCiUpper } = computeBlockBootstrapCI(
       variantDayLifts,
       blockLength,
       bootstrapIterations,
       seed
     );
 
-    const liftDelta = varAvgLift - baseAvgLift;
-    // If removing this feature (or keeping only cohortDiff) results in >= same lift, recommend zero weight
-    const recommendZeroWeight = liftDelta >= 0;
+    // Prompt 15 Requirement 1: Paired differences Delta = L_all - L_variant
+    const pairDiffs = baseDayLifts.map((baseL, i) => baseL - variantDayLifts[i]);
+    const pairBootstrap = computePairedBlockBootstrap(
+      pairDiffs,
+      blockLength,
+      bootstrapIterations,
+      seed + 1000 + vIdx * 37
+    );
 
     return {
+      variant,
+      varAvgLift,
+      varCiLower,
+      varCiUpper,
+      varWinRate,
+      pairBootstrap,
+    };
+  });
+
+  // Prompt 15 Requirement 3: Multiplicity correction (Holm-Bonferroni method across 4 variants)
+  const holmInput = evaluatedNonAll.map((item) => ({
+    pValue: item.pairBootstrap.pValue,
+    bootstrapMeans: item.pairBootstrap.bootstrapMeans,
+  }));
+  const { adjustedPVals, adjustedCIs } = computeHolmAdjustments(holmInput, bootstrapIterations);
+
+  const ablationResults: MachineAblationItem[] = [];
+
+  // Add baseline 'all'
+  ablationResults.push({
+    variantKey: 'all',
+    variantName: '全要素（既定）',
+    avgLift: baseEval.avgLift,
+    ci95: baseEval.ci95,
+    winRate: baseEval.avgWinRate,
+    liftDelta: 0,
+    recommendZeroWeight: false,
+    deltaCi95: [0, 0],
+    verdict: undefined,
+    verdictLabel: '基準',
+    diagnosisMessage: '基準モデル（全要素適用）',
+    isShortPeriodWarning: evalIndices.length < 60,
+  });
+
+  // Add the 4 ablation items with interval-based decision rules
+  evaluatedNonAll.forEach((item, vIdx) => {
+    const { variant, varAvgLift, varCiLower, varCiUpper, varWinRate, pairBootstrap } = item;
+    const deltaCiLower = pairBootstrap.ciLower;
+    const deltaCiUpper = pairBootstrap.ciUpper;
+    const deltaMean = pairBootstrap.deltaMean;
+    const holmP = adjustedPVals[vIdx];
+    const holmCi = adjustedCIs[vIdx];
+
+    // Prompt 15 Requirement 2:
+    // deltaCiLower > 0 -> 「寄与あり」
+    // deltaCiUpper < 0 -> 「除去したほうが良い」
+    // crosses 0 -> 「判定できない（差は誤差の範囲）」
+    let verdict: MachineAblationVerdict;
+    let verdictLabel: string;
+    if (deltaCiLower > 0) {
+      verdict = 'contributing';
+      verdictLabel = '寄与あり';
+    } else if (deltaCiUpper < 0) {
+      verdict = 'better_removed';
+      verdictLabel = '除去したほうが良い';
+    } else {
+      verdict = 'inconclusive';
+      verdictLabel = '判定できない（差は誤差の範囲）';
+    }
+
+    // Prompt 15 Requirement 4:
+    // Safe condition for proposing zero weight:
+    // 評価営業日 >= 90日 && deltaCiUpper <= 0.10 * baseAvgLift (上限が小さい)
+    const isLongPeriod = evalIndices.length >= 90;
+    const upperThreshold = baseAvgLift > 0 ? baseAvgLift * 0.10 : 0;
+    const isUpperSmall = deltaCiUpper <= upperThreshold;
+
+    let recommendZeroWeight = false;
+    let diagnosisMessage = '';
+
+    if (verdict === 'contributing') {
+      recommendZeroWeight = false;
+      diagnosisMessage = '寄与あり（全要素対比で有意なプラス貢献）';
+    } else if (verdict === 'better_removed') {
+      if (isLongPeriod && isUpperSmall) {
+        recommendZeroWeight = true;
+        diagnosisMessage = '除去したほうが良い（重み0への見直し案あり・自動変更なし）';
+      } else {
+        recommendZeroWeight = false;
+        diagnosisMessage = '除去したほうが良い（データ不足のため判定できません）';
+      }
+    } else {
+      // verdict === 'inconclusive'
+      if (isLongPeriod && isUpperSmall) {
+        recommendZeroWeight = true;
+        diagnosisMessage = '判定できない（差は誤差の範囲・上限小のため重み0案あり）';
+      } else {
+        recommendZeroWeight = false;
+        diagnosisMessage = '判定できない（差は誤差の範囲 / データ不足のため判定できません）';
+      }
+    }
+
+    ablationResults.push({
       variantKey: variant.key,
       variantName: variant.name,
       avgLift: varAvgLift,
-      ci95: [ciLower, ciUpper],
+      ci95: [varCiLower, varCiUpper],
       winRate: varWinRate,
-      liftDelta,
+      liftDelta: Math.round(deltaMean),
       recommendZeroWeight,
-    };
+      deltaCi95: [deltaCiLower, deltaCiUpper],
+      verdict,
+      verdictLabel,
+      pValue: Math.round(pairBootstrap.pValue * 1000) / 1000,
+      holmPValue: holmP,
+      holmCi95: holmCi,
+      diagnosisMessage,
+      isShortPeriodWarning: evalIndices.length < 60,
+    });
   });
 
   return {
@@ -1785,7 +2090,10 @@ export function runMachineRollingValidation(
       const recordsBefore = sortedRecords.slice(0, i);
       const dayMachinesMap = new Map<number, DailyMachineRecord>();
       (evalDay.machines || []).forEach((m) => dayMachinesMap.set(m.machineNum, m));
-      const hallAvgDiff = evalDay.avgDiffCoins ?? 0;
+      const hallAvgDiff =
+        evalDay.machines && evalDay.machines.length > 0
+          ? Math.round(evalDay.machines.reduce((acc, m) => acc + m.diff, 0) / evalDay.machines.length)
+          : (evalDay.avgDiffCoins ?? 0);
 
       // Candidate lift
       const candRanking = calculateTargetMachineRanking(

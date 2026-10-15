@@ -4,6 +4,8 @@ import {
   exportSettingSpecsAsJson,
   validateModelSettingSpec,
   ModelSettingSpec,
+  loadAllSettingSpecsSync,
+  findSpecForModel,
 } from '../settingSpecs';
 
 describe('settingSpecs JSON import/export', () => {
@@ -113,4 +115,52 @@ describe('settingSpecs JSON import/export', () => {
     expect(result.imported[0].settings[0].bbDenom).toBe(273.1);
     expect(result.imported[0].settings[0].rbDenom).toBe(397.2);
   });
+
+  it('provides all 10 Juggler models by default and resolves aliases', () => {
+    const specs = loadAllSettingSpecsSync();
+    expect(specs.length).toBeGreaterThanOrEqual(10);
+
+    const myJug = findSpecForModel([], 'マイジャグラーV');
+    expect(myJug).not.toBeNull();
+    expect(myJug?.modelName).toBe('マイジャグラーV');
+    expect(myJug?.settings[5].payoutRate).toBe(109.4);
+
+    // Alias check
+    const imJug = findSpecForModel([], 'SアイムジャグラーEX-TP');
+    expect(imJug).not.toBeNull();
+    expect(imJug?.settings[5].payoutRate).toBe(105.5);
+
+    const girls = findSpecForModel([], 'ジャグラーガールズSS');
+    expect(girls).not.toBeNull();
+    expect(girls?.settings[5].payoutRate).toBe(107.5);
+
+    const ultra = findSpecForModel([], 'ウルトラミラクルジャグラー');
+    expect(ultra).not.toBeNull();
+    expect(ultra?.settings[5].payoutRate).toBe(108.1);
+  });
+
+  it('does NOT register non-Juggler models by default (requires manual registration)', () => {
+    // Non-Juggler models should return null if not manually registered
+    const hana = findSpecForModel([], 'キングハナハナ-30');
+    expect(hana).toBeNull();
+
+    const hanabi = findSpecForModel([], '新ハナビ');
+    expect(hanabi).toBeNull();
+
+    const versus = findSpecForModel([], 'バーサスリヴァイズ');
+    expect(versus).toBeNull();
+
+    // But once manually registered in the specs list, it is found
+    const customHana: ModelSettingSpec = {
+      modelName: 'キングハナハナ-30',
+      settings: [
+        { label: '設定1', payoutRate: 97.0 },
+        { label: '設定6', payoutRate: 110.0 },
+      ],
+    };
+    const resolvedHana = findSpecForModel([customHana], 'キングハナハナ-30');
+    expect(resolvedHana).not.toBeNull();
+    expect(resolvedHana?.settings[1].payoutRate).toBe(110.0);
+  });
 });
+

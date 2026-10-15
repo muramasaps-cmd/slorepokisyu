@@ -43,7 +43,6 @@ export interface SpecValidationResult {
 
 /**
  * 空の仕様テンプレート (初期値はすべて未設定 / 0)
- * コード内にいかなる特定機種の数値を保持しません。
  */
 export const EMPTY_SETTING_SPEC_TEMPLATE: ModelSettingSpec = {
   modelName: '',
@@ -58,6 +57,199 @@ export const EMPTY_SETTING_SPEC_TEMPLATE: ModelSettingSpec = {
     { label: '設定6', settingNum: 6, payoutRate: 0 },
   ],
 };
+
+/**
+ * デフォルト登録ジャグラー仕様テーブル
+ * （ジャグラーシリーズは本仕様テーブルにデフォルトで登録され、その他の機種はユーザーが手動で登録します）
+ */
+export const DEFAULT_JUGGLER_SPECS: ModelSettingSpec[] = [
+  {
+    modelName: 'マイジャグラーV',
+    aliases: ['マイジャグ5', 'SマイジャグラーVKD', 'SマイジャグラーV', 'マイジャグラー5'],
+    source: 'メーカー公表値',
+    settings: [
+      { label: '設定1', settingNum: 1, payoutRate: 97.0, bbDenom: 273.1, rbDenom: 409.6 },
+      { label: '設定2', settingNum: 2, payoutRate: 98.0, bbDenom: 270.8, rbDenom: 385.5 },
+      { label: '設定3', settingNum: 3, payoutRate: 99.9, bbDenom: 266.4, rbDenom: 336.1 },
+      { label: '設定4', settingNum: 4, payoutRate: 102.8, bbDenom: 254.0, rbDenom: 290.0 },
+      { label: '設定5', settingNum: 5, payoutRate: 105.3, bbDenom: 240.1, rbDenom: 268.6 },
+      { label: '設定6', settingNum: 6, payoutRate: 109.4, bbDenom: 229.1, rbDenom: 229.1 },
+    ],
+  },
+  {
+    modelName: 'マイジャグラーⅥ',
+    aliases: ['マイジャグ6', 'Sマイジャグラー6', 'マイジャグラー6'],
+    source: 'メーカー公表値',
+    settings: [
+      { label: '設定1', settingNum: 1, payoutRate: 97.0, bbDenom: 273.1, rbDenom: 409.6 },
+      { label: '設定2', settingNum: 2, payoutRate: 98.0, bbDenom: 270.8, rbDenom: 385.5 },
+      { label: '設定3', settingNum: 3, payoutRate: 99.9, bbDenom: 266.4, rbDenom: 336.1 },
+      { label: '設定4', settingNum: 4, payoutRate: 102.8, bbDenom: 254.0, rbDenom: 290.0 },
+      { label: '設定5', settingNum: 5, payoutRate: 105.3, bbDenom: 240.1, rbDenom: 268.6 },
+      { label: '設定6', settingNum: 6, payoutRate: 109.4, bbDenom: 229.1, rbDenom: 229.1 },
+    ],
+  },
+  {
+    modelName: 'ネオアイムジャグラーEX',
+    aliases: ['ネオアイム', 'アイムEXネオ', 'SネオアイムジャグラーEX'],
+    source: 'メーカー公表値',
+    settings: [
+      { label: '設定1', settingNum: 1, payoutRate: 97.0, bbDenom: 273.1, rbDenom: 439.8 },
+      { label: '設定2', settingNum: 2, payoutRate: 98.0, bbDenom: 269.7, rbDenom: 399.6 },
+      { label: '設定3', settingNum: 3, payoutRate: 99.5, bbDenom: 269.7, rbDenom: 331.0 },
+      { label: '設定4', settingNum: 4, payoutRate: 101.1, bbDenom: 259.0, rbDenom: 315.1 },
+      { label: '設定5', settingNum: 5, payoutRate: 103.3, bbDenom: 259.0, rbDenom: 255.0 },
+      { label: '設定6', settingNum: 6, payoutRate: 105.5, bbDenom: 255.0, rbDenom: 255.0 },
+    ],
+  },
+  {
+    modelName: 'ウルトラミラクルジャグラー',
+    aliases: ['ウルミラ', 'UMJ', 'Sウルトラミラクルジャグラー'],
+    source: 'メーカー公表値',
+    settings: [
+      { label: '設定1', settingNum: 1, payoutRate: 97.0, bbDenom: 267.5, rbDenom: 425.6 },
+      { label: '設定2', settingNum: 2, payoutRate: 98.1, bbDenom: 261.1, rbDenom: 402.1 },
+      { label: '設定3', settingNum: 3, payoutRate: 99.8, bbDenom: 256.0, rbDenom: 350.5 },
+      { label: '設定4', settingNum: 4, payoutRate: 102.1, bbDenom: 242.7, rbDenom: 322.8 },
+      { label: '設定5', settingNum: 5, payoutRate: 104.5, bbDenom: 233.2, rbDenom: 297.9 },
+      { label: '設定6', settingNum: 6, payoutRate: 108.1, bbDenom: 216.3, rbDenom: 277.7 },
+    ],
+  },
+  {
+    modelName: 'ミスタージャグラー',
+    aliases: ['ミスタージャグ', 'Mr.JUG', 'Sミスタージャグラー'],
+    source: 'メーカー公表値',
+    settings: [
+      { label: '設定1', settingNum: 1, payoutRate: 97.0, bbDenom: 268.6, rbDenom: 374.5 },
+      { label: '設定2', settingNum: 2, payoutRate: 98.0, bbDenom: 267.5, rbDenom: 354.2 },
+      { label: '設定3', settingNum: 3, payoutRate: 99.8, bbDenom: 260.1, rbDenom: 331.0 },
+      { label: '設定4', settingNum: 4, payoutRate: 102.7, bbDenom: 249.2, rbDenom: 291.3 },
+      { label: '設定5', settingNum: 5, payoutRate: 105.5, bbDenom: 240.9, rbDenom: 257.0 },
+      { label: '設定6', settingNum: 6, payoutRate: 107.3, bbDenom: 237.4, rbDenom: 237.4 },
+    ],
+  },
+  {
+    modelName: 'ジャグラーガールズSS',
+    aliases: ['ガールズSS', 'SジャグラーガールズSS'],
+    source: 'メーカー公表値',
+    settings: [
+      { label: '設定1', settingNum: 1, payoutRate: 97.0, bbDenom: 273.1, rbDenom: 381.0 },
+      { label: '設定2', settingNum: 2, payoutRate: 97.9, bbDenom: 270.8, rbDenom: 350.5 },
+      { label: '設定3', settingNum: 3, payoutRate: 99.9, bbDenom: 260.1, rbDenom: 316.6 },
+      { label: '設定4', settingNum: 4, payoutRate: 102.1, bbDenom: 250.1, rbDenom: 281.3 },
+      { label: '設定5', settingNum: 5, payoutRate: 104.0, bbDenom: 243.6, rbDenom: 270.8 },
+      { label: '設定6', settingNum: 6, payoutRate: 107.5, bbDenom: 226.0, rbDenom: 252.1 },
+    ],
+  },
+  {
+    modelName: 'ゴーゴージャグラー3',
+    aliases: ['ゴージャグ3', 'Sゴーゴージャグラー3'],
+    source: 'メーカー公表値',
+    settings: [
+      { label: '設定1', settingNum: 1, payoutRate: 97.2, bbDenom: 259.0, rbDenom: 354.2 },
+      { label: '設定2', settingNum: 2, payoutRate: 98.2, bbDenom: 258.0, rbDenom: 332.7 },
+      { label: '設定3', settingNum: 3, payoutRate: 99.4, bbDenom: 257.0, rbDenom: 306.2 },
+      { label: '設定4', settingNum: 4, payoutRate: 101.6, bbDenom: 254.0, rbDenom: 268.6 },
+      { label: '設定5', settingNum: 5, payoutRate: 103.8, bbDenom: 247.3, rbDenom: 247.3 },
+      { label: '設定6', settingNum: 6, payoutRate: 106.5, bbDenom: 234.9, rbDenom: 234.9 },
+    ],
+  },
+  {
+    modelName: 'ハッピージャグラーVIII',
+    aliases: ['ハッピーVIII', 'ハッピージャグラーV III', 'SハッピージャグラーV III'],
+    source: 'メーカー公表値',
+    settings: [
+      { label: '設定1', settingNum: 1, payoutRate: 97.0, bbDenom: 273.1, rbDenom: 397.2 },
+      { label: '設定2', settingNum: 2, payoutRate: 98.1, bbDenom: 270.8, rbDenom: 362.1 },
+      { label: '設定3', settingNum: 3, payoutRate: 99.9, bbDenom: 263.2, rbDenom: 332.7 },
+      { label: '設定4', settingNum: 4, payoutRate: 102.9, bbDenom: 254.0, rbDenom: 300.6 },
+      { label: '設定5', settingNum: 5, payoutRate: 105.8, bbDenom: 239.2, rbDenom: 273.1 },
+      { label: '設定6', settingNum: 6, payoutRate: 108.4, bbDenom: 226.0, rbDenom: 256.0 },
+    ],
+  },
+  {
+    modelName: 'ファンキージャグラー2',
+    aliases: ['ファンキー2', 'Sファンキージャグラー2', 'Sファンキージャグラー2KT'],
+    source: 'メーカー公表値',
+    settings: [
+      { label: '設定1', settingNum: 1, payoutRate: 97.0, bbDenom: 266.4, rbDenom: 439.8 },
+      { label: '設定2', settingNum: 2, payoutRate: 98.5, bbDenom: 259.0, rbDenom: 407.1 },
+      { label: '設定3', settingNum: 3, payoutRate: 99.8, bbDenom: 256.0, rbDenom: 366.1 },
+      { label: '設定4', settingNum: 4, payoutRate: 102.0, bbDenom: 249.2, rbDenom: 322.8 },
+      { label: '設定5', settingNum: 5, payoutRate: 104.3, bbDenom: 240.1, rbDenom: 299.3 },
+      { label: '設定6', settingNum: 6, payoutRate: 109.0, bbDenom: 219.9, rbDenom: 262.1 },
+    ],
+  },
+  {
+    modelName: 'アイムジャグラーEX（2020）',
+    aliases: [
+      'アイム2020',
+      'アイムジャグラーEX',
+      'SアイムジャグラーEX',
+      'SアイムジャグラーEX-TP',
+      'アイムジャグラー',
+    ],
+    source: 'メーカー公表値',
+    settings: [
+      { label: '設定1', settingNum: 1, payoutRate: 97.0, bbDenom: 273.1, rbDenom: 439.8 },
+      { label: '設定2', settingNum: 2, payoutRate: 98.0, bbDenom: 269.7, rbDenom: 399.6 },
+      { label: '設定3', settingNum: 3, payoutRate: 99.5, bbDenom: 269.7, rbDenom: 331.0 },
+      { label: '設定4', settingNum: 4, payoutRate: 101.1, bbDenom: 259.0, rbDenom: 315.1 },
+      { label: '設定5', settingNum: 5, payoutRate: 103.3, bbDenom: 259.0, rbDenom: 255.0 },
+      { label: '設定6', settingNum: 6, payoutRate: 105.5, bbDenom: 255.0, rbDenom: 255.0 },
+    ],
+  },
+];
+
+/**
+ * リスト内から機種名またはエイリアスで合致するスペックを検索する内部関数
+ */
+function findSpecInList(specs: ModelSettingSpec[], modelName: string): ModelSettingSpec | null {
+  if (!modelName || !specs || specs.length === 0) return null;
+
+  const targetNorm = normalizeModelName(modelName).toLowerCase();
+
+  // 1. 完全一致（機種名）
+  for (const spec of specs) {
+    const specNorm = normalizeModelName(spec.modelName).toLowerCase();
+    if (specNorm === targetNorm) {
+      return spec;
+    }
+  }
+
+  // 2. 完全一致（エイリアス）
+  for (const spec of specs) {
+    if (spec.aliases && spec.aliases.length > 0) {
+      for (const alias of spec.aliases) {
+        if (normalizeModelName(alias).toLowerCase() === targetNorm) {
+          return spec;
+        }
+      }
+    }
+  }
+
+  // 3. 部分一致（機種名）
+  for (const spec of specs) {
+    const specNorm = normalizeModelName(spec.modelName).toLowerCase();
+    if (specNorm.length >= 3 && (targetNorm.includes(specNorm) || specNorm.includes(targetNorm))) {
+      return spec;
+    }
+  }
+
+  // 4. 部分一致（エイリアス）
+  for (const spec of specs) {
+    if (spec.aliases && spec.aliases.length > 0) {
+      for (const alias of spec.aliases) {
+        const aliasNorm = normalizeModelName(alias).toLowerCase();
+        if (aliasNorm.length >= 3 && (targetNorm.includes(aliasNorm) || aliasNorm.includes(targetNorm))) {
+          return spec;
+        }
+      }
+    }
+  }
+
+  return null;
+}
 
 /**
  * 設定ラベルから数値としての設定番号を推定・解決する
@@ -141,39 +333,42 @@ export function validateModelSettingSpec(spec: ModelSettingSpec): SpecValidation
 
 /**
  * 登録済み仕様テーブルから、指定された機種名（または別名）に合致するスペックを検索する
+ * - まず登録済み仕様テーブル（ユーザー登録 + デフォルトジャグラー）を検索
+ * - 見つからない場合でも、ジャグラー機種であれば DEFAULT_JUGGLER_SPECS からフォールバック解決
+ * - それ以外の機種は登録がなければ null を返却（手動登録が必要）
  */
 export function findSpecForModel(
   registeredSpecs: ModelSettingSpec[],
   modelName: string
 ): ModelSettingSpec | null {
-  if (!modelName || !registeredSpecs || registeredSpecs.length === 0) return null;
+  if (!modelName) return null;
 
-  const targetNorm = normalizeModelName(modelName).toLowerCase();
+  // 1. 登録済み仕様テーブルから検索
+  const found = findSpecInList(registeredSpecs, modelName);
+  if (found) return found;
 
-  for (const spec of registeredSpecs) {
-    const specNorm = normalizeModelName(spec.modelName).toLowerCase();
-    if (specNorm === targetNorm) {
-      return spec;
-    }
-    // Check aliases
-    if (spec.aliases && spec.aliases.length > 0) {
-      for (const alias of spec.aliases) {
-        if (normalizeModelName(alias).toLowerCase() === targetNorm) {
-          return spec;
-        }
-      }
+  // 2. ジャグラーシリーズであればデフォルトジャグラー仕様からフォールバック検索
+  return findSpecInList(DEFAULT_JUGGLER_SPECS, modelName);
+}
+
+/**
+ * 保存された機種仕様リストにデフォルトジャグラー仕様をマージする
+ * （ユーザーが既にカスタマイズ保存している機種は上書きせず維持）
+ */
+export function mergeWithDefaultJugglerSpecs(specs: ModelSettingSpec[]): ModelSettingSpec[] {
+  const result = [...specs];
+  for (const def of DEFAULT_JUGGLER_SPECS) {
+    const normDef = normalizeModelName(def.modelName).toLowerCase();
+    const exists = result.some(
+      (s) =>
+        normalizeModelName(s.modelName).toLowerCase() === normDef ||
+        (s.aliases && s.aliases.some((a) => normalizeModelName(a).toLowerCase() === normDef))
+    );
+    if (!exists) {
+      result.push(def);
     }
   }
-
-  // Substring fuzzy matching as secondary fallback
-  for (const spec of registeredSpecs) {
-    const specNorm = normalizeModelName(spec.modelName).toLowerCase();
-    if (specNorm.length >= 3 && (targetNorm.includes(specNorm) || specNorm.includes(targetNorm))) {
-      return spec;
-    }
-  }
-
-  return null;
+  return result;
 }
 
 /* =====================================================================
@@ -209,6 +404,7 @@ function openSpecsDb(): Promise<IDBDatabase> {
 
 /**
  * Synchronous read from cache / localStorage (for immediate initial render)
+ * ジャグラーシリーズはデフォルトで登録済みとしてロードされます
  */
 export function loadAllSettingSpecsSync(): ModelSettingSpec[] {
   if (memorySpecsCache !== null) {
@@ -220,20 +416,22 @@ export function loadAllSettingSpecsSync(): ModelSettingSpec[] {
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          memorySpecsCache = parsed;
-          return parsed;
+          const merged = mergeWithDefaultJugglerSpecs(parsed);
+          memorySpecsCache = merged;
+          return merged;
         }
       }
     } catch {
       // ignore parse errors
     }
   }
-  memorySpecsCache = [];
-  return [];
+  memorySpecsCache = [...DEFAULT_JUGGLER_SPECS];
+  return memorySpecsCache;
 }
 
 /**
  * Asynchronous load from IndexedDB (with localStorage synchronization)
+ * ジャグラーシリーズはデフォルトで登録済みとしてロード・ストア同期されます
  */
 export async function loadAllSettingSpecs(): Promise<ModelSettingSpec[]> {
   try {
@@ -247,13 +445,18 @@ export async function loadAllSettingSpecs(): Promise<ModelSettingSpec[]> {
     });
 
     if (specs && specs.length > 0) {
-      memorySpecsCache = specs;
+      const merged = mergeWithDefaultJugglerSpecs(specs);
+      memorySpecsCache = merged;
       try {
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(specs));
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(merged));
       } catch {
         // storage quota fallback
       }
-      return specs;
+      return merged;
+    } else {
+      // IndexedDB store is empty: seed default Juggler specs into storage
+      await saveAllSettingSpecs(DEFAULT_JUGGLER_SPECS);
+      return [...DEFAULT_JUGGLER_SPECS];
     }
   } catch {
     // IndexedDB failed or in mock environment, fallback to sync

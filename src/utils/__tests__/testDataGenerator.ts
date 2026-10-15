@@ -1,4 +1,4 @@
-import { DailyRecord, DailyModelRecord, DailyTailRecord, SpecialDayRules } from '../../data/types';
+import { DailyRecord, DailyModelRecord, DailyTailRecord, DailyMachineRecord, SpecialDayRules } from '../../data/types';
 import { calculateDayOfWeek, isDateSpecialDay, processStoreData } from '../dataEngine';
 
 export const SYNTHETIC_MODELS = [
@@ -163,4 +163,100 @@ export function generateSyntheticDailyRecords(
 
   const processed = processStoreData(rawRecords, 46, 50, 70, specialRules);
   return processed.dailyRecords;
+}
+
+/**
+ * Generates synthetic daily records with machine-level granularity
+ * with optional true bias on specified machine numbers.
+ */
+export function createSyntheticMachineRecords(options: {
+  daysCount: number;
+  machinesCount: number;
+  biasedMachineNums?: number[]; // Machine numbers with true edge
+  biasBonus?: number; // Added diffCoins for biased machines
+  seed?: number;
+}): DailyRecord[] {
+  const { daysCount, machinesCount, biasedMachineNums = [], biasBonus = 2000, seed = 12345 } = options;
+  let s = seed >>> 0;
+  const rng = () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+
+  const records: DailyRecord[] = [];
+  const baseDate = new Date('2025-01-01');
+
+  const models = ['アイムジャグラーEX', 'マイジャグラーV', 'スマスロ北斗の拳', '押忍！番長4'];
+
+  for (let d = 0; d < daysCount; d++) {
+    const curDate = new Date(baseDate);
+    curDate.setDate(baseDate.getDate() + d);
+    const dateStr = curDate.toISOString().slice(0, 10);
+    const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][curDate.getDay()];
+
+    const machines: DailyMachineRecord[] = [];
+    let dayTotalDiff = 0;
+    let dayTotalGames = 0;
+
+    for (let m = 1; m <= machinesCount; m++) {
+      const machineNum = 100 + m;
+      const modelName = models[(m - 1) % models.length];
+      const isBiased = biasedMachineNums.includes(machineNum);
+
+      const noise = (rng() - 0.5) * 800;
+      const baseDiff = isBiased ? biasBonus + noise : -50 + noise;
+      const diffCoins = Math.round(baseDiff);
+      const games = isBiased ? 6000 + Math.round(rng() * 500) : 3000 + Math.round(rng() * 500);
+      const payoutRate = games > 0 ? Math.round(((games * 3 + diffCoins) / (games * 3)) * 1000) / 10 : 100;
+
+      machines.push({
+        machineNum,
+        modelName,
+        games,
+        diff: diffCoins,
+        payoutRate,
+        bb: isBiased ? 25 : 10,
+        rb: isBiased ? 22 : 8,
+      });
+
+      dayTotalDiff += diffCoins;
+      dayTotalGames += games;
+    }
+
+    const inCoins = dayTotalGames * 3;
+    const outCoins = inCoins + dayTotalDiff;
+    const payoutRate = inCoins > 0 ? (outCoins / inCoins) * 100 : 100;
+
+    records.push({
+      date: dateStr,
+      year: curDate.getFullYear(),
+      month: curDate.getMonth() + 1,
+      day: curDate.getDate(),
+      yearMonth: `${curDate.getFullYear()}-${String(curDate.getMonth() + 1).padStart(2, '0')}`,
+      dayOfWeek,
+      totalDiffCoins: dayTotalDiff,
+      avgDiffCoins: Math.round(dayTotalDiff / machinesCount),
+      avgGames: Math.round(dayTotalGames / machinesCount),
+      winRate: Math.round((machines.filter((m) => m.diff > 0).length / machinesCount) * 100),
+      winMachines: machines.filter((m) => m.diff > 0).length,
+      totalMachines: machinesCount,
+      hallCoinProfit: -dayTotalDiff,
+      playerCoinProfit: dayTotalDiff,
+      hallYenProfit: -dayTotalDiff * 20,
+      playerYenProfit: dayTotalDiff * 20,
+      inCoins,
+      outCoins,
+      payoutRate,
+      estimatedRevenue: 0,
+      exchangeGapProfit: 0,
+      gModelHallProfit: -dayTotalDiff * 20,
+      gModelPlayerProfit: dayTotalDiff * 20,
+      isOldEventDay: false,
+      is7Day: false,
+      notable: '',
+      machines,
+    });
+  }
+
+  return records;
 }

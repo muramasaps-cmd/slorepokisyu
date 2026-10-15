@@ -239,7 +239,7 @@ export function calculateCrossStoreRanking(
           targetDate,
           priorRecords,
           store.specialDayRules,
-          undefined,
+          store.customMachineRankingWeights,
           {
             rankingWeights: store.customRankingWeights,
             includeReusedMachines: store.includeReusedMachinesInStats,

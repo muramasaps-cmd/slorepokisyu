@@ -234,6 +234,59 @@ describe('runMachineBacktest & computeBlockBootstrapCI', () => {
       }
     });
 
+    it('confirms that adding any element on pure noise data is never judged as superior (Prompt completion condition)', () => {
+      // Test across multiple noise datasets (independent seeds)
+      const testSeeds = [11111, 22222, 55555];
+
+      for (const noiseSeed of testSeeds) {
+        const noiseData = createSyntheticMachineRecords({
+          daysCount: 25,
+          machinesCount: 16,
+          biasedMachineNums: [],
+          seed: noiseSeed,
+        });
+
+        const result = runMachineBacktest(noiseData, undefined, {
+          topN: 3,
+          bootstrapIterations: 300,
+          minPriorDays: 5,
+          seed: 42,
+        });
+
+        expect(result.ablationResults).toBeDefined();
+        const ablationList = result.ablationResults!;
+
+        // 1. Every variant (all, cohortDiffOnly, noHighSetting, noModelScore, noTailZoro) has CI lower <= 0
+        for (const item of ablationList) {
+          expect(item.ci95[0]).toBeLessThanOrEqual(0);
+        }
+
+        // 2. Element additions evaluated via rolling validation:
+        // Trying to change or add features on noise data must not result in isRecommended = true
+        const candidateVariants = [
+          { highSettingWeight: 0 },
+          { modelScoreWeight: 0 },
+          { tailMatchBonus: 0, zoroBonus: 0 },
+          { highSettingWeight: 0, modelScoreWeight: 0, tailMatchBonus: 0, zoroBonus: 0 },
+        ];
+
+        for (const candidate of candidateVariants) {
+          const rolling = runMachineRollingValidation(
+            noiseData,
+            undefined,
+            candidate,
+            undefined,
+            3
+          );
+          if (rolling) {
+            // Over noise, no modification should be recommended
+            expect(rolling.isRecommended).toBe(false);
+            expect(rolling.bootstrapCiLower).toBeLessThanOrEqual(0);
+          }
+        }
+      }
+    });
+
     it('uses rolling validation (3-5 splits) and block bootstrap to reject weight changes on noise data', () => {
       const noiseData = createSyntheticMachineRecords({
         daysCount: 25,
@@ -262,5 +315,150 @@ describe('runMachineBacktest & computeBlockBootstrapCI', () => {
       expect(rollingResult.isRecommended).toBe(false);
       expect(rollingResult.verdictMessage).toContain('標準維持推奨');
     });
+
+    it('confirms that model score ablation drops lift when models have strong differential differences (Prompt 15 Requirement 6)', () => {
+      const daysCount = 35;
+      const records: DailyRecord[] = [];
+      const baseDate = new Date('2026-03-01T00:00:00Z');
+
+      for (let d = 0; d < daysCount; d++) {
+        const curDate = new Date(baseDate.getTime() + d * 86400000);
+        const dateStr = curDate.toISOString().slice(0, 10);
+        const isEvalDay = d >= 10;
+
+        // Model A: machines 101, 102 perform well (+1500 on eval days, 0 on prior days)
+        // Model B: machine 222 (Zoro) has temporary prior fluke (+900) but drops to -1500 on eval days.
+        // Model B: machine 202 is consistently negative (-3000), making Model B's model score strongly negative.
+        const m101Diff = isEvalDay ? 1500 : 0;
+        const m102Diff = isEvalDay ? 1500 : 0;
+        const m222Diff = isEvalDay ? -1500 : 900;
+        const m202Diff = -3000;
+
+        const machines: DailyMachineRecord[] = [
+          { machineNum: 101, modelName: 'マイジャグラーV', games: 5000, diff: m101Diff, bb: 15, rb: 15 },
+          { machineNum: 102, modelName: 'マイジャグラーV', games: 5000, diff: m102Diff, bb: 15, rb: 15 },
+          { machineNum: 222, modelName: 'パチスロ北斗の拳', games: 5000, diff: m222Diff, bb: 15, rb: 15, isZoro: true },
+          { machineNum: 202, modelName: 'パチスロ北斗の拳', games: 5000, diff: m202Diff, bb: 5, rb: 5 },
+        ];
+
+        const totalDiff = machines.reduce((acc, m) => acc + m.diff, 0);
+        const inCoins = machines.reduce((acc, m) => acc + m.games * 3, 0);
+        const outCoins = inCoins + totalDiff;
+
+        records.push({
+          date: dateStr,
+          year: curDate.getFullYear(),
+          month: curDate.getMonth() + 1,
+          day: curDate.getDate(),
+          yearMonth: dateStr.slice(0, 7),
+          dayOfWeek: ['日', '月', '火', '水', '木', '金', '土'][curDate.getDay()],
+          totalDiffCoins: totalDiff,
+          avgDiffCoins: Math.round(totalDiff / machines.length),
+          avgGames: 5000,
+          winRate: 50,
+          winMachines: 2,
+          totalMachines: 4,
+          hallCoinProfit: -totalDiff,
+          playerCoinProfit: totalDiff,
+          hallYenProfit: 0,
+          playerYenProfit: 0,
+          inCoins,
+          outCoins,
+          payoutRate: inCoins > 0 ? (outCoins / inCoins) * 100 : 100,
+          estimatedRevenue: 0,
+          exchangeGapProfit: 0,
+          gModelHallProfit: 0,
+          gModelPlayerProfit: 0,
+          isOldEventDay: false,
+          is7Day: false,
+          notable: '',
+          models: [
+            {
+              modelName: 'マイジャグラーV',
+              totalMachines: 2,
+              totalDiffCoins: m101Diff + m102Diff,
+              avgDiffCoins: Math.round((m101Diff + m102Diff) / 2),
+              avgGames: 5000,
+              winRate: 100,
+              winMachines: 2,
+            },
+            {
+              modelName: 'パチスロ北斗の拳',
+              totalMachines: 2,
+              totalDiffCoins: m222Diff + m202Diff,
+              avgDiffCoins: Math.round((m222Diff + m202Diff) / 2),
+              avgGames: 5000,
+              winRate: 0,
+              winMachines: 0,
+            },
+          ],
+          tails: [],
+          machines,
+        });
+      }
+
+      const res = runMachineBacktest(records, undefined, {
+        topN: 2,
+        bootstrapIterations: 500,
+        minPriorDays: 10,
+        seed: 42,
+      });
+
+      expect(res.ablationResults).toBeDefined();
+      const allItem = res.ablationResults!.find((r) => r.variantKey === 'all')!;
+      const noModelItem = res.ablationResults!.find((r) => r.variantKey === 'noModelScore')!;
+
+      expect(allItem).toBeDefined();
+      expect(noModelItem).toBeDefined();
+
+      // Lift of "all" must be strictly greater than "noModelScore" (Requirement 6)
+      expect(allItem.avgLift).toBeGreaterThan(noModelItem.avgLift);
+      // liftDelta (Δ = all - noModelScore) must be strictly positive
+      expect(noModelItem.liftDelta).toBeGreaterThan(0);
+    });
+
+    it('verifies interval decision rules, Holm adjustments, and safe zero-weight proposal requirements', () => {
+      const noiseData = createSyntheticMachineRecords({
+        daysCount: 40, // < 60 days to test short period warning, < 90 days to test safe 90-day threshold
+        machinesCount: 16,
+        biasedMachineNums: [],
+        seed: 99999,
+      });
+
+      const res = runMachineBacktest(noiseData, undefined, {
+        topN: 3,
+        bootstrapIterations: 500,
+        minPriorDays: 5,
+        seed: 42,
+      });
+
+      expect(res.ablationResults).toBeDefined();
+      const ablationList = res.ablationResults!;
+
+      // Requirement 5: Evaluation period < 60 days gets isShortPeriodWarning = true
+      for (const item of ablationList) {
+        expect(item.isShortPeriodWarning).toBe(true);
+      }
+
+      // Requirement 3: Multiplicity correction (Holm method) p-values and CIs are computed
+      const nonAll = ablationList.filter((item) => item.variantKey !== 'all');
+      for (const item of nonAll) {
+        expect(item.deltaCi95).toBeDefined();
+        expect(item.deltaCi95![0]).toBeLessThanOrEqual(item.deltaCi95![1]);
+        expect(item.holmPValue).toBeDefined();
+        expect(item.holmPValue!).toBeGreaterThanOrEqual(0);
+        expect(item.holmPValue!).toBeLessThanOrEqual(1);
+        expect(item.holmCi95).toBeDefined();
+
+        // Requirement 2: On noise data, element is never judged as contributing
+        expect(item.verdict).not.toBe('contributing');
+        expect(item.deltaCi95![0]).toBeLessThanOrEqual(0);
+
+        // Requirement 4: Since evaluated days < 90, recommendZeroWeight MUST be false
+        expect(item.recommendZeroWeight).toBe(false);
+        expect(item.diagnosisMessage).toContain('データ不足のため判定できません');
+      }
+    });
   });
 });
+

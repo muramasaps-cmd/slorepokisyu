@@ -16,6 +16,8 @@
 import { AggregatedModelStat, DailyRecord, DailyMachineRecord } from '../data/types';
 import { isAType } from './modelFilterUtils';
 
+import { findSpecForModel, loadAllSettingSpecsSync, resolveSettingNum } from './settingSpecs';
+
 /** 各設定（1〜6）の公表機械割 (%) */
 export type SettingSpecs = Record<number, number>;
 
@@ -25,72 +27,60 @@ export interface ATypeCatalogEntry {
   specs: SettingSpecs;
 }
 
-/** 主要Aタイプ機種の公表機械割カタログ */
+/**
+ * 主要ジャグラーシリーズのデフォルト公表機械割カタログ
+ * （ジャグラーシリーズのみデフォルトで登録・認識され、その他のAタイプ機種は仕様テーブルへの手動登録が必要です）
+ */
 export const KNOWN_A_TYPE_CATALOG: ATypeCatalogEntry[] = [
   {
-    keyword: /マイジャグラー|my juggler/i,
+    keyword: /マイジャグラーV|マイジャグ5|マイジャグラー5/i,
     displayName: 'マイジャグラーV',
     specs: { 1: 97.0, 2: 98.0, 3: 99.9, 4: 102.8, 5: 105.3, 6: 109.4 },
   },
   {
-    keyword: /アイムジャグラー|im juggler/i,
-    displayName: 'アイムジャグラーEX',
-    specs: { 1: 97.0, 2: 98.0, 3: 99.5, 4: 101.1, 5: 102.8, 6: 105.5 },
+    keyword: /マイジャグラーⅥ|マイジャグ6|マイジャグラー6/i,
+    displayName: 'マイジャグラーⅥ',
+    specs: { 1: 97.0, 2: 98.0, 3: 99.9, 4: 102.8, 5: 105.3, 6: 109.4 },
+  },
+  {
+    keyword: /ネオアイム|ネオアイムジャグラー/i,
+    displayName: 'ネオアイムジャグラーEX',
+    specs: { 1: 97.0, 2: 98.0, 3: 99.5, 4: 101.1, 5: 103.3, 6: 105.5 },
+  },
+  {
+    keyword: /ウルトラミラクル|ウルミラ/i,
+    displayName: 'ウルトラミラクルジャグラー',
+    specs: { 1: 97.0, 2: 98.1, 3: 99.8, 4: 102.1, 5: 104.5, 6: 108.1 },
+  },
+  {
+    keyword: /ミスタージャグラー|ミスタージャグ/i,
+    displayName: 'ミスタージャグラー',
+    specs: { 1: 97.0, 2: 98.0, 3: 99.8, 4: 102.7, 5: 105.5, 6: 107.3 },
+  },
+  {
+    keyword: /ジャグラーガールズ|ガールズSS/i,
+    displayName: 'ジャグラーガールズSS',
+    specs: { 1: 97.0, 2: 97.9, 3: 99.9, 4: 102.1, 5: 104.0, 6: 107.5 },
+  },
+  {
+    keyword: /ゴーゴージャグラー|ゴージャグ/i,
+    displayName: 'ゴーゴージャグラー3',
+    specs: { 1: 97.2, 2: 98.2, 3: 99.4, 4: 101.6, 5: 103.8, 6: 106.5 },
+  },
+  {
+    keyword: /ハッピージャグラー|ハッピーVIII|ハッピーV\s*III/i,
+    displayName: 'ハッピージャグラーVIII',
+    specs: { 1: 97.0, 2: 98.1, 3: 99.9, 4: 102.9, 5: 105.8, 6: 108.4 },
   },
   {
     keyword: /ファンキー|funky/i,
     displayName: 'ファンキージャグラー2',
-    specs: { 1: 97.0, 2: 98.5, 3: 100.2, 4: 102.0, 5: 104.3, 6: 109.0 },
+    specs: { 1: 97.0, 2: 98.5, 3: 99.8, 4: 102.0, 5: 104.3, 6: 109.0 },
   },
   {
-    keyword: /ゴーゴー|gogo juggler/i,
-    displayName: 'ゴーゴージャグラー3',
-    specs: { 1: 97.0, 2: 98.2, 3: 99.8, 4: 102.1, 5: 104.2, 6: 106.5 },
-  },
-  {
-    keyword: /ハッピー|happy juggler/i,
-    displayName: 'ハッピージャグラーV III',
-    specs: { 1: 97.0, 2: 97.9, 3: 99.9, 4: 102.9, 5: 105.8, 6: 108.4 },
-  },
-  {
-    keyword: /ミスター|mr\.? juggler/i,
-    displayName: 'ミスタージャグラー',
-    specs: { 1: 97.0, 2: 98.1, 3: 100.1, 4: 102.6, 5: 105.4, 6: 108.3 },
-  },
-  {
-    keyword: /ハナハナ|キングハナ|ドラゴンハナ|ホウオウ/i,
-    displayName: 'キングハナハナ-30',
-    specs: { 1: 97.0, 2: 99.0, 3: 101.0, 4: 104.0, 5: 107.0, 6: 110.0 },
-  },
-  {
-    keyword: /新ハナビ|花火/i,
-    displayName: '新ハナビ',
-    specs: { 1: 98.0, 2: 100.0, 3: 102.0, 4: 104.0, 5: 106.0, 6: 108.0 },
-  },
-  {
-    keyword: /バーサス|versus/i,
-    displayName: 'バーサスリヴァイズ',
-    specs: { 1: 98.0, 2: 100.0, 3: 102.0, 4: 104.0, 5: 106.0, 6: 108.0 },
-  },
-  {
-    keyword: /クランキー|cranky/i,
-    displayName: 'クランキークレスト',
-    specs: { 1: 98.0, 2: 100.0, 3: 102.0, 4: 104.0, 5: 106.0, 6: 108.0 },
-  },
-  {
-    keyword: /パルサー|palsar/i,
-    displayName: 'ニューパルサーSP',
-    specs: { 1: 97.5, 2: 98.8, 3: 100.5, 4: 103.2, 5: 105.5, 6: 108.0 },
-  },
-  {
-    keyword: /ガメラ|gamera/i,
-    displayName: 'ガメラ2',
-    specs: { 1: 98.0, 2: 99.5, 3: 102.0, 4: 104.5, 5: 107.0, 6: 110.0 },
-  },
-  {
-    keyword: /ディスクアップ|disc up/i,
-    displayName: 'ディスクアップ2',
-    specs: { 1: 99.4, 2: 101.1, 3: 103.0, 4: 105.2, 5: 107.5, 6: 109.8 },
+    keyword: /アイムジャグラー|im\s*juggler|アイム2020/i,
+    displayName: 'アイムジャグラーEX（2020）',
+    specs: { 1: 97.0, 2: 98.0, 3: 99.5, 4: 101.1, 5: 103.3, 6: 105.5 },
   },
 ];
 
@@ -111,17 +101,34 @@ export interface ModelSpecsResolution {
   isKnownCatalog: boolean;
 }
 
-/** 機種名から公表機械割スペックを取得 */
+/** 機種名から公表機械割スペックを取得（仕様テーブル優先、ジャグラーはデフォルト解決、他は手動登録必要） */
 export function resolveATypeSpecs(modelName: string): ModelSpecsResolution {
   if (!modelName) {
     return {
-      modelName,
+      modelName: '',
       displayName: '標準Aタイプ',
       specs: DEFAULT_A_TYPE_SPECS,
       isKnownCatalog: false,
     };
   }
 
+  // 1. 仕様テーブル（デフォルト登録ジャグラー + ユーザー手動登録機種）から検索
+  const registeredSpec = findSpecForModel(loadAllSettingSpecsSync(), modelName);
+  if (registeredSpec && registeredSpec.settings && registeredSpec.settings.length > 0) {
+    const specsMap: SettingSpecs = {};
+    registeredSpec.settings.forEach((s, idx) => {
+      const num = resolveSettingNum(s, idx);
+      specsMap[num] = s.payoutRate;
+    });
+    return {
+      modelName,
+      displayName: registeredSpec.modelName,
+      specs: specsMap,
+      isKnownCatalog: true,
+    };
+  }
+
+  // 2. カタログ定義（ジャグラーシリーズ）からのフォールバック検索
   for (const entry of KNOWN_A_TYPE_CATALOG) {
     if (entry.keyword.test(modelName)) {
       return {
@@ -133,6 +140,7 @@ export function resolveATypeSpecs(modelName: string): ModelSpecsResolution {
     }
   }
 
+  // 3. ジャグラー以外の未登録機種: 手動登録が必要（isKnownCatalog: false）
   return {
     modelName,
     displayName: modelName,

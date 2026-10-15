@@ -3,6 +3,9 @@ import { DailyRecord, DailyMachineRecord, SpecialDayRules, RankingWeights, Machi
 import {
   extractTargetCohorts,
   calculateTargetDateRanking,
+  calculateTargetDateRankingFromIndex,
+  buildFeatureIndex,
+  FeatureIndex,
   DEFAULT_RANKING_WEIGHTS,
 } from './targetRankingEngine';
 import { isAType, isJuggler } from './modelFilterUtils';
@@ -22,6 +25,15 @@ export const DEFAULT_MACHINE_RANKING_WEIGHTS: MachineRankingWeights = {
   shrinkageK: 3,
 };
 
+export interface MachineFeatureIndex {
+  dailyRecords: DailyRecord[];
+  sortedPastRecords: DailyRecord[];
+  specialDayRules?: SpecialDayRules;
+  aliasDictionary?: Record<string, string>;
+  includeReusedMachines?: boolean;
+  featureIndex: FeatureIndex;
+}
+
 export interface TargetMachineRankingOptions {
   recentStateWeight?: number; // overrides weights.recentStateWeight (default 0)
   minEvidenceDays?: number; // minimum total evidence days to include in rankings
@@ -32,6 +44,10 @@ export interface TargetMachineRankingOptions {
   includeReusedMachines?: boolean;
   /** 機種名の別名辞書 */
   aliasDictionary?: Record<string, string>;
+  /** 事前に構築された特徴量インデックス（重複計算の排除用） */
+  featureIndex?: FeatureIndex;
+  /** 事前に構築された台番特徴量インデックス */
+  machineIndex?: MachineFeatureIndex;
 }
 
 export type MachineConfidenceLevel = '高' | '中' | '低';
@@ -241,12 +257,46 @@ export function extractMachineHistoryByModelChange(
 }
 
 /**
- * Main engine function calculating target machine rankings for a target date.
+ * Precomputes weight-independent machine feature index.
  */
-export function calculateTargetMachineRanking(
-  targetDate: string,
+export function buildMachineFeatureIndex(
   dailyRecords: DailyRecord[],
   specialDayRules?: SpecialDayRules,
+  options?: TargetMachineRankingOptions
+): MachineFeatureIndex {
+  const aliasDictionary = options?.aliasDictionary;
+  const includeReusedMachines = options?.includeReusedMachines;
+  const featureIndex =
+    options?.featureIndex ||
+    buildFeatureIndex(dailyRecords, specialDayRules, '', {
+      includeReusedMachines,
+      aliasDictionary,
+    });
+
+  const rawRecords = dailyRecords || [];
+  const filtered = includeReusedMachines
+    ? rawRecords
+    : rawRecords.filter((r) => !r.isReusedMachines && r.machines && r.machines.length > 0);
+  const sortedPastRecords = [...(filtered.length > 0 ? filtered : rawRecords)].sort((a, b) =>
+    a.date.localeCompare(b.date)
+  );
+
+  return {
+    dailyRecords,
+    sortedPastRecords,
+    specialDayRules,
+    aliasDictionary,
+    includeReusedMachines,
+    featureIndex,
+  };
+}
+
+/**
+ * Calculates target machine rankings for a target date from pre-indexed machine features.
+ */
+export function calculateTargetMachineRankingFromIndex(
+  targetDate: string,
+  machineIndex: MachineFeatureIndex,
   weights?: Partial<MachineRankingWeights>,
   options?: TargetMachineRankingOptions
 ): TargetMachineRankingResult {
@@ -278,16 +328,10 @@ export function calculateTargetMachineRanking(
   }
 
   // 1. Strictly use historical records strictly before targetDate (NO FUTURE DATA)
-  const rawPast = (dailyRecords || []).filter((r) => r.date < targetDate);
-  // By default, only use days with machine-level data and exclude machine-imputed days (isReusedMachines)
-  const filteredPast = options?.includeReusedMachines
-    ? rawPast
-    : rawPast.filter((r) => !r.isReusedMachines && r.machines && r.machines.length > 0);
-  const pastRecords = filteredPast.length > 0 ? filteredPast : rawPast;
-  pastRecords.sort((a, b) => a.date.localeCompare(b.date));
+  const pastRecords = machineIndex.sortedPastRecords.filter((r) => r.date < targetDate);
 
   // Determine target date metadata
-  const cohortResult = extractTargetCohorts(targetDate, pastRecords, specialDayRules);
+  const cohortResult = extractTargetCohorts(targetDate, pastRecords, machineIndex.specialDayRules);
   if (!cohortResult || !cohortResult.dow) {
     return {
       targetDate,
@@ -307,7 +351,6 @@ export function calculateTargetMachineRanking(
   const primaryCohort = cohortResult.primaryCohort || [];
 
   // Determine reference business day (直近の営業日)
-  // 対象日より前で、台番データ(machines)が存在する直近の営業日を探す
   const daysWithMachines = pastRecords.filter(
     (r) => r.machines && r.machines.length > 0
   );
@@ -320,7 +363,6 @@ export function calculateTargetMachineRanking(
   const activeWithinDays = options?.activeWithinDays;
 
   if (activeWithinDays !== undefined && activeWithinDays > 0) {
-    // 直近N日以内に出現した台も対象にする
     const cutoffDateObj = new Date(parsedTargetDate);
     cutoffDateObj.setDate(cutoffDateObj.getDate() - activeWithinDays);
     const cutoffDateStr = cutoffDateObj.toISOString().slice(0, 10);
@@ -333,7 +375,6 @@ export function calculateTargetMachineRanking(
       }
     }
   } else if (referenceRecord && referenceRecord.machines) {
-    // 既定: 基準日に存在した台のみ
     referenceRecord.machines.forEach((m) => activeMachineNums.add(m.machineNum));
   }
 
@@ -353,27 +394,28 @@ export function calculateTargetMachineRanking(
   const primaryCohortDateSet = new Set(primaryCohort.map((r) => r.date));
 
   // 2. Extract machine histories respecting model replacement cutoffs
-  const machineDataMap = extractMachineHistoryByModelChange(pastRecords, options?.aliasDictionary);
-
-  // 3. Obtain model scores from existing target ranking engine
-  const rankingWeights = options?.rankingWeights || DEFAULT_RANKING_WEIGHTS;
-  const modelForecast = calculateTargetDateRanking(
-    targetDate,
+  const machineDataMap = extractMachineHistoryByModelChange(
     pastRecords,
-    specialDayRules,
-    '',
-    rankingWeights,
-    {
-      includeReusedMachines: options?.includeReusedMachines,
-      aliasDictionary: options?.aliasDictionary,
-    }
+    options?.aliasDictionary || machineIndex.aliasDictionary
+  );
+
+  // 3. Obtain model scores from pre-indexed target ranking engine (Requirement 2 & 3d)
+  const rankingWeights = options?.rankingWeights || DEFAULT_RANKING_WEIGHTS;
+  const modelForecast = calculateTargetDateRankingFromIndex(
+    targetDate,
+    machineIndex.featureIndex,
+    undefined,
+    rankingWeights
   );
 
   const modelScoreMap = new Map<string, number>();
   if (modelForecast?.modelRankings) {
     for (let i = 0; i < modelForecast.modelRankings.length; i++) {
       const mr = modelForecast.modelRankings[i];
-      modelScoreMap.set(normalizeModelName(mr.modelName, options?.aliasDictionary), mr.compositeScore);
+      modelScoreMap.set(
+        normalizeModelName(mr.modelName, options?.aliasDictionary || machineIndex.aliasDictionary),
+        mr.compositeScore
+      );
     }
   }
 
@@ -644,3 +686,21 @@ export function calculateTargetMachineRanking(
     referenceDate,
   };
 }
+
+/**
+ * Main engine function calculating target machine rankings for a target date.
+ * Public wrapper preserving signature and exact output.
+ */
+export function calculateTargetMachineRanking(
+  targetDate: string,
+  dailyRecords: DailyRecord[],
+  specialDayRules?: SpecialDayRules,
+  weights?: Partial<MachineRankingWeights>,
+  options?: TargetMachineRankingOptions
+): TargetMachineRankingResult {
+  const machineIndex =
+    options?.machineIndex ||
+    buildMachineFeatureIndex(dailyRecords, specialDayRules, options);
+  return calculateTargetMachineRankingFromIndex(targetDate, machineIndex, weights, options);
+}
+

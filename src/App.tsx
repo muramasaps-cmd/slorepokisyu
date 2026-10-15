@@ -1238,6 +1238,7 @@ export default function App() {
               aliasDictionary={currentStore.modelAliasDictionary}
               onNavigateToValidation={() => setActiveTab('validation')}
               onOpenStoreManager={() => setIsStoreModalOpen(true)}
+              storeId={currentStore.id}
             />
           </div>
         )}

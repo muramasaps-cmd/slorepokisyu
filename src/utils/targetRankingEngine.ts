@@ -160,6 +160,7 @@ export interface PreparedTargetDay {
 export interface FeatureIndexOptions {
   includeReusedMachines?: boolean;
   aliasDictionary?: Record<string, string>;
+  featureIndex?: FeatureIndex;
 }
 
 /**
@@ -995,6 +996,8 @@ export function calculateTargetDateRanking(
   options?: FeatureIndexOptions
 ): TargetDateForecast | null {
   if (!targetDate || !dailyRecords || dailyRecords.length === 0) return null;
-  const featureIndex = buildFeatureIndex(dailyRecords, specialDayRules, oldEventDays, options);
+  const featureIndex =
+    options?.featureIndex ||
+    buildFeatureIndex(dailyRecords, specialDayRules, oldEventDays, options);
   return calculateTargetDateRankingFromIndex(targetDate, featureIndex, undefined, weights);
 }

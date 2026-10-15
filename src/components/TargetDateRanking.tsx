@@ -2,6 +2,8 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { DailyRecord, SpecialDayRules, RankingWeights, MachineRankingWeights } from '../data/types';
 import {
   calculateTargetDateRanking,
+  buildFeatureIndex,
+  FeatureIndex,
   TargetDateForecast,
   ModelTargetScore,
 } from '../utils/targetRankingEngine';
@@ -47,6 +49,7 @@ interface TargetDateRankingProps {
   aliasDictionary?: Record<string, string>;
   onNavigateToValidation?: () => void;
   onOpenStoreManager?: () => void;
+  storeId?: string;
 }
 
 type ModelFilterType = 'all' | 'main' | 'smart_slot' | 'juggler_a' | 'small';
@@ -69,6 +72,7 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
   aliasDictionary,
   onNavigateToValidation,
   onOpenStoreManager,
+  storeId,
 }) => {
   const [modelFilter, setModelFilter] = useState<ModelFilterType>('all');
   const [modelSort, setModelSort] = useState<ModelSortType>('score');
@@ -79,6 +83,15 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
   useEffect(() => {
     setIncludeReusedState(includeReusedMachines);
   }, [includeReusedMachines]);
+
+  // Precompute shared feature index (Requirement 2: 重複計算をなくす)
+  const sharedFeatureIndex = useMemo<FeatureIndex | undefined>(() => {
+    if (!dailyRecords || dailyRecords.length === 0) return undefined;
+    return buildFeatureIndex(dailyRecords, specialDayRules, oldEventDays, {
+      includeReusedMachines: includeReusedState,
+      aliasDictionary,
+    });
+  }, [dailyRecords, specialDayRules, oldEventDays, includeReusedState, aliasDictionary]);
 
   // Compute forecast for target date
   const forecast = useMemo<TargetDateForecast | null>(() => {
@@ -92,9 +105,10 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
       {
         includeReusedMachines: includeReusedState,
         aliasDictionary,
+        featureIndex: sharedFeatureIndex,
       }
     );
-  }, [targetDate, dailyRecords, specialDayRules, oldEventDays, customWeights, includeReusedState, aliasDictionary]);
+  }, [targetDate, dailyRecords, specialDayRules, oldEventDays, customWeights, includeReusedState, aliasDictionary, sharedFeatureIndex]);
 
   if (!targetDate || !forecast) {
     return null;
@@ -713,6 +727,8 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
         includeReusedMachines={includeReusedState}
         aliasDictionary={aliasDictionary}
         onOpenStoreManager={onOpenStoreManager}
+        storeId={storeId}
+        featureIndex={sharedFeatureIndex}
       />
 
       {/* Footer Disclaimer */}

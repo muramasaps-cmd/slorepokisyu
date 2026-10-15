@@ -5,8 +5,8 @@ import { SpecialDayRules, DailyMachineRecord } from '../data/types';
 import { normalizeModelName } from '../utils/modelName';
 
 const specialDayRules: SpecialDayRules = {
-  specificDays: [7],
-  zorome: true,
+  tails: [7],
+  doubleDigits: true,
 };
 
 const cases = [

@@ -3,11 +3,11 @@ import { createSyntheticMachineRecords } from '../utils/__tests__/testDataGenera
 import { calculateTargetDateRanking } from '../utils/targetRankingEngine';
 import { calculateTargetMachineRanking } from '../utils/targetMachineRanking';
 import { runMachineBacktest } from '../utils/backtestEngine';
-import { SpecialDayRules } from '../types';
+import { SpecialDayRules } from '../data/types';
 
 const specialDayRules: SpecialDayRules = {
-  specificDays: [7],
-  zorome: true,
+  tails: [7],
+  doubleDigits: true,
 };
 
 interface CaseConfig {

@@ -1,6 +1,7 @@
 import { DailyRecord, DailyMachineRecord, SpecialDayRules, RankingWeights } from '../data/types';
 import {
   buildFeatureIndex,
+  FeatureIndex,
   buildPreparedTargetDay,
   scoreFromPrepared,
   calculateTargetDateRanking,
@@ -15,6 +16,7 @@ import {
   MachineRankingWeights,
   DEFAULT_MACHINE_RANKING_WEIGHTS,
   TargetMachineScore,
+  MachineHistoryAccumulator,
 } from './targetMachineRanking';
 import { normalizeModelName } from './modelName';
 import { isJapaneseHoliday } from './holidayUtils';
@@ -1084,6 +1086,7 @@ export interface MachineBacktestOptions {
   onProgress?: (progress: number) => void;
   featureIndex?: FeatureIndex;
   machineIndex?: MachineFeatureIndex;
+  accumulator?: MachineHistoryAccumulator;
 }
 
 /**
@@ -1368,6 +1371,15 @@ export function runMachineBacktest(
     options?.machineIndex ||
     buildMachineFeatureIndex(sortedRecords, specialDayRules, { featureIndex });
 
+  const accumulator =
+    options?.accumulator ||
+    new MachineHistoryAccumulator(
+      machineIndex.sortedPastRecords,
+      specialDayRules,
+      featureIndex,
+      machineIndex.aliasDictionary
+    );
+
   const rng = createSeededRandom(seed);
 
   const unfilteredDays: MachineBacktestDayEvaluation[] = [];
@@ -1479,12 +1491,11 @@ export function runMachineBacktest(
           }
         : { avgDiff: hallAvgDiff, avgLift: 0, avgWinRate: hallWinRate };
 
-    // Run prediction engine using pre-indexed features for days before evalDay.date (Requirement 2, 3a, 3d)
-    const rankingResult = calculateTargetMachineRankingFromIndex(
+    // Run prediction engine using incremental accumulator for days before evalDay.date (Requirement 2, 3a, 3d)
+    const rankingResult = accumulator.computeRanking(
       evalDay.date,
-      machineIndex,
       weights,
-      { minEvidenceDays: 0 }
+      { minEvidenceDays: 0, skipHistory: true }
     );
 
     // Helper to evaluate a specific chosen subset of target machines

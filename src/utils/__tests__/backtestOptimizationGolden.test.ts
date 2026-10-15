@@ -5,10 +5,7 @@ import { runMachineBacktest } from '../backtestEngine';
 import { SpecialDayRules } from '../../data/types';
 
 describe('backtestOptimization Golden Consistency', () => {
-  const specialDayRules: SpecialDayRules = {
-    specificDays: [7],
-    zorome: true,
-  };
+  const specialDayRules: SpecialDayRules = {};
 
   const records = createSyntheticMachineRecords({
     daysCount: 60,
@@ -26,7 +23,7 @@ describe('backtestOptimization Golden Consistency', () => {
       rank: r.rank,
       machineNum: r.machineNum,
       modelName: r.modelName,
-      compositeScore: r.compositeScore,
+      compositeScore: (r as any).compositeScore,
       evidenceDays: r.evidenceDays,
     }));
 

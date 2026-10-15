@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { DailyRecord, SpecialDayRules, RankingWeights, MachineRankingWeights, IslandDefinition } from '../data/types';
 import {
   calculateTargetMachineRanking,
@@ -6,9 +6,21 @@ import {
   TargetMachineScore,
   MachineConfidenceLevel,
 } from '../utils/targetMachineRanking';
-import { runMachineBacktest, MachineBacktestResult } from '../utils/backtestEngine';
+import { runMachineBacktest, MachineBacktestResult, MachineBacktestOptions } from '../utils/backtestEngine';
+import { FeatureIndex } from '../utils/targetRankingEngine';
 import { parseIslandConfig, getMachineIsland } from '../utils/islandUtils';
 import { formatNumber } from '../utils/formatters';
+import {
+  computeMachineBacktestCacheKey,
+  getMemoryBacktestCache,
+  setMemoryBacktestCache,
+  getBacktestFromIdb,
+  putBacktestToIdb,
+} from '../utils/machineBacktestCache';
+import type {
+  MachineBacktestWorkerRequest,
+  MachineBacktestWorkerResponse,
+} from '../workers/machineBacktestWorker';
 import {
   Target,
   Trophy,
@@ -24,6 +36,7 @@ import {
   Layers,
   ArrowRight,
   TrendingUp,
+  RotateCw,
 } from 'lucide-react';
 
 interface TargetMachineRankingProps {
@@ -36,6 +49,8 @@ interface TargetMachineRankingProps {
   onOpenStoreManager?: () => void;
   includeReusedMachines?: boolean;
   aliasDictionary?: Record<string, string>;
+  storeId?: string;
+  featureIndex?: FeatureIndex;
 }
 
 /**
@@ -100,6 +115,8 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
   onOpenStoreManager,
   includeReusedMachines = false,
   aliasDictionary,
+  storeId,
+  featureIndex,
 }) => {
   const [selectedModel, setSelectedModel] = useState<string>('all');
   const [selectedTail, setSelectedTail] = useState<string>('all');
@@ -116,27 +133,161 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
     return parseIslandConfig(islandConfig);
   }, [islandConfig]);
 
-  // Run backtest to check if table rankings have confirmed statistical edge
-  const backtestResult: MachineBacktestResult | null = useMemo(() => {
-    if (!hasMachineData) return null;
-    return runMachineBacktest(dailyRecords, specialDayRules, {
-      topN: 10,
-      minEvidenceDays: 3,
-      blockLength: 7,
-      bootstrapIterations: 500, // fast run for UI indicator
-      weights: customMachineWeights,
-    });
-  }, [dailyRecords, specialDayRules, hasMachineData, customMachineWeights]);
+  // Backtest options (stable memo)
+  const backtestOptions = useMemo<MachineBacktestOptions>(() => ({
+    topN: 10,
+    minEvidenceDays: 3,
+    blockLength: 7,
+    bootstrapIterations: 500, // fast run for UI indicator
+    weights: customMachineWeights,
+  }), [customMachineWeights]);
 
-  // Calculate machine ranking for target date
+  // Deterministic cache key (Requirement 1a: storeId + signature + weights + rules + options)
+  const cacheKey = useMemo(() => {
+    if (!hasMachineData) return '';
+    return computeMachineBacktestCacheKey(
+      storeId,
+      dailyRecords,
+      customMachineWeights,
+      specialDayRules,
+      backtestOptions
+    );
+  }, [storeId, dailyRecords, customMachineWeights, specialDayRules, backtestOptions, hasMachineData]);
+
+  // Backtest state: check memory cache synchronously first (Requirement 1a)
+  const [backtestResult, setBacktestResult] = useState<MachineBacktestResult | null>(() => {
+    if (!cacheKey) return null;
+    return getMemoryBacktestCache(cacheKey) || null;
+  });
+  const [backtestProgress, setBacktestProgress] = useState<number | null>(null);
+  const [isBacktestRunning, setIsBacktestRunning] = useState<boolean>(() => {
+    if (!cacheKey) return false;
+    return !getMemoryBacktestCache(cacheKey);
+  });
+
+  const workerRef = useRef<Worker | null>(null);
+
+  // Asynchronous backtest loader using Web Worker and IDB cache (Requirement 1b, 1c, 1d)
+  useEffect(() => {
+    if (!hasMachineData || !cacheKey) {
+      setBacktestResult(null);
+      setIsBacktestRunning(false);
+      setBacktestProgress(null);
+      return;
+    }
+
+    // 1. Check in-memory cache
+    const memCached = getMemoryBacktestCache(cacheKey);
+    if (memCached) {
+      setBacktestResult(memCached);
+      setIsBacktestRunning(false);
+      setBacktestProgress(null);
+      return;
+    }
+
+    let isCancelled = false;
+    setIsBacktestRunning(true);
+    setBacktestProgress(0);
+
+    // 2. Check IndexedDB cache
+    getBacktestFromIdb(cacheKey)
+      .then((idbCached) => {
+        if (isCancelled) return;
+        if (idbCached) {
+          setMemoryBacktestCache(cacheKey, idbCached);
+          setBacktestResult(idbCached);
+          setIsBacktestRunning(false);
+          setBacktestProgress(null);
+          return;
+        }
+
+        // 3. Run in Web Worker
+        let worker: Worker | null = null;
+        try {
+          worker = new Worker(
+            new URL('../workers/machineBacktestWorker.ts', import.meta.url),
+            { type: 'module' }
+          );
+          workerRef.current = worker;
+        } catch (err) {
+          console.warn('Worker creation failed, falling back to setTimeout:', err);
+          worker = null;
+        }
+
+        if (worker) {
+          worker.onmessage = (event: MessageEvent<MachineBacktestWorkerResponse>) => {
+            if (isCancelled) return;
+            const data = event.data;
+            if (data.type === 'PROGRESS') {
+              setBacktestProgress(data.progress);
+            } else if (data.type === 'RESULT') {
+              setMemoryBacktestCache(cacheKey, data.result);
+              putBacktestToIdb(cacheKey, data.result).catch(() => {});
+              setBacktestResult(data.result);
+              setIsBacktestRunning(false);
+              setBacktestProgress(null);
+            } else if (data.type === 'ERROR') {
+              console.error('Backtest worker error:', data.error);
+              setIsBacktestRunning(false);
+              setBacktestProgress(null);
+            }
+          };
+
+          worker.postMessage({
+            type: 'START_BACKTEST',
+            dailyRecords,
+            specialDayRules,
+            options: backtestOptions,
+          } satisfies MachineBacktestWorkerRequest);
+        } else {
+          // 4. Fallback: setTimeout chunking without blocking UI (Requirement 1d)
+          setTimeout(() => {
+            if (isCancelled) return;
+            try {
+              const res = runMachineBacktest(dailyRecords, specialDayRules, {
+                ...backtestOptions,
+                onProgress: (p) => {
+                  if (!isCancelled) setBacktestProgress(p);
+                },
+              });
+              if (isCancelled) return;
+              setMemoryBacktestCache(cacheKey, res);
+              putBacktestToIdb(cacheKey, res).catch(() => {});
+              setBacktestResult(res);
+            } catch (err) {
+              console.error('Fallback backtest error:', err);
+            } finally {
+              if (!isCancelled) {
+                setIsBacktestRunning(false);
+                setBacktestProgress(null);
+              }
+            }
+          }, 20);
+        }
+      })
+      .catch((err) => {
+        console.warn('IDB lookup error:', err);
+      });
+
+    return () => {
+      isCancelled = true;
+      if (workerRef.current) {
+        workerRef.current.terminate();
+        workerRef.current = null;
+      }
+    };
+  }, [cacheKey, dailyRecords, specialDayRules, backtestOptions, hasMachineData]);
+
+  // Calculate machine ranking for target date immediately (Requirement 2: reuse featureIndex)
   const rankingResult: TargetMachineRankingResult | null = useMemo(() => {
     if (!hasMachineData || !targetDate) return null;
     return calculateTargetMachineRanking(targetDate, dailyRecords, specialDayRules, customMachineWeights, {
       rankingWeights: customWeights,
       includeReusedMachines,
       aliasDictionary,
+      featureIndex,
     });
-  }, [targetDate, dailyRecords, specialDayRules, customWeights, customMachineWeights, hasMachineData, includeReusedMachines, aliasDictionary]);
+  }, [targetDate, dailyRecords, specialDayRules, customWeights, customMachineWeights, hasMachineData, includeReusedMachines, aliasDictionary, featureIndex]);
 
   // Extract unique models & tails from ranking results
   const availableModels = useMemo(() => {
@@ -210,7 +361,7 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
     );
   }
 
-  const isNoEdge = backtestResult && !backtestResult.withFilter.hasEdge;
+  const isNoEdge = !isBacktestRunning && Boolean(backtestResult && !backtestResult.withFilter.hasEdge);
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden space-y-0">
@@ -235,7 +386,12 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
 
         {/* Backtest Edge Indicator */}
         <div className="shrink-0">
-          {backtestResult && (
+          {isBacktestRunning ? (
+            <div className="px-3 py-1.5 rounded-xl border border-sky-500/50 bg-sky-950/80 text-sky-200 text-xs font-bold flex items-center gap-2">
+              <RotateCw className="w-4 h-4 text-sky-400 animate-spin shrink-0" />
+              <span>台番予測: 検証中… {backtestProgress !== null ? `(${backtestProgress}%)` : ''}</span>
+            </div>
+          ) : backtestResult ? (
             <div
               className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-2 ${
                 backtestResult.withFilter.hasEdge
@@ -255,7 +411,7 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
                 </>
               )}
             </div>
-          )}
+          ) : null}
         </div>
       </div>
 

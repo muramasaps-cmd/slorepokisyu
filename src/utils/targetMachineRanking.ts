@@ -10,6 +10,8 @@ import {
 } from './targetRankingEngine';
 import { isAType, isJuggler } from './modelFilterUtils';
 import { normalizeModelName } from './modelName';
+import { calculateDayOfWeek, isDateSpecialDay } from './dataEngine';
+import { isJapaneseHoliday } from './holidayUtils';
 import { HIGH_SETTING_THRESHOLDS } from './highSettingConfig';
 export { HIGH_SETTING_THRESHOLDS } from './highSettingConfig';
 export type { MachineRankingWeights } from '../data/types';
@@ -48,6 +50,10 @@ export interface TargetMachineRankingOptions {
   featureIndex?: FeatureIndex;
   /** 事前に構築された台番特徴量インデックス */
   machineIndex?: MachineFeatureIndex;
+  /** 履歴詳細オブジェクトの生成をスキップ（バックテスト等の高速化用） */
+  skipHistory?: boolean;
+  /** 増分累積器（バックテスト等の高速化用） */
+  accumulator?: MachineHistoryAccumulator;
 }
 
 export type MachineConfidenceLevel = '高' | '中' | '低';
@@ -292,6 +298,499 @@ export function buildMachineFeatureIndex(
 }
 
 /**
+ * Incremental state accumulator for machine-level historical evaluations.
+ * Avoids repeated slicing and multi-day rescanning in backtests and fast single-day queries.
+ */
+export class MachineHistoryAccumulator {
+  sortedRecords: DailyRecord[];
+  specialDayRules?: SpecialDayRules;
+  featureIndex: FeatureIndex;
+  aliasDictionary?: Record<string, string>;
+  curIdx: number = 0;
+  cohortDateCounts: Map<string, number> = new Map();
+  dateCohortKeys: Map<string, Set<string>> = new Map();
+  modelCohortStats: Map<string, Map<string, { totalDiff: number; winCount: number; count: number }>> = new Map();
+  machineCohortStats: Map<number, Map<string, { totalDiff: number; winCount: number; count: number }>> = new Map();
+  machineOverall: Map<
+    number,
+    {
+      machineNum: number;
+      currentModel: string;
+      evidenceDays: number;
+      highSettingCount: number;
+      diffs: number[];
+      diffSum: number;
+      lastDiff: number | null;
+      lastDate: string | null;
+      lastTail: number | undefined;
+      lastIsZoro: boolean | undefined;
+      historyInstances: Array<{ rec: DailyRecord; machine: DailyMachineRecord; isHigh: boolean }>;
+    }
+  > = new Map();
+  lastDayMachines: Set<number> = new Set();
+  lastRecord: DailyRecord | null = null;
+
+  constructor(
+    sortedPastRecords: DailyRecord[],
+    specialDayRules?: SpecialDayRules,
+    featureIndex?: FeatureIndex,
+    aliasDictionary?: Record<string, string>
+  ) {
+    this.sortedRecords = sortedPastRecords;
+    this.specialDayRules = specialDayRules;
+    this.featureIndex =
+      featureIndex ||
+      buildFeatureIndex(sortedPastRecords, specialDayRules, '', {
+        aliasDictionary,
+      });
+    this.aliasDictionary = aliasDictionary;
+  }
+
+  advanceTo(targetDate: string): void {
+    while (this.curIdx < this.sortedRecords.length && this.sortedRecords[this.curIdx].date < targetDate) {
+      const r = this.sortedRecords[this.curIdx];
+      this.curIdx++;
+
+      const isSpecial =
+        r.isOldEventDay !== undefined
+          ? r.isOldEventDay
+          : this.specialDayRules
+          ? isDateSpecialDay(r.date, this.specialDayRules)
+          : (r.day % 10 === 7);
+      const dow = r.dayOfWeek !== undefined ? r.dayOfWeek : calculateDayOfWeek(r.date);
+      const isHoliday = isJapaneseHoliday(r.date);
+
+      const cohortKeys: string[] = ['all', 'dow_' + dow];
+      if (isHoliday) cohortKeys.push('holiday');
+      if (isSpecial) {
+        cohortKeys.push('sp_all');
+        cohortKeys.push('sp_dow_' + dow);
+        if (isHoliday) cohortKeys.push('sp_holiday');
+      }
+
+      this.dateCohortKeys.set(r.date, new Set(cohortKeys));
+
+      for (let kIdx = 0; kIdx < cohortKeys.length; kIdx++) {
+        const k = cohortKeys[kIdx];
+        this.cohortDateCounts.set(k, (this.cohortDateCounts.get(k) || 0) + 1);
+      }
+
+      if (r.machines && r.machines.length > 0) {
+        this.lastDayMachines = new Set<number>();
+        this.lastRecord = r;
+
+        for (let mIdx = 0; mIdx < r.machines.length; mIdx++) {
+          const m = r.machines[mIdx];
+          const num = m.machineNum;
+          if (num === undefined || num === null || isNaN(num)) continue;
+          this.lastDayMachines.add(num);
+
+          const model = normalizeModelName(m.modelName || '', this.aliasDictionary);
+          if (!model) continue;
+
+          const isHigh = isHighSettingBehavior(m, model);
+          const diff = m.diff ?? 0;
+          const isWin = diff > 0;
+
+          // Model stats
+          let modelMap = this.modelCohortStats.get(model);
+          if (!modelMap) {
+            modelMap = new Map();
+            this.modelCohortStats.set(model, modelMap);
+          }
+          for (let kIdx = 0; kIdx < cohortKeys.length; kIdx++) {
+            const k = cohortKeys[kIdx];
+            let st = modelMap.get(k);
+            if (!st) {
+              st = { totalDiff: 0, winCount: 0, count: 0 };
+              modelMap.set(k, st);
+            }
+            st.totalDiff += diff;
+            if (isWin) st.winCount++;
+            st.count++;
+          }
+
+          // Machine stats
+          let mState = this.machineOverall.get(num);
+          if (!mState || mState.currentModel !== model) {
+            this.machineCohortStats.delete(num);
+            mState = {
+              machineNum: num,
+              currentModel: model,
+              evidenceDays: 0,
+              highSettingCount: 0,
+              diffs: [],
+              diffSum: 0,
+              lastDiff: null,
+              lastDate: null,
+              lastTail: undefined,
+              lastIsZoro: undefined,
+              historyInstances: [],
+            };
+            this.machineOverall.set(num, mState);
+          }
+
+          mState.evidenceDays++;
+          if (isHigh) mState.highSettingCount++;
+          mState.diffs.push(diff);
+          mState.diffSum += diff;
+          mState.lastDiff = m.diff; // preserve original diff (e.g. -0)
+          mState.lastDate = r.date;
+          mState.lastTail = m.tailDigit;
+          mState.lastIsZoro = m.isZoro;
+          mState.historyInstances.push({ rec: r, machine: m, isHigh });
+
+          let machMap = this.machineCohortStats.get(num);
+          if (!machMap) {
+            machMap = new Map();
+            this.machineCohortStats.set(num, machMap);
+          }
+          for (let kIdx = 0; kIdx < cohortKeys.length; kIdx++) {
+            const k = cohortKeys[kIdx];
+            let st = machMap.get(k);
+            if (!st) {
+              st = { totalDiff: 0, winCount: 0, count: 0 };
+              machMap.set(k, st);
+            }
+            st.totalDiff += diff;
+            if (isWin) st.winCount++;
+            st.count++;
+          }
+        }
+      }
+    }
+  }
+
+  computeRanking(
+    targetDate: string,
+    weights?: Partial<MachineRankingWeights>,
+    options?: TargetMachineRankingOptions
+  ): TargetMachineRankingResult {
+    const mergedWeights: MachineRankingWeights = {
+      ...DEFAULT_MACHINE_RANKING_WEIGHTS,
+      ...weights,
+    };
+    const rankingWeights = options?.rankingWeights || DEFAULT_RANKING_WEIGHTS;
+    const activeRecentStateWeight =
+      options?.recentStateWeight !== undefined
+        ? options.recentStateWeight
+        : mergedWeights.recentStateWeight;
+
+    // Validate targetDate format
+    const isValidDateFormat = /^\d{4}-\d{2}-\d{2}$/.test(targetDate);
+    const parsedTargetDate = new Date(targetDate);
+    if (!isValidDateFormat || isNaN(parsedTargetDate.getTime())) {
+      return {
+        targetDate,
+        dayOfWeek: '',
+        isSpecialDay: false,
+        dayTail: 0,
+        primaryCohortCount: 0,
+        rankings: [],
+        excludedInactiveCount: 0,
+        referenceDate: null,
+        errorReason: `無効な日付形式です: "${targetDate}" (YYYY-MM-DD 形式で指定してください)`,
+      };
+    }
+
+    this.advanceTo(targetDate);
+
+    const parts = targetDate.split(/[-/.]/);
+    const day = parseInt(parts[2], 10);
+    const targetDow = calculateDayOfWeek(targetDate);
+    if (!targetDow) {
+      return {
+        targetDate,
+        dayOfWeek: '',
+        isSpecialDay: false,
+        dayTail: 0,
+        primaryCohortCount: 0,
+        rankings: [],
+        excludedInactiveCount: 0,
+        referenceDate: null,
+        errorReason: `コホート抽出に失敗しました (日付: ${targetDate})`,
+      };
+    }
+
+    const targetIsHoliday = isJapaneseHoliday(targetDate);
+    const targetIsSpecial = this.specialDayRules
+      ? isDateSpecialDay(targetDate, this.specialDayRules)
+      : day % 10 === 7;
+    const dayTail = day % 10;
+
+    let selectedKey = 'all';
+    let primaryCohortCount = 0;
+    if (targetIsSpecial) {
+      const exactKey = targetIsHoliday ? 'sp_holiday' : ('sp_dow_' + targetDow);
+      const exactCount = this.cohortDateCounts.get(exactKey) || 0;
+      if (exactCount >= 2) {
+        selectedKey = exactKey;
+        primaryCohortCount = exactCount;
+      } else {
+        const spCount = this.cohortDateCounts.get('sp_all') || 0;
+        if (spCount > 0) {
+          selectedKey = 'sp_all';
+          primaryCohortCount = spCount;
+        } else {
+          selectedKey = 'all';
+          primaryCohortCount = this.cohortDateCounts.get('all') || 0;
+        }
+      }
+    } else {
+      const dowKey = targetIsHoliday ? 'holiday' : ('dow_' + targetDow);
+      const dCount = this.cohortDateCounts.get(dowKey) || 0;
+      if (dCount > 0) {
+        selectedKey = dowKey;
+        primaryCohortCount = dCount;
+      } else {
+        selectedKey = 'all';
+        primaryCohortCount = this.cohortDateCounts.get('all') || 0;
+      }
+    }
+
+    const referenceDate = this.lastRecord?.date ?? null;
+
+    // Active machine determination
+    const activeMachineNums = new Set<number>();
+    const activeWithinDays = options?.activeWithinDays;
+
+    if (activeWithinDays !== undefined && activeWithinDays > 0) {
+      const cutoffDateObj = new Date(parsedTargetDate);
+      cutoffDateObj.setDate(cutoffDateObj.getDate() - activeWithinDays);
+      const cutoffDateStr = cutoffDateObj.toISOString().slice(0, 10);
+
+      for (let i = this.curIdx - 1; i >= 0; i--) {
+        const rec = this.sortedRecords[i];
+        if (rec.date < cutoffDateStr) break;
+        if (rec.machines) {
+          rec.machines.forEach((m) => activeMachineNums.add(m.machineNum));
+        }
+      }
+    } else {
+      this.lastDayMachines.forEach((m) => activeMachineNums.add(m));
+    }
+
+    if (this.curIdx === 0 || primaryCohortCount === 0 || activeMachineNums.size === 0) {
+      return {
+        targetDate,
+        dayOfWeek: targetDow,
+        isSpecialDay: targetIsSpecial,
+        dayTail,
+        primaryCohortCount,
+        rankings: [],
+        excludedInactiveCount: 0,
+        referenceDate,
+      };
+    }
+
+    const modelForecast = calculateTargetDateRankingFromIndex(
+      targetDate,
+      this.featureIndex,
+      undefined,
+      rankingWeights
+    );
+    const modelScoreMap = new Map<string, number>();
+    if (modelForecast?.modelRankings) {
+      for (let i = 0; i < modelForecast.modelRankings.length; i++) {
+        const mr = modelForecast.modelRankings[i];
+        modelScoreMap.set(
+          normalizeModelName(mr.modelName, this.aliasDictionary),
+          mr.compositeScore
+        );
+      }
+    }
+
+    const scoredMachines: TargetMachineScore[] = [];
+    const minEvidenceDays = options?.minEvidenceDays ?? 1;
+    let excludedInactiveCount = 0;
+
+    this.machineOverall.forEach((mState, machineNum) => {
+      const {
+        currentModel,
+        evidenceDays,
+        highSettingCount,
+        diffs,
+        lastDiff,
+        lastDate,
+        lastTail,
+        lastIsZoro,
+        historyInstances,
+      } = mState;
+
+      if (!activeMachineNums.has(machineNum)) {
+        excludedInactiveCount++;
+        return;
+      }
+
+      if (evidenceDays < minEvidenceDays) return;
+
+      const cMap = this.machineCohortStats.get(machineNum);
+      const cSt = cMap?.get(selectedKey);
+      const cohortEvidenceDays = cSt ? cSt.count : 0;
+      const cohortTotalDiff = cSt ? cSt.totalDiff : 0;
+      const cohortWinCount = cSt ? cSt.winCount : 0;
+
+      // Model baseline
+      const modelMap = this.modelCohortStats.get(currentModel);
+      const mCohort = modelMap?.get(selectedKey);
+      const mOverall = modelMap?.get('all');
+      let baseAvgDiff = 0;
+      let baseWinRate = 50;
+      if (mCohort && mCohort.count > 0) {
+        baseAvgDiff = mCohort.totalDiff / mCohort.count;
+        baseWinRate = (mCohort.winCount / mCohort.count) * 100;
+      } else if (mOverall && mOverall.count > 0) {
+        baseAvgDiff = mOverall.totalDiff / mOverall.count;
+        baseWinRate = (mOverall.winCount / mOverall.count) * 100;
+      }
+
+      const k = mergedWeights.shrinkageK || 3;
+      const shrinkageB = cohortEvidenceDays / (cohortEvidenceDays + k);
+
+      let rawCohortAvgDiff = 0;
+      let rawCohortWinRate = 50;
+      if (cohortEvidenceDays > 0) {
+        rawCohortAvgDiff = cohortTotalDiff / cohortEvidenceDays;
+        rawCohortWinRate = (cohortWinCount / cohortEvidenceDays) * 100;
+      } else {
+        rawCohortAvgDiff = baseAvgDiff;
+        rawCohortWinRate = baseWinRate;
+      }
+
+      const shrunkDiff = shrinkageB * rawCohortAvgDiff + (1 - shrinkageB) * baseAvgDiff;
+      const shrunkWinRate = shrinkageB * rawCohortWinRate + (1 - shrinkageB) * baseWinRate;
+      const highSettingRate = evidenceDays > 0 ? highSettingCount / evidenceDays : 0;
+      const rawModelScore = modelScoreMap.get(currentModel) || 0;
+
+      const machTail = getMachineTailDigit(machineNum, lastTail);
+      const isTailMatch = machTail === dayTail;
+      const isZoro = isMachineZoro(machineNum, lastIsZoro);
+      const tailBonus =
+        (isTailMatch ? mergedWeights.tailMatchBonus : 0) +
+        (isZoro ? mergedWeights.zoroBonus : 0);
+
+      const cohortDiffScore =
+        (Math.round(shrunkDiff * mergedWeights.diffWeight * 100) / 100) || 0;
+      const cohortWinRateScore =
+        (Math.round((shrunkWinRate - 50) * mergedWeights.winRateWeight * 100) / 100) || 0;
+      const highSettingScore =
+        (Math.round(highSettingRate * mergedWeights.highSettingWeight * 100) / 100) || 0;
+      const modelScore =
+        (Math.round(rawModelScore * mergedWeights.modelScoreWeight * 100) / 100) || 0;
+      const tailBonusScore = (Math.round(tailBonus * 100) / 100) || 0;
+      const recentStateScore =
+        (activeRecentStateWeight !== 0 && lastDiff !== null
+          ? Math.round(lastDiff * activeRecentStateWeight * 100) / 100
+          : 0) || 0;
+
+      const totalScore =
+        (Math.round(
+          (cohortDiffScore +
+            cohortWinRateScore +
+            highSettingScore +
+            modelScore +
+            tailBonusScore +
+            recentStateScore) *
+            100
+        ) / 100) || 0;
+
+      let confidence: MachineConfidenceLevel = '低';
+      if (diffs.length > 0) {
+        const mean = mState.diffSum / diffs.length;
+        let varSum = 0;
+        for (let i = 0; i < diffs.length; i++) {
+          varSum += (diffs[i] - mean) ** 2;
+        }
+        const variance = varSum / Math.max(1, diffs.length - 1);
+        const stdDev = Math.sqrt(variance);
+        const standardError = stdDev / Math.sqrt(Math.max(1, diffs.length));
+        if (cohortEvidenceDays >= 5 && standardError <= 650) {
+          confidence = '高';
+        } else if (
+          cohortEvidenceDays >= 3 ||
+          (evidenceDays >= 6 && standardError <= 950)
+        ) {
+          confidence = '中';
+        }
+      }
+
+      let fullHistoryEntries: MachineHistoryEntry[] = [];
+      if (!options?.skipHistory && historyInstances.length > 0) {
+        fullHistoryEntries = historyInstances.map(({ rec, machine, isHigh }) => ({
+          date: rec.date,
+          dayOfWeek: rec.dayOfWeek,
+          diff: machine.diff,
+          games: machine.games,
+          payoutRate: machine.payoutRate,
+          bb: machine.bb,
+          rb: machine.rb,
+          isInCohort:
+            selectedKey === 'all'
+              ? true
+              : this.dateCohortKeys.get(rec.date)?.has(selectedKey) ?? false,
+          isHighSetting: isHigh,
+        }));
+      }
+
+      scoredMachines.push({
+        machineNum,
+        modelName: currentModel,
+        rank: 0,
+        totalScore,
+        confidence,
+        evidenceDays,
+        cohortEvidenceDays,
+        contributions: {
+          cohortDiffScore,
+          cohortWinRateScore,
+          highSettingScore,
+          modelScore,
+          tailBonusScore,
+          recentStateScore,
+        },
+        stats: {
+          cohortAvgDiff: Math.round(rawCohortAvgDiff * 10) / 10,
+          shrunkDiff: Math.round(shrunkDiff * 10) / 10,
+          cohortWinRate: Math.round(rawCohortWinRate * 10) / 10,
+          shrunkWinRate: Math.round(shrunkWinRate * 10) / 10,
+          modelCohortAvgDiff: Math.round(baseAvgDiff * 10) / 10,
+          modelCohortWinRate: Math.round(baseWinRate * 10) / 10,
+          highSettingRate: Math.round(highSettingRate * 1000) / 10,
+          highSettingCount,
+          modelScore: Math.round(rawModelScore * 10) / 10,
+          isTailMatch,
+          isZoro,
+          priorDayDiff: lastDiff,
+          priorDayDate: lastDate,
+        },
+        history: fullHistoryEntries,
+      });
+    });
+
+    scoredMachines.sort((a, b) => {
+      if (b.totalScore !== a.totalScore) return b.totalScore - a.totalScore;
+      if (b.evidenceDays !== a.evidenceDays) return b.evidenceDays - a.evidenceDays;
+      return a.machineNum - b.machineNum;
+    });
+
+    scoredMachines.forEach((mach, idx) => {
+      mach.rank = idx + 1;
+    });
+
+    return {
+      targetDate,
+      dayOfWeek: targetDow,
+      isSpecialDay: targetIsSpecial,
+      dayTail,
+      primaryCohortCount,
+      rankings: scoredMachines,
+      excludedInactiveCount,
+      referenceDate,
+    };
+  }
+}
+
+/**
  * Calculates target machine rankings for a target date from pre-indexed machine features.
  */
 export function calculateTargetMachineRankingFromIndex(
@@ -300,391 +799,17 @@ export function calculateTargetMachineRankingFromIndex(
   weights?: Partial<MachineRankingWeights>,
   options?: TargetMachineRankingOptions
 ): TargetMachineRankingResult {
-  const mergedWeights: MachineRankingWeights = {
-    ...DEFAULT_MACHINE_RANKING_WEIGHTS,
-    ...weights,
-  };
-
-  const activeRecentStateWeight =
-    options?.recentStateWeight !== undefined
-      ? options.recentStateWeight
-      : mergedWeights.recentStateWeight;
-
-  // 0. Validate targetDate format
-  const isValidDateFormat = /^\d{4}-\d{2}-\d{2}$/.test(targetDate);
-  const parsedTargetDate = new Date(targetDate);
-  if (!isValidDateFormat || isNaN(parsedTargetDate.getTime())) {
-    return {
-      targetDate,
-      dayOfWeek: '',
-      isSpecialDay: false,
-      dayTail: 0,
-      primaryCohortCount: 0,
-      rankings: [],
-      excludedInactiveCount: 0,
-      referenceDate: null,
-      errorReason: `無効な日付形式です: "${targetDate}" (YYYY-MM-DD 形式で指定してください)`,
-    };
+  if (options?.accumulator) {
+    return options.accumulator.computeRanking(targetDate, weights, options);
   }
 
-  // 1. Strictly use historical records strictly before targetDate (NO FUTURE DATA)
-  const pastRecords = machineIndex.sortedPastRecords.filter((r) => r.date < targetDate);
-
-  // Determine target date metadata
-  const cohortResult = extractTargetCohorts(targetDate, pastRecords, machineIndex.specialDayRules);
-  if (!cohortResult || !cohortResult.dow) {
-    return {
-      targetDate,
-      dayOfWeek: '',
-      isSpecialDay: false,
-      dayTail: 0,
-      primaryCohortCount: 0,
-      rankings: [],
-      excludedInactiveCount: 0,
-      referenceDate: null,
-      errorReason: `コホート抽出に失敗しました (日付: ${targetDate})`,
-    };
-  }
-  const dow = cohortResult.dow;
-  const isSpecial = cohortResult.isSpecial || false;
-  const dayTail = cohortResult.dayTail || 0;
-  const primaryCohort = cohortResult.primaryCohort || [];
-
-  // Determine reference business day (直近の営業日)
-  const daysWithMachines = pastRecords.filter(
-    (r) => r.machines && r.machines.length > 0
-  );
-  const referenceRecord =
-    daysWithMachines.length > 0 ? daysWithMachines[daysWithMachines.length - 1] : null;
-  const referenceDate = referenceRecord?.date ?? null;
-
-  // Active machines determination
-  const activeMachineNums = new Set<number>();
-  const activeWithinDays = options?.activeWithinDays;
-
-  if (activeWithinDays !== undefined && activeWithinDays > 0) {
-    const cutoffDateObj = new Date(parsedTargetDate);
-    cutoffDateObj.setDate(cutoffDateObj.getDate() - activeWithinDays);
-    const cutoffDateStr = cutoffDateObj.toISOString().slice(0, 10);
-
-    for (let i = pastRecords.length - 1; i >= 0; i--) {
-      const rec = pastRecords[i];
-      if (rec.date < cutoffDateStr) break;
-      if (rec.machines) {
-        rec.machines.forEach((m) => activeMachineNums.add(m.machineNum));
-      }
-    }
-  } else if (referenceRecord && referenceRecord.machines) {
-    referenceRecord.machines.forEach((m) => activeMachineNums.add(m.machineNum));
-  }
-
-  if (pastRecords.length === 0 || primaryCohort.length === 0 || activeMachineNums.size === 0) {
-    return {
-      targetDate,
-      dayOfWeek: dow,
-      isSpecialDay: isSpecial,
-      dayTail,
-      primaryCohortCount: primaryCohort.length,
-      rankings: [],
-      excludedInactiveCount: 0,
-      referenceDate,
-    };
-  }
-
-  const primaryCohortDateSet = new Set(primaryCohort.map((r) => r.date));
-
-  // 2. Extract machine histories respecting model replacement cutoffs
-  const machineDataMap = extractMachineHistoryByModelChange(
-    pastRecords,
+  const accumulator = new MachineHistoryAccumulator(
+    machineIndex.sortedPastRecords,
+    machineIndex.specialDayRules,
+    machineIndex.featureIndex,
     options?.aliasDictionary || machineIndex.aliasDictionary
   );
-
-  // 3. Obtain model scores from pre-indexed target ranking engine (Requirement 2 & 3d)
-  const rankingWeights = options?.rankingWeights || DEFAULT_RANKING_WEIGHTS;
-  const modelForecast = calculateTargetDateRankingFromIndex(
-    targetDate,
-    machineIndex.featureIndex,
-    undefined,
-    rankingWeights
-  );
-
-  const modelScoreMap = new Map<string, number>();
-  if (modelForecast?.modelRankings) {
-    for (let i = 0; i < modelForecast.modelRankings.length; i++) {
-      const mr = modelForecast.modelRankings[i];
-      modelScoreMap.set(
-        normalizeModelName(mr.modelName, options?.aliasDictionary || machineIndex.aliasDictionary),
-        mr.compositeScore
-      );
-    }
-  }
-
-  // 4. Compute model-level cohort baselines (population mean for shrinkage estimation)
-  interface ModelCohortBaseline {
-    avgDiff: number;
-    winRate: number;
-    count: number;
-  }
-  const modelCohortMap = new Map<string, { totalDiff: number; winCount: number; count: number }>();
-  const modelOverallMap = new Map<string, { totalDiff: number; winCount: number; count: number }>();
-
-  pastRecords.forEach((rec) => {
-    if (!rec.machines) return;
-    const isInPrimary = primaryCohortDateSet.has(rec.date);
-
-    for (let i = 0; i < rec.machines.length; i++) {
-      const mach = rec.machines[i];
-      const model = normalizeModelName(mach.modelName || '', options?.aliasDictionary);
-      if (!model) continue;
-
-      let overall = modelOverallMap.get(model);
-      if (!overall) {
-        overall = { totalDiff: 0, winCount: 0, count: 0 };
-        modelOverallMap.set(model, overall);
-      }
-      overall.totalDiff += mach.diff || 0;
-      if ((mach.diff || 0) > 0) overall.winCount++;
-      overall.count++;
-
-      if (isInPrimary) {
-        let cohort = modelCohortMap.get(model);
-        if (!cohort) {
-          cohort = { totalDiff: 0, winCount: 0, count: 0 };
-          modelCohortMap.set(model, cohort);
-        }
-        cohort.totalDiff += mach.diff || 0;
-        if ((mach.diff || 0) > 0) cohort.winCount++;
-        cohort.count++;
-      }
-    }
-  });
-
-  const getModelCohortBaseline = (modelName: string): ModelCohortBaseline => {
-    const c = modelCohortMap.get(modelName);
-    if (c && c.count > 0) {
-      return {
-        avgDiff: c.totalDiff / c.count,
-        winRate: (c.winCount / c.count) * 100,
-        count: c.count,
-      };
-    }
-    const o = modelOverallMap.get(modelName);
-    if (o && o.count > 0) {
-      return {
-        avgDiff: o.totalDiff / o.count,
-        winRate: (o.winCount / o.count) * 100,
-        count: o.count,
-      };
-    }
-    return { avgDiff: 0, winRate: 50, count: 0 };
-  };
-
-  // 5. Evaluate each active machine
-  const scoredMachines: TargetMachineScore[] = [];
-  const minEvidenceDays = options?.minEvidenceDays ?? 1;
-  let excludedInactiveCount = 0;
-
-  machineDataMap.forEach(({ machineNum, currentModel, history }) => {
-    if (!currentModel || history.length === 0) return;
-
-    // Check if machine is active according to reference date / activeWithinDays
-    if (!activeMachineNums.has(machineNum)) {
-      excludedInactiveCount++;
-      return;
-    }
-
-    if (history.length < minEvidenceDays) return;
-
-    // Segment machine history into cohort and non-cohort days
-    const cohortInstances: DailyMachineRecord[] = [];
-    const fullHistoryEntries: MachineHistoryEntry[] = [];
-    let highSettingCount = 0;
-
-    for (let i = 0; i < history.length; i++) {
-      const { rec, machine } = history[i];
-      const isInCohort = primaryCohortDateSet.has(rec.date);
-      const isHigh = isHighSettingBehavior(machine, currentModel);
-
-      if (isHigh) {
-        highSettingCount++;
-      }
-
-      if (isInCohort) {
-        cohortInstances.push(machine);
-      }
-
-      fullHistoryEntries.push({
-        date: rec.date,
-        dayOfWeek: rec.dayOfWeek,
-        diff: machine.diff,
-        games: machine.games,
-        payoutRate: machine.payoutRate,
-        bb: machine.bb,
-        rb: machine.rb,
-        isInCohort,
-        isHighSetting: isHigh,
-      });
-    }
-
-    const evidenceDays = history.length;
-    const cohortEvidenceDays = cohortInstances.length;
-
-    // Empirical Bayes Shrinkage for cohort diff and win rate
-    const modelBaseline = getModelCohortBaseline(currentModel);
-    const k = mergedWeights.shrinkageK || 3;
-    const shrinkageB = cohortEvidenceDays / (cohortEvidenceDays + k);
-
-    let rawCohortAvgDiff = 0;
-    let rawCohortWinRate = 50.0;
-
-    if (cohortEvidenceDays > 0) {
-      const totalDiff = cohortInstances.reduce((acc, m) => acc + (m.diff || 0), 0);
-      const winCount = cohortInstances.filter((m) => (m.diff || 0) > 0).length;
-      rawCohortAvgDiff = totalDiff / cohortEvidenceDays;
-      rawCohortWinRate = (winCount / cohortEvidenceDays) * 100;
-    } else {
-      rawCohortAvgDiff = modelBaseline.avgDiff;
-      rawCohortWinRate = modelBaseline.winRate;
-    }
-
-    const shrunkDiff =
-      shrinkageB * rawCohortAvgDiff + (1 - shrinkageB) * modelBaseline.avgDiff;
-    const shrunkWinRate =
-      shrinkageB * rawCohortWinRate + (1 - shrinkageB) * modelBaseline.winRate;
-
-    // High setting behavior rate across historical evidence
-    const highSettingRate = evidenceDays > 0 ? highSettingCount / evidenceDays : 0;
-
-    // Underlying model score from target ranking engine
-    const rawModelScore = modelScoreMap.get(currentModel) || 0;
-
-    // Tail match and Zoro bonuses
-    const machTail = getMachineTailDigit(
-      machineNum,
-      history[history.length - 1].machine.tailDigit
-    );
-    const isTailMatch = machTail === dayTail;
-    const isZoro = isMachineZoro(
-      machineNum,
-      history[history.length - 1].machine.isZoro
-    );
-
-    const tailBonus =
-      (isTailMatch ? mergedWeights.tailMatchBonus : 0) +
-      (isZoro ? mergedWeights.zoroBonus : 0);
-
-    // Recent state: prior day diff
-    const lastRec = history[history.length - 1];
-    const priorDayDiff = lastRec ? lastRec.machine.diff : null;
-    const priorDayDate = lastRec ? lastRec.rec.date : null;
-
-    // Additive contribution breakdown (explicitly explainable)
-    const cohortDiffScore =
-      (Math.round(shrunkDiff * mergedWeights.diffWeight * 100) / 100) || 0;
-    const cohortWinRateScore =
-      (Math.round((shrunkWinRate - 50) * mergedWeights.winRateWeight * 100) / 100) || 0;
-    const highSettingScore =
-      (Math.round(highSettingRate * mergedWeights.highSettingWeight * 100) / 100) || 0;
-    const modelScore =
-      (Math.round(rawModelScore * mergedWeights.modelScoreWeight * 100) / 100) || 0;
-    const tailBonusScore = (Math.round(tailBonus * 100) / 100) || 0;
-    const recentStateScore =
-      (activeRecentStateWeight !== 0 && priorDayDiff !== null
-        ? Math.round(priorDayDiff * activeRecentStateWeight * 100) / 100
-        : 0) || 0;
-
-    // Total score is strictly the sum of contributions
-    const totalScore =
-      (Math.round(
-        (cohortDiffScore +
-          cohortWinRateScore +
-          highSettingScore +
-          modelScore +
-          tailBonusScore +
-          recentStateScore) *
-          100
-      ) / 100) || 0;
-
-    // Confidence estimation based on evidence days and variance
-    const diffs = history.map((h) => h.machine.diff || 0);
-    const mean = diffs.reduce((a, b) => a + b, 0) / (diffs.length || 1);
-    const variance =
-      diffs.reduce((a, b) => a + Math.pow(b - mean, 2), 0) /
-      Math.max(1, diffs.length - 1);
-    const stdDev = Math.sqrt(variance);
-    const standardError = stdDev / Math.sqrt(Math.max(1, diffs.length));
-
-    let confidence: MachineConfidenceLevel = '低';
-    if (cohortEvidenceDays >= 5 && standardError <= 650) {
-      confidence = '高';
-    } else if (
-      cohortEvidenceDays >= 3 ||
-      (evidenceDays >= 6 && standardError <= 950)
-    ) {
-      confidence = '中';
-    }
-
-    scoredMachines.push({
-      machineNum,
-      modelName: currentModel,
-      rank: 0,
-      totalScore,
-      confidence,
-      evidenceDays,
-      cohortEvidenceDays,
-      contributions: {
-        cohortDiffScore,
-        cohortWinRateScore,
-        highSettingScore,
-        modelScore,
-        tailBonusScore,
-        recentStateScore,
-      },
-      stats: {
-        cohortAvgDiff: Math.round(rawCohortAvgDiff * 10) / 10,
-        shrunkDiff: Math.round(shrunkDiff * 10) / 10,
-        cohortWinRate: Math.round(rawCohortWinRate * 10) / 10,
-        shrunkWinRate: Math.round(shrunkWinRate * 10) / 10,
-        modelCohortAvgDiff: Math.round(modelBaseline.avgDiff * 10) / 10,
-        modelCohortWinRate: Math.round(modelBaseline.winRate * 10) / 10,
-        highSettingRate: Math.round(highSettingRate * 1000) / 10,
-        highSettingCount,
-        modelScore: Math.round(rawModelScore * 10) / 10,
-        isTailMatch,
-        isZoro,
-        priorDayDiff,
-        priorDayDate,
-      },
-      history: fullHistoryEntries,
-    });
-  });
-
-  // Sort machines: descending by totalScore, then evidenceDays, then machineNum
-  scoredMachines.sort((a, b) => {
-    if (b.totalScore !== a.totalScore) {
-      return b.totalScore - a.totalScore;
-    }
-    if (b.evidenceDays !== a.evidenceDays) {
-      return b.evidenceDays - a.evidenceDays;
-    }
-    return a.machineNum - b.machineNum;
-  });
-
-  // Assign ranks
-  scoredMachines.forEach((mach, idx) => {
-    mach.rank = idx + 1;
-  });
-
-  return {
-    targetDate,
-    dayOfWeek: dow,
-    isSpecialDay: isSpecial,
-    dayTail,
-    primaryCohortCount: primaryCohort.length,
-    rankings: scoredMachines,
-    excludedInactiveCount,
-    referenceDate,
-  };
+  return accumulator.computeRanking(targetDate, weights, options);
 }
 
 /**

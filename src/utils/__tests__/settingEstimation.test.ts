@@ -616,7 +616,7 @@ describe('settingEstimation pure functions', () => {
       // Rate spread is > 30 points (e.g. ~52% to >95%)
       expect(res.rateSpread).toBeGreaterThanOrEqual(30.0);
       expect(res.isHighSensitivity).toBe(true);
-      expect(res.warningMessage).toContain('条件によって結果が大きく変わります');
+      expect(res.warningMessage).toContain('出率だけでは分布は決められません');
     });
   });
 });

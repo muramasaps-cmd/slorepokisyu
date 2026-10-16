@@ -416,9 +416,11 @@ export function runSensitivityAnalysis(
   dailyRecords: DailyRecord[],
   spec: ModelSettingSpec | null,
   options: Omit<EstimationOptions, 'minGames' | 'pointEstimateOnly'> = {},
-  thresholds: number[] = DEFAULT_SENSITIVITY_THRESHOLDS
+  thresholds: number[] = DEFAULT_SENSITIVITY_THRESHOLDS,
+  onProgress?: (completed: number, total: number) => void
 ): SensitivityAnalysisResult {
   if (!spec || !spec.settings || spec.settings.length < 2) {
+    onProgress?.(0, 0);
     return {
       rows: [],
       maxHighSettingRate: 0,
@@ -443,6 +445,9 @@ export function runSensitivityAnalysis(
 
   const rows: SensitivityAnalysisRow[] = [];
   const allObservedRates: number[] = [];
+  let completed = 0;
+  const totalConditions = thresholds.length * 3;
+  onProgress?.(0, totalConditions);
 
   for (const th of thresholds) {
     // 3種類の重み付けで点推定を一括実行
@@ -452,6 +457,8 @@ export function runSensitivityAnalysis(
       gameWeightMode: 'raw',
       pointEstimateOnly: true,
     });
+    completed++;
+    onProgress?.(completed, totalConditions);
 
     const estCap3000 = estimateModelSettingDistribution(modelName, dailyRecords, spec, {
       ...options,
@@ -459,6 +466,8 @@ export function runSensitivityAnalysis(
       gameWeightMode: 'cap3000',
       pointEstimateOnly: true,
     });
+    completed++;
+    onProgress?.(completed, totalConditions);
 
     const estConstant = estimateModelSettingDistribution(modelName, dailyRecords, spec, {
       ...options,
@@ -466,6 +475,8 @@ export function runSensitivityAnalysis(
       gameWeightMode: 'constant',
       pointEstimateOnly: true,
     });
+    completed++;
+    onProgress?.(completed, totalConditions);
 
     const matchingRecords = rawModelRecords.filter((r) => r.games >= th);
     const inWeightedPayoutRate = calculateInWeightedPayoutRate(matchingRecords);
@@ -508,7 +519,7 @@ export function runSensitivityAnalysis(
     rateSpread,
     isHighSensitivity,
     warningMessage: isHighSensitivity
-      ? 'このデータでは設定の分布を推定できません（条件で結果が大きく変わります）。'
+      ? '出率だけでは分布は決められません。上の『範囲』を参考にしてください。'
       : '',
   };
 }
@@ -593,6 +604,7 @@ export interface DataVolumeWarningItem {
   type: 'few_machines' | 'few_days' | 'no_bonus';
   title: string;
   message: string;
+  severity?: 'info' | 'warning';
 }
 
 export interface DataVolumeWarningResult {
@@ -604,24 +616,27 @@ export interface DataVolumeWarningResult {
 }
 
 /**
- * データ量・形式に関する警告診断
- * (台数5台未満、台日300台日未満、ボーナス回数なし)
+ * データ量・形式に関する情報診断
+ * (台数5台未満、台日300台日未満)
+ * ※ BB・RBなし警告(no_bonus)は削除、台数少(few_machines)は情報表示
  */
 export function checkDataVolumeWarnings(
   uniqueMachineCount: number,
   evaluatedRecords: number,
-  hasBonusData: boolean,
-  thresholds: { minMachines?: number; minDays?: number } = {}
+  hasBonusData: boolean = false,
+  thresholds: { minMachines?: number; minDays?: number; warnOnNoBonus?: boolean } = {}
 ): DataVolumeWarningResult {
   const minMachines = thresholds.minMachines ?? 5;
   const minDays = thresholds.minDays ?? 300;
+  const warnOnNoBonus = thresholds.warnOnNoBonus ?? true;
   const warnings: DataVolumeWarningItem[] = [];
 
   if (uniqueMachineCount < minMachines && uniqueMachineCount > 0) {
     warnings.push({
       type: 'few_machines',
-      title: `設置台数が少ない (${uniqueMachineCount}台 < 推奨${minMachines}台)`,
-      message: `この機種は${uniqueMachineCount}台のみです。設定の『分布』ではなく、${uniqueMachineCount}台の日ごとの推定として読んでください。`,
+      title: `設置台数が少なめ (${uniqueMachineCount}台)`,
+      message: '台数が少ないため、設定の『分布』ではなく、全体出率からの『範囲』で表示します',
+      severity: 'info',
     });
   }
 
@@ -630,14 +645,16 @@ export function checkDataVolumeWarnings(
       type: 'few_days',
       title: `観測データが少なめ (${evaluatedRecords}台日 < 推奨${minDays}台日)`,
       message: `観測データが${evaluatedRecords}台日と少なめです（推奨${minDays}台日以上）。信頼区間が広くなり、推定のばらつきが大きくなります。`,
+      severity: 'info',
     });
   }
 
-  if (!hasBonusData) {
+  if (!hasBonusData && warnOnNoBonus) {
     warnings.push({
       type: 'no_bonus',
-      title: 'ボーナス回数（BB・RB）データなし',
-      message: 'ボーナス回数（BB・RB）のデータがありません。出玉率（差枚数）のみからの推定となり、回転数と出率の相関によるバイアスを受けやすくなります。',
+      title: 'BB・RB回数データなし',
+      message: 'BB・RB回数の詳細データがありません。出率（差枚数とG数）のみによる推定を行います。',
+      severity: 'info',
     });
   }
 

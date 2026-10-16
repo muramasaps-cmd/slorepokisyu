@@ -111,6 +111,9 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
   // Metric mode: diffCoins vs yen
   const [metricMode, setMetricMode] = useState<CrossMetricMode>('diffCoins');
 
+  // G-count conversion mode: std (5,000G) vs actual (avgGames)
+  const [diffDisplayMode, setDiffDisplayMode] = useState<'std' | 'actual'>('std');
+
   // Display count: 10 vs 20 vs 50
   const [displayCount, setDisplayCount] = useState<number>(20);
 
@@ -550,6 +553,34 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
               </button>
             </div>
 
+            {/* G数換算切替 (Requirement 2) */}
+            <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200 font-bold">
+              <button
+                type="button"
+                onClick={() => setDiffDisplayMode('std')}
+                className={`px-2.5 py-1 rounded-md text-xs transition-all cursor-pointer ${
+                  diffDisplayMode === 'std'
+                    ? 'bg-white text-slate-900 shadow-2xs'
+                    : 'text-slate-500 hover:text-slate-900'
+                }`}
+                title="基準5,000G稼働に揃えた期待差枚を表示"
+              >
+                基準5,000G換算
+              </button>
+              <button
+                type="button"
+                onClick={() => setDiffDisplayMode('actual')}
+                className={`px-2.5 py-1 rounded-md text-xs transition-all cursor-pointer ${
+                  diffDisplayMode === 'actual'
+                    ? 'bg-white text-indigo-700 shadow-2xs'
+                    : 'text-slate-500 hover:text-slate-900'
+                }`}
+                title="各台の過去の実際の平均稼働G数に合わせた期待差枚を表示"
+              >
+                実稼働換算
+              </button>
+            </div>
+
             {/* Display Count Select */}
             <select
               value={displayCount}
@@ -909,15 +940,32 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
 
                           {/* Expected Diff & Uncertainty (Requirement 3) */}
                           <div className="bg-slate-50/80 rounded-lg p-2.5 border border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 text-xs">
-                            <div className="flex items-baseline gap-1.5">
+                            <div className="flex items-baseline gap-1.5 flex-wrap">
                               <span className="text-[11px] font-bold text-slate-500">期待差枚:</span>
                               <span
                                 className={`font-mono font-black text-sm ${
-                                  mach.shrunkDiff >= 0 ? 'text-blue-600' : 'text-rose-600'
+                                  (diffDisplayMode === 'std' ? (mach.expectedDiffStd ?? mach.shrunkDiff) : (mach.expectedDiffActual ?? mach.shrunkDiff)) >= 0
+                                    ? 'text-blue-600'
+                                    : 'text-rose-600'
                                 }`}
                               >
-                                {mach.shrunkDiff >= 0 ? `+${formatNumber(mach.shrunkDiff)}` : formatNumber(mach.shrunkDiff)}枚
+                                {(diffDisplayMode === 'std' ? (mach.expectedDiffStd ?? mach.shrunkDiff) : (mach.expectedDiffActual ?? mach.shrunkDiff)) >= 0 ? '+' : ''}
+                                {formatNumber(
+                                  diffDisplayMode === 'std'
+                                    ? mach.expectedDiffStd ?? mach.shrunkDiff
+                                    : mach.expectedDiffActual ?? mach.shrunkDiff
+                                )}
+                                枚
                               </span>
+                              <span className="text-2xs text-slate-400">
+                                ({diffDisplayMode === 'std' ? '基準5,000G' : `実稼働${formatNumber(mach.avgGames || 5000)}G`}換算
+                                {mach.shrunkPayoutRate !== undefined ? `, 推定出率 ${mach.shrunkPayoutRate}%` : ''})
+                              </span>
+                              {mach.avgGames && (
+                                <span className="text-2xs text-slate-500">
+                                  • 平均稼働: {formatNumber(mach.avgGames)}G/日
+                                </span>
+                              )}
                               {metricMode === 'yen' && (
                                 <span className="text-2xs font-mono text-amber-700 font-bold">
                                   ({mach.expectedYenProfit >= 0 ? `+${formatYen(mach.expectedYenProfit)}` : formatYen(mach.expectedYenProfit)})

@@ -54,15 +54,23 @@ export interface RankingWeights {
   useQuantileGrade?: boolean; // default: false (5. 分位点ランク判定)
 }
 
+export type ShrinkageMode = 'empirical' | 'fixed';
+export type CohortMode = 'interaction' | 'additive';
+
 export interface MachineRankingWeights {
   diffWeight: number; // pts per diff coin (default 0.04)
   winRateWeight: number; // pts per win rate % above 50% (default 0.3)
   highSettingWeight: number; // pts for high setting frequency (default 20.0)
   modelScoreWeight: number; // pts for underlying model forecast score (default 0.25)
-  tailMatchBonus: number; // bonus for tail digit matching target date tail (default 8.0)
-  zoroBonus: number; // bonus for zoro machine number (default 4.0)
+  tailMatchBonus: number; // bonus for tail digit matching target date tail (default 0.0)
+  zoroBonus: number; // bonus for zoro machine number (default 0.0)
   recentStateWeight: number; // weight for prior day diff (default 0)
   shrinkageK: number; // empirical Bayes shrinkage hyperparameter (default 3)
+  shrinkageMode?: ShrinkageMode; // default 'empirical'
+  cohortMode?: CohortMode; // default 'interaction'
+  standardGames?: number; // default 5000
+  betaPriorA?: number;
+  betaPriorB?: number;
 }
 
 export interface StoreProfile extends StoreInfo {

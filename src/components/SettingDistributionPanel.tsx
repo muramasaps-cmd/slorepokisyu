@@ -32,6 +32,8 @@ import {
 } from '../utils/settingEstimation';
 import {
   executeSensitivityAnalysisAsync,
+  computeSensitivityCacheKey,
+  getSensitivityMemoryCache,
 } from '../utils/sensitivityAnalysisService';
 import {
   estimateModelSettingRange,
@@ -268,6 +270,26 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
       return;
     }
 
+    const cacheKey = computeSensitivityCacheKey(
+      activeModelName,
+      dailyRecords,
+      currentSpec,
+      {
+        highSettingThreshold: highThreshold,
+        useRecordedPayoutRate: useRecordedPayout,
+        usePoissonBonus,
+        poissonWeight,
+      }
+    );
+    const cached = getSensitivityMemoryCache(cacheKey);
+    if (cached) {
+      setSensitivityResult(cached);
+      setIsSensitivityCalculating(false);
+      setSensitivityProgress(null);
+      return;
+    }
+
+    setSensitivityResult(null);
     setIsSensitivityCalculating(true);
     setSensitivityProgress(0);
 

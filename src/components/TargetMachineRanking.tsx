@@ -74,19 +74,24 @@ export function formatMachineReasons(score: TargetMachineScore): string[] {
         `同コホート実績${cohortEvidenceDays}日（縮小推定平均差枚: ${stats.shrunkDiff >= 0 ? '+' : ''}${formatNumber(stats.shrunkDiff)}枚）`
       );
     }
+    if (stats.shrunkPayoutRate !== undefined) {
+      reasons.push(
+        `経験ベイズ推定出率: ${stats.shrunkPayoutRate}% (基準5000G期待差枚: ${stats.shrunkDiff >= 0 ? '+' : ''}${formatNumber(stats.shrunkDiff)}枚)`
+      );
+    }
   }
 
   // 2. High Setting Frequency
-  if (stats.highSettingCount > 0 && evidenceDays > 0) {
+  if (stats.highSettingCount > 0 && evidenceDays > 0 && reasons.length < 3) {
     reasons.push(
       `高設定挙動履歴 ${evidenceDays}日中${stats.highSettingCount}日発生 (${stats.highSettingRate}%)`
     );
   }
 
   // 3. Tail match / Zoro
-  if (stats.isTailMatch) {
+  if (stats.isTailMatch && reasons.length < 3) {
     reasons.push(`対象日の特定末尾と台番末尾が一致 (+${contributions.tailBonusScore}pt)`);
-  } else if (stats.isZoro) {
+  } else if (stats.isZoro && reasons.length < 3) {
     reasons.push(`ゾロ目台番ボーナス (+${contributions.tailBonusScore}pt)`);
   }
 
@@ -122,6 +127,7 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
   const [selectedTail, setSelectedTail] = useState<string>('all');
   const [selectedIsland, setSelectedIsland] = useState<string>('all');
   const [expandedMachine, setExpandedMachine] = useState<number | null>(null);
+  const [diffDisplayMode, setDiffDisplayMode] = useState<'std' | 'actual'>('std');
 
   // Check if store has machine-level data
   const hasMachineData = useMemo(() => {
@@ -489,9 +495,39 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
           )}
         </div>
 
-        <div className="text-xs text-slate-500 font-medium">
-          表示: <strong>{filteredRankings.length}</strong> 台 / 対象候補{' '}
-          {rankingResult?.rankings.length || 0} 台
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Requirement 2: G数換算切替 */}
+          <div className="flex items-center gap-1 bg-slate-200/80 p-0.5 rounded-lg text-xs font-bold">
+            <button
+              type="button"
+              onClick={() => setDiffDisplayMode('std')}
+              className={`px-2 py-0.5 rounded-md transition-all cursor-pointer ${
+                diffDisplayMode === 'std'
+                  ? 'bg-white text-slate-900 shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="基準5,000G稼働に揃えた期待差枚を表示"
+            >
+              基準5,000G換算
+            </button>
+            <button
+              type="button"
+              onClick={() => setDiffDisplayMode('actual')}
+              className={`px-2 py-0.5 rounded-md transition-all cursor-pointer ${
+                diffDisplayMode === 'actual'
+                  ? 'bg-white text-indigo-700 shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="各台の過去の実際の平均稼働G数に合わせた期待差枚を表示"
+            >
+              実稼働換算
+            </button>
+          </div>
+
+          <div className="text-xs text-slate-500 font-medium">
+            表示: <strong>{filteredRankings.length}</strong> 台 / 対象候補{' '}
+            {rankingResult?.rankings.length || 0} 台
+          </div>
         </div>
       </div>
 
@@ -559,6 +595,41 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
                           信頼度: {mach.confidence} (根拠{mach.evidenceDays}日)
                         </span>
                       </div>
+
+                      {/* Expected diff & average turnover (Requirement 2) */}
+                      {mach.stats && (
+                        <div className="mt-1 flex flex-wrap items-baseline gap-2 text-xs">
+                          <span className="font-bold text-slate-500">期待差枚:</span>
+                          <span
+                            className={`font-mono font-black ${
+                              (diffDisplayMode === 'std'
+                                ? mach.stats.expectedDiffStd ?? mach.stats.shrunkDiff
+                                : mach.stats.expectedDiffActual ?? mach.stats.shrunkDiff) >= 0
+                                ? 'text-blue-600'
+                                : 'text-rose-600'
+                            }`}
+                          >
+                            {(diffDisplayMode === 'std'
+                              ? mach.stats.expectedDiffStd ?? mach.stats.shrunkDiff
+                              : mach.stats.expectedDiffActual ?? mach.stats.shrunkDiff) >= 0
+                              ? '+'
+                              : ''}
+                            {formatNumber(
+                              diffDisplayMode === 'std'
+                                ? mach.stats.expectedDiffStd ?? mach.stats.shrunkDiff
+                                : mach.stats.expectedDiffActual ?? mach.stats.shrunkDiff
+                            )}
+                            枚
+                          </span>
+                          <span className="text-[11px] text-slate-400">
+                            ({diffDisplayMode === 'std' ? '基準5,000G' : `実稼働${formatNumber(mach.stats.avgGames || 5000)}G`}換算
+                            {mach.stats.shrunkPayoutRate !== undefined ? `, 推定出率 ${mach.stats.shrunkPayoutRate}%` : ''})
+                          </span>
+                          <span className="text-[11px] text-slate-500">
+                            • 平均稼働: {formatNumber(mach.stats.avgGames || 5000)}G/日
+                          </span>
+                        </div>
+                      )}
 
                       {/* Reasons bullet text */}
                       <div className="mt-1.5 space-y-0.5">

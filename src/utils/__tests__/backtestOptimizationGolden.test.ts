@@ -16,7 +16,9 @@ describe('backtestOptimization Golden Consistency', () => {
   const targetDate = '2025-03-02';
 
   it('preserves exact calculateTargetMachineRanking outputs before and after optimization', () => {
-    const ranking = calculateTargetMachineRanking(targetDate, records, specialDayRules);
+    const ranking = calculateTargetMachineRanking(targetDate, records, specialDayRules, {
+      shrinkageMode: 'fixed',
+    });
     expect(ranking.rankings.length).toBeGreaterThan(0);
     // Snapshot-like assertions on Top 5 machines
     const top5 = ranking.rankings.slice(0, 5).map((r) => ({

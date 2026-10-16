@@ -78,6 +78,11 @@ export interface CrossStoreMachineRank {
   reasons: string[];
   standardError?: number;
   uncertainty80: UncertaintyInterval;
+  expectedDiffStd?: number;
+  expectedDiffActual?: number;
+  avgGames?: number;
+  shrunkPayoutRate?: number;
+  cohortAvgPayoutRate?: number;
 }
 
 export interface ExcludedStoreInfo {
@@ -312,82 +317,74 @@ export function calculateCrossStoreRanking(
               continue;
             }
 
-            // Shrink expected diff towards 0 according to evidence days and store evaluation days
-            const evidenceWeight = mach.evidenceDays / (mach.evidenceDays + 3);
-            const storeWeight = Math.min(1.0, storeEvalDays / 15);
-            const shrunkDiff = Math.round(mach.stats.shrunkDiff * evidenceWeight * storeWeight);
+            // 3.a: Eliminate double shrinkage (evidenceWeight and storeWeight)
+            const shrunkDiff = Math.round(mach.stats.shrunkDiff);
+            const expectedDiffStd = mach.stats.expectedDiffStd ?? shrunkDiff;
+            const expectedDiffActual = mach.stats.expectedDiffActual ?? shrunkDiff;
+            const avgGames = mach.stats.avgGames ?? 5000;
+            const shrunkPayoutRate = mach.stats.shrunkPayoutRate ?? 100;
+            const cohortAvgPayoutRate = mach.stats.cohortAvgPayoutRate;
+
             const { rateLend: machRateLend, rateExchange: machRateExch } = getStoreRatesForModel(store, mach.modelName);
             const expYen = convertCoinsToYen(shrunkDiff, machRateLend, machRateExch);
             const island = getMachineIsland(mach.machineNum, islandDefs);
 
-            // Construct rich evidence-based reasons: store factor + top 2 contributions with evidence days
+            // 3.b: Align reasons with ranking value (expected diff / cohort evidence)
             const isSpecial = Boolean(machineResult.isSpecialDay);
             const storeFactorText = isSpecial
               ? `来店日が店舗特日 (実績${mach.cohortEvidenceDays}日)`
               : `同曜日実績${mach.cohortEvidenceDays}日`;
 
-            const contribItems: Array<{ score: number; text: string }> = [];
-
-            if (mach.contributions.cohortDiffScore > 0) {
-              contribItems.push({
-                score: mach.contributions.cohortDiffScore,
-                text: `同条件台平均 ${mach.stats.cohortAvgDiff >= 0 ? '+' : ''}${mach.stats.cohortAvgDiff}枚 (根拠${mach.cohortEvidenceDays}日)`,
-              });
-            }
-            if (mach.contributions.cohortWinRateScore > 0) {
-              contribItems.push({
-                score: mach.contributions.cohortWinRateScore,
-                text: `同条件勝率 ${mach.stats.cohortWinRate}% (実績${mach.cohortEvidenceDays}日)`,
-              });
-            }
-            if (mach.contributions.highSettingScore > 0) {
-              contribItems.push({
-                score: mach.contributions.highSettingScore,
-                text: `高設定挙動 ${mach.evidenceDays}日中${mach.stats.highSettingCount}日 (${mach.stats.highSettingRate}%, 根拠${mach.evidenceDays}日)`,
-              });
-            }
-            if (mach.contributions.modelScore > 0) {
-              contribItems.push({
-                score: mach.contributions.modelScore,
-                text: `機種評価スコア ${mach.stats.modelScore}pt (根拠${mach.evidenceDays}日)`,
-              });
-            }
-            if (mach.contributions.tailBonusScore > 0) {
-              const label = mach.stats.isTailMatch ? '特定日末尾一致' : mach.stats.isZoro ? 'ゾロ目番' : '末尾・ゾロ目ボーナス';
-              contribItems.push({
-                score: mach.contributions.tailBonusScore,
-                text: `${label} (根拠${mach.evidenceDays}日)`,
-              });
-            }
-            if (mach.contributions.recentStateScore > 0) {
-              contribItems.push({
-                score: mach.contributions.recentStateScore,
-                text: `直前好調傾向 (根拠${mach.evidenceDays}日)`,
-              });
-            }
-
-            contribItems.sort((a, b) => b.score - a.score);
-            const topContribs = contribItems.slice(0, 2);
-
             const reasons: string[] = [];
             if (mach.cohortEvidenceDays > 0 || isSpecial) {
               reasons.push(storeFactorText);
             }
-            topContribs.forEach((c) => reasons.push(c.text));
-
-            if (reasons.length === 0) {
-              reasons.push('根拠が少ないため参考表示');
+            if (mach.cohortEvidenceDays > 0) {
+              const avgDiffText = `${mach.stats.cohortAvgDiff >= 0 ? '+' : ''}${mach.stats.cohortAvgDiff}枚`;
+              const payoutText = cohortAvgPayoutRate !== undefined
+                ? `出率${cohortAvgPayoutRate}%`
+                : `勝率${mach.stats.cohortWinRate}%`;
+              reasons.push(`同条件台平均 ${avgDiffText} (${payoutText}, 根拠${mach.cohortEvidenceDays}日)`);
+              reasons.push(
+                `縮小推定期待差枚 ${shrunkDiff >= 0 ? '+' : ''}${shrunkDiff}枚 (根拠${mach.cohortEvidenceDays}日, 基準5000G換算)`
+              );
+            } else {
+              reasons.push(
+                `所属機種平均からの縮小推定 ${shrunkDiff >= 0 ? '+' : ''}${shrunkDiff}枚 (根拠${mach.evidenceDays}日)`
+              );
             }
 
+            // Supplementary elements appended only if space permits
+            if (reasons.length < 3 && mach.contributions.highSettingScore > 0 && mach.stats.highSettingCount > 0) {
+              reasons.push(
+                `高設定挙動 ${mach.evidenceDays}日中${mach.stats.highSettingCount}日 (${mach.stats.highSettingRate}%, 根拠${mach.evidenceDays}日)`
+              );
+            }
+            if (reasons.length < 3 && mach.contributions.tailBonusScore > 0) {
+              const label = mach.stats.isTailMatch ? '特定日末尾一致' : mach.stats.isZoro ? 'ゾロ目番' : '末尾・ゾロ目加点';
+              reasons.push(`${label} (根拠${mach.evidenceDays}日)`);
+            }
+
+            // Reflect store evaluation days: fewer evaluated store days increases uncertainty interval & adjusts confidence
             const se = mach.stats.standardError && mach.stats.standardError > 0
               ? mach.stats.standardError
               : Math.round(800 / Math.sqrt(Math.max(1, mach.evidenceDays)));
-            const machMargin = Math.round(1.28 * se);
+            const storePenalty = storeEvalDays < 15 ? Math.sqrt(15 / Math.max(1, storeEvalDays)) : 1.0;
+            const effectiveSe = Math.round(se * storePenalty);
+            const machMargin = Math.round(1.28 * effectiveSe);
+
+            let machConfidence = mach.confidence;
+            if (storeEvalDays < 3) {
+              machConfidence = '低';
+            } else if (storeEvalDays < 7 && machConfidence === '高') {
+              machConfidence = '中';
+            }
+
             const machUncertainty80: UncertaintyInterval = {
               margin: machMargin,
               min: shrunkDiff - machMargin,
               max: shrunkDiff + machMargin,
-              isWide: machMargin >= 700 || mach.confidence === '低',
+              isWide: machMargin >= 700 || machConfidence === '低' || storeEvalDays < 7,
             };
 
             eligibleMachines.push({
@@ -398,7 +395,7 @@ export function calculateCrossStoreRanking(
               modelName: mach.modelName,
               islandName: island,
               totalScore: mach.totalScore,
-              confidence: mach.confidence,
+              confidence: machConfidence,
               evidenceDays: mach.evidenceDays,
               cohortEvidenceDays: mach.cohortEvidenceDays,
               shrunkDiff,
@@ -410,8 +407,13 @@ export function calculateCrossStoreRanking(
               isTailMatch: mach.stats.isTailMatch,
               isZoro: mach.stats.isZoro,
               reasons: reasons.slice(0, 3),
-              standardError: Math.round(se * 10) / 10,
+              standardError: Math.round(effectiveSe * 10) / 10,
               uncertainty80: machUncertainty80,
+              expectedDiffStd,
+              expectedDiffActual,
+              avgGames,
+              shrunkPayoutRate,
+              cohortAvgPayoutRate,
             });
           }
         }

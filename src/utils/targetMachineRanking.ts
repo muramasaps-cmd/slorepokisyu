@@ -25,6 +25,8 @@ export const DEFAULT_MACHINE_RANKING_WEIGHTS: MachineRankingWeights = {
   zoroBonus: 4.0,
   recentStateWeight: 0,
   shrinkageK: 3,
+  shrinkageMode: 'empirical',
+  standardGames: 5000,
 };
 
 export interface MachineFeatureIndex {
@@ -103,6 +105,12 @@ export interface TargetMachineScore {
     priorDayDiff: number | null;
     priorDayDate: string | null;
     standardError?: number;
+    cohortAvgPayoutRate?: number;
+    shrunkPayoutRate?: number;
+    expectedDiffStd?: number;
+    expectedDiffActual?: number;
+    avgGames?: number;
+    shrinkageB?: number;
   };
   history: MachineHistoryEntry[];
 }
@@ -310,8 +318,21 @@ export class MachineHistoryAccumulator {
   curIdx: number = 0;
   cohortDateCounts: Map<string, number> = new Map();
   dateCohortKeys: Map<string, Set<string>> = new Map();
-  modelCohortStats: Map<string, Map<string, { totalDiff: number; winCount: number; count: number }>> = new Map();
-  machineCohortStats: Map<number, Map<string, { totalDiff: number; winCount: number; count: number }>> = new Map();
+  modelCohortStats: Map<string, Map<string, { totalDiff: number; totalGames: number; totalInCoins: number; winCount: number; count: number }>> = new Map();
+  machineCohortStats: Map<
+    number,
+    Map<
+      string,
+      {
+        totalDiff: number;
+        totalGames: number;
+        totalInCoins: number;
+        winCount: number;
+        count: number;
+        dailyEntries: Array<{ diff: number; games: number; inCoins: number; diffRate: number }>;
+      }
+    >
+  > = new Map();
   machineOverall: Map<
     number,
     {
@@ -321,6 +342,8 @@ export class MachineHistoryAccumulator {
       highSettingCount: number;
       diffs: number[];
       diffSum: number;
+      games: number[];
+      gamesSum: number;
       lastDiff: number | null;
       lastDate: string | null;
       lastTail: number | undefined;
@@ -392,6 +415,9 @@ export class MachineHistoryAccumulator {
           const isHigh = isHighSettingBehavior(m, model);
           const diff = m.diff ?? 0;
           const isWin = diff > 0;
+          const games = m.games || 0;
+          const inCoins = Math.max(1, games * 3);
+          const diffRate = diff / inCoins;
 
           // Model stats
           let modelMap = this.modelCohortStats.get(model);
@@ -403,10 +429,12 @@ export class MachineHistoryAccumulator {
             const k = cohortKeys[kIdx];
             let st = modelMap.get(k);
             if (!st) {
-              st = { totalDiff: 0, winCount: 0, count: 0 };
+              st = { totalDiff: 0, totalGames: 0, totalInCoins: 0, winCount: 0, count: 0 };
               modelMap.set(k, st);
             }
             st.totalDiff += diff;
+            st.totalGames += games;
+            st.totalInCoins += inCoins;
             if (isWin) st.winCount++;
             st.count++;
           }
@@ -422,6 +450,8 @@ export class MachineHistoryAccumulator {
               highSettingCount: 0,
               diffs: [],
               diffSum: 0,
+              games: [],
+              gamesSum: 0,
               lastDiff: null,
               lastDate: null,
               lastTail: undefined,
@@ -435,6 +465,8 @@ export class MachineHistoryAccumulator {
           if (isHigh) mState.highSettingCount++;
           mState.diffs.push(diff);
           mState.diffSum += diff;
+          mState.games.push(games);
+          mState.gamesSum += games;
           mState.lastDiff = m.diff; // preserve original diff (e.g. -0)
           mState.lastDate = r.date;
           mState.lastTail = m.tailDigit;
@@ -450,12 +482,22 @@ export class MachineHistoryAccumulator {
             const k = cohortKeys[kIdx];
             let st = machMap.get(k);
             if (!st) {
-              st = { totalDiff: 0, winCount: 0, count: 0 };
+              st = {
+                totalDiff: 0,
+                totalGames: 0,
+                totalInCoins: 0,
+                winCount: 0,
+                count: 0,
+                dailyEntries: [],
+              };
               machMap.set(k, st);
             }
             st.totalDiff += diff;
+            st.totalGames += games;
+            st.totalInCoins += inCoins;
             if (isWin) st.winCount++;
             st.count++;
+            st.dailyEntries.push({ diff, games, inCoins, diffRate });
           }
         }
       }
@@ -605,6 +647,117 @@ export class MachineHistoryAccumulator {
     const minEvidenceDays = options?.minEvidenceDays ?? 1;
     let excludedInactiveCount = 0;
 
+    // Collect all machines grouped by model that are active and have >= minEvidenceDays
+    const modelToActiveMachines = new Map<string, number[]>();
+    this.machineOverall.forEach((mState, machNum) => {
+      if (!activeMachineNums.has(machNum)) return;
+      if (mState.evidenceDays < minEvidenceDays) return;
+      const list = modelToActiveMachines.get(mState.currentModel);
+      if (list) {
+        list.push(machNum);
+      } else {
+        modelToActiveMachines.set(mState.currentModel, [machNum]);
+      }
+    });
+
+    // Precompute Empirical Bayes parameters per model for selectedKey
+    const modelEBParams = new Map<
+      string,
+      {
+        sigma2: number;
+        tau2: number;
+        machinesMap: Map<
+          number,
+          {
+            diffRate: number;
+            totalDiff: number;
+            totalInCoins: number;
+            totalGames: number;
+            winCount: number;
+            cohortDays: number;
+          }
+        >;
+      }
+    >();
+
+    modelToActiveMachines.forEach((machNums, modelName) => {
+      const modelMachinesData = new Map<
+        number,
+        {
+          diffRate: number;
+          totalDiff: number;
+          totalInCoins: number;
+          totalGames: number;
+          winCount: number;
+          cohortDays: number;
+        }
+      >();
+
+      let pooledSS = 0;
+      let pooledDF = 0;
+      const machineMeans: Array<{ num: number; r: number; n: number }> = [];
+
+      for (const num of machNums) {
+        const cMap = this.machineCohortStats.get(num);
+        const cSt = cMap?.get(selectedKey);
+        const n = cSt ? cSt.count : 0;
+        const totalDiff = cSt ? cSt.totalDiff : 0;
+        const totalGames = cSt ? cSt.totalGames : 0;
+        const totalInCoins = cSt ? cSt.totalInCoins : 0;
+        const winCount = cSt ? cSt.winCount : 0;
+        const diffRate = totalInCoins > 0 ? totalDiff / totalInCoins : 0;
+
+        modelMachinesData.set(num, {
+          diffRate,
+          totalDiff,
+          totalInCoins,
+          totalGames,
+          winCount,
+          cohortDays: n,
+        });
+
+        if (cSt && n >= 1) {
+          machineMeans.push({ num, r: diffRate, n });
+          if (n >= 2 && cSt.dailyEntries && cSt.dailyEntries.length >= 2) {
+            const unwMean = cSt.dailyEntries.reduce((acc, e) => acc + e.diffRate, 0) / n;
+            let ss = 0;
+            for (const e of cSt.dailyEntries) {
+              ss += (e.diffRate - unwMean) ** 2;
+            }
+            pooledSS += ss;
+            pooledDF += n - 1;
+          }
+        }
+      }
+
+      // 1. Within-machine daily variance sigma^2 (pooled across model)
+      // Fallback default variance: approx (1700 / 15000)^2 ≈ 0.012844
+      const defaultSigma2 = (1700 / 15000) ** 2;
+      const sigma2 = pooledDF >= 1 && pooledSS > 0 ? pooledSS / pooledDF : defaultSigma2;
+
+      // 2. Between-machine true difference variance tau^2 (method of moments)
+      let tau2 = 0;
+      const M = machineMeans.length;
+      if (M >= 2) {
+        const grandMean = machineMeans.reduce((acc, m) => acc + m.r, 0) / M;
+        let sBetween = 0;
+        let expectedErrorSum = 0;
+        for (const m of machineMeans) {
+          sBetween += (m.r - grandMean) ** 2;
+          expectedErrorSum += sigma2 / m.n;
+        }
+        const sampleBetweenVar = sBetween / (M - 1);
+        const avgExpectedError = expectedErrorSum / M;
+        tau2 = Math.max(0, sampleBetweenVar - avgExpectedError);
+      }
+
+      modelEBParams.set(modelName, {
+        sigma2,
+        tau2,
+        machinesMap: modelMachinesData,
+      });
+    });
+
     this.machineOverall.forEach((mState, machineNum) => {
       const {
         currentModel,
@@ -625,11 +778,13 @@ export class MachineHistoryAccumulator {
 
       if (evidenceDays < minEvidenceDays) return;
 
-      const cMap = this.machineCohortStats.get(machineNum);
-      const cSt = cMap?.get(selectedKey);
-      const cohortEvidenceDays = cSt ? cSt.count : 0;
-      const cohortTotalDiff = cSt ? cSt.totalDiff : 0;
-      const cohortWinCount = cSt ? cSt.winCount : 0;
+      const eb = modelEBParams.get(currentModel);
+      const machData = eb?.machinesMap.get(machineNum);
+      const cohortEvidenceDays = machData?.cohortDays ?? 0;
+      const cohortTotalDiff = machData?.totalDiff ?? 0;
+      const cohortTotalGames = machData?.totalGames ?? 0;
+      const cohortTotalInCoins = machData?.totalInCoins ?? 0;
+      const cohortWinCount = machData?.winCount ?? 0;
 
       // Model baseline
       const modelMap = this.modelCohortStats.get(currentModel);
@@ -637,29 +792,106 @@ export class MachineHistoryAccumulator {
       const mOverall = modelMap?.get('all');
       let baseAvgDiff = 0;
       let baseWinRate = 50;
+      let baseDiffRate = 0;
       if (mCohort && mCohort.count > 0) {
         baseAvgDiff = mCohort.totalDiff / mCohort.count;
         baseWinRate = (mCohort.winCount / mCohort.count) * 100;
+        baseDiffRate = mCohort.totalInCoins > 0 ? mCohort.totalDiff / mCohort.totalInCoins : 0;
       } else if (mOverall && mOverall.count > 0) {
         baseAvgDiff = mOverall.totalDiff / mOverall.count;
         baseWinRate = (mOverall.winCount / mOverall.count) * 100;
+        baseDiffRate = mOverall.totalInCoins > 0 ? mOverall.totalDiff / mOverall.totalInCoins : 0;
       }
-
-      const k = mergedWeights.shrinkageK || 3;
-      const shrinkageB = cohortEvidenceDays / (cohortEvidenceDays + k);
 
       let rawCohortAvgDiff = 0;
       let rawCohortWinRate = 50;
+      let rawCohortDiffRate = baseDiffRate;
       if (cohortEvidenceDays > 0) {
         rawCohortAvgDiff = cohortTotalDiff / cohortEvidenceDays;
         rawCohortWinRate = (cohortWinCount / cohortEvidenceDays) * 100;
+        rawCohortDiffRate = cohortTotalInCoins > 0 ? cohortTotalDiff / cohortTotalInCoins : 0;
       } else {
         rawCohortAvgDiff = baseAvgDiff;
         rawCohortWinRate = baseWinRate;
+        rawCohortDiffRate = baseDiffRate;
       }
 
-      const shrunkDiff = shrinkageB * rawCohortAvgDiff + (1 - shrinkageB) * baseAvgDiff;
-      const shrunkWinRate = shrinkageB * rawCohortWinRate + (1 - shrinkageB) * baseWinRate;
+      const rawPayoutRate = (1 + rawCohortDiffRate) * 100;
+
+      // Leave-one-out baseline of other machines of the same model
+      let leaveOneOutDiffRate = baseDiffRate;
+      let leaveOneOutWinRate = baseWinRate;
+      if (eb && eb.machinesMap.size > 1) {
+        let otherDiff = 0;
+        let otherIn = 0;
+        let otherWins = 0;
+        let otherDays = 0;
+        eb.machinesMap.forEach((otherM, oNum) => {
+          if (oNum !== machineNum && otherM.cohortDays > 0) {
+            otherDiff += otherM.totalDiff;
+            otherIn += otherM.totalInCoins;
+            otherWins += otherM.winCount;
+            otherDays += otherM.cohortDays;
+          }
+        });
+        if (otherIn > 0) {
+          leaveOneOutDiffRate = otherDiff / otherIn;
+        }
+        if (otherDays > 0) {
+          leaveOneOutWinRate = (otherWins / otherDays) * 100;
+        }
+      }
+
+      const standardGames = mergedWeights.standardGames || 5000;
+      const avgGames = cohortEvidenceDays > 0
+        ? Math.round(cohortTotalGames / cohortEvidenceDays)
+        : mState.diffs.length > 0
+        ? Math.round((mState.gamesSum || 0) / mState.diffs.length)
+        : standardGames;
+
+      let shrinkageB = 0;
+      let shrunkDiff = 0;
+      let shrunkWinRate = 50;
+      let shrunkPayoutRate = 100;
+      let expectedDiffStd = 0;
+      let expectedDiffActual = 0;
+
+      if (mergedWeights.shrinkageMode === 'fixed') {
+        const k = mergedWeights.shrinkageK || 3;
+        shrinkageB = cohortEvidenceDays / (cohortEvidenceDays + k);
+        shrunkDiff = shrinkageB * rawCohortAvgDiff + (1 - shrinkageB) * baseAvgDiff;
+        shrunkWinRate = shrinkageB * rawCohortWinRate + (1 - shrinkageB) * baseWinRate;
+        expectedDiffStd = shrunkDiff;
+        expectedDiffActual = shrunkDiff;
+        shrunkPayoutRate = (1 + (shrunkDiff / (Math.max(1, avgGames) * 3))) * 100;
+      } else {
+        // Empirical Bayes Shrinkage (Requirement 1 & 2)
+        const tau2 = eb?.tau2 ?? 0;
+        const sigma2 = eb?.sigma2 ?? (1700 / 15000) ** 2;
+
+        if (cohortEvidenceDays > 0 && tau2 > 0) {
+          const samplingVar = sigma2 / cohortEvidenceDays;
+          shrinkageB = tau2 / (tau2 + samplingVar);
+        } else {
+          shrinkageB = 0;
+        }
+
+        const shrunkDiffRate =
+          cohortEvidenceDays > 0
+            ? shrinkageB * rawCohortDiffRate + (1 - shrinkageB) * leaveOneOutDiffRate
+            : leaveOneOutDiffRate;
+
+        shrunkPayoutRate = (1 + shrunkDiffRate) * 100;
+        expectedDiffStd = shrunkDiffRate * (standardGames * 3);
+        expectedDiffActual = shrunkDiffRate * (avgGames * 3);
+
+        shrunkDiff = expectedDiffStd;
+        shrunkWinRate =
+          cohortEvidenceDays > 0
+            ? shrinkageB * rawCohortWinRate + (1 - shrinkageB) * leaveOneOutWinRate
+            : leaveOneOutWinRate;
+      }
+
       const highSettingRate = evidenceDays > 0 ? highSettingCount / evidenceDays : 0;
       const rawModelScore = modelScoreMap.get(currentModel) || 0;
 
@@ -765,6 +997,12 @@ export class MachineHistoryAccumulator {
           priorDayDiff: lastDiff,
           priorDayDate: lastDate,
           standardError: Math.round(standardError * 10) / 10,
+          cohortAvgPayoutRate: Math.round(rawPayoutRate * 100) / 100,
+          shrunkPayoutRate: Math.round(shrunkPayoutRate * 100) / 100,
+          expectedDiffStd: Math.round(expectedDiffStd),
+          expectedDiffActual: Math.round(expectedDiffActual),
+          avgGames: Math.round(avgGames),
+          shrinkageB: Math.round(shrinkageB * 1000) / 1000,
         },
         history: fullHistoryEntries,
       });

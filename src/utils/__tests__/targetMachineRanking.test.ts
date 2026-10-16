@@ -423,4 +423,122 @@ describe('targetMachineRanking engine', () => {
       expect(originalResult.rankings[0].totalScore).toBeCloseTo(tamperedResult.rankings[0].totalScore, 4);
     });
   });
+
+  describe('9. プロンプト30: 経験ベイズ縮小シミュレーション検証テスト', () => {
+    function generateSyntheticRecords(
+      nMachines: number,
+      nDays: number,
+      trueDiffStd: number,
+      seed: number = 42
+    ): { pastRecords: DailyRecord[]; nextDayRecord: DailyRecord } {
+      let currentSeed = seed;
+      const pseudoRandom = () => {
+        currentSeed = (currentSeed * 16807) % 2147483647;
+        return (currentSeed - 1) / 2147483646;
+      };
+      const normalSample = (mean: number, std: number) => {
+        const u1 = Math.max(1e-7, pseudoRandom());
+        const u2 = pseudoRandom();
+        const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+        return Math.round(mean + z * std);
+      };
+
+      // Generate true machine abilities theta_i ~ N(0, trueDiffStd^2)
+      const thetas: number[] = [];
+      for (let i = 0; i < nMachines; i++) {
+        thetas.push(normalSample(0, trueDiffStd));
+      }
+
+      const dailyRecords: DailyRecord[] = [];
+      const baseYear = 2026;
+      const baseMonth = 1;
+
+      for (let d = 0; d <= nDays; d++) {
+        const dayNum = d + 1;
+        const dateMonth = String(baseMonth + Math.floor(dayNum / 28)).padStart(2, '0');
+        const dayOfMonth = String((dayNum % 28) + 1).padStart(2, '0');
+        const dateStr = `${baseYear}-${dateMonth}-${dayOfMonth}`;
+
+        const machines: DailyMachineRecord[] = [];
+        for (let m = 0; m < nMachines; m++) {
+          const machNum = 100 + m + 1;
+          // Noise: daily payout variance ~ 1,700 coins per 5,000G
+          const diff = normalSample(thetas[m], 1700);
+          machines.push({
+            machineNum: machNum,
+            modelName: 'マイジャグラーV',
+            games: 5000,
+            diff,
+          });
+        }
+
+        dailyRecords.push(createMockDailyRecord(dateStr, machines, false));
+      }
+
+      return {
+        pastRecords: dailyRecords.slice(0, nDays),
+        nextDayRecord: dailyRecords[nDays],
+      };
+    }
+
+    it('真の差0枚のデータで、上位20台の画面表示の期待差枚が過大にならず、実績と矛盾しない（±100枚以内）', () => {
+      const { pastRecords, nextDayRecord } = generateSyntheticRecords(60, 100, 0, 12345);
+      const targetDate = nextDayRecord.date;
+
+      const result = calculateTargetMachineRanking(targetDate, pastRecords, undefined, {
+        shrinkageMode: 'empirical',
+      });
+      expect(result.rankings.length).toBe(60);
+
+      const top20 = result.rankings.slice(0, 20);
+      const top20ExpectedAvg =
+        top20.reduce((acc, r) => acc + (r.stats.expectedDiffStd ?? r.stats.shrunkDiff), 0) / 20;
+
+      // In legacy fixed n/(n+3), this was +428 coins (overestimated).
+      // With empirical Bayes shrinkage when tau^2 is estimated near 0,
+      // expected difference shrinks close to 0 (well within ±100 coins).
+      expect(Math.abs(top20ExpectedAvg)).toBeLessThanOrEqual(100);
+
+      // Verify that next-day actual difference is consistent with 0 true difference
+      const nextDayMap = new Map(nextDayRecord.machines!.map((m) => [m.machineNum, m.diff]));
+      const top20ActualAvg =
+        top20.reduce((acc, r) => acc + (nextDayMap.get(r.machineNum) ?? 0), 0) / 20;
+      expect(Math.abs(top20ActualAvg)).toBeLessThan(500); // within 1 daily standard error
+    });
+
+    it('300枚の差があるデータで、上位20台のリフトが正になり、画面の期待差枚が実績と同水準になる', () => {
+      const { pastRecords, nextDayRecord } = generateSyntheticRecords(60, 100, 300, 54321);
+      const targetDate = nextDayRecord.date;
+
+      const result = calculateTargetMachineRanking(targetDate, pastRecords, undefined, {
+        shrinkageMode: 'empirical',
+      });
+      const top20 = result.rankings.slice(0, 20);
+      const top20ExpectedAvg =
+        top20.reduce((acc, r) => acc + (r.stats.expectedDiffStd ?? r.stats.shrunkDiff), 0) / 20;
+
+      // Positive lift
+      expect(top20ExpectedAvg).toBeGreaterThan(50);
+      expect(top20ExpectedAvg).toBeLessThan(350);
+
+      // Empirical Bayes reliability is non-zero
+      expect(top20[0].stats.reliabilityRate).toBeGreaterThan(25);
+    });
+
+    it('fixed モードでは旧来の固定比率 shrinkageK が動作し、ゴールデン等の互換性を維持する', () => {
+      const { pastRecords, nextDayRecord } = generateSyntheticRecords(60, 100, 0, 9999);
+      const targetDate = nextDayRecord.date;
+
+      const resultFixed = calculateTargetMachineRanking(targetDate, pastRecords, undefined, {
+        shrinkageMode: 'fixed',
+        shrinkageK: 3,
+      });
+
+      expect(resultFixed.rankings.length).toBe(60);
+      // In fixed mode, 100 days has weight 100/(100+3) = 97%, retaining noisy fluctuations
+      const top20FixedAvg =
+        resultFixed.rankings.slice(0, 20).reduce((acc, r) => acc + r.stats.shrunkDiff, 0) / 20;
+      expect(top20FixedAvg).toBeGreaterThan(150); // Fixed mode overestimates compared to empirical Bayes (< 100)
+    });
+  });
 });

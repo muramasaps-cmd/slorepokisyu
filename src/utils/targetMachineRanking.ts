@@ -16,16 +16,22 @@ import { HIGH_SETTING_THRESHOLDS } from './highSettingConfig';
 export { HIGH_SETTING_THRESHOLDS } from './highSettingConfig';
 export type { MachineRankingWeights } from '../data/types';
 
+export const CONFIDENCE_THRESHOLDS = {
+  HIGH: 0.50,
+  MEDIUM: 0.25,
+} as const;
+
 export const DEFAULT_MACHINE_RANKING_WEIGHTS: MachineRankingWeights = {
   diffWeight: 0.04,
   winRateWeight: 0.3,
   highSettingWeight: 20.0,
   modelScoreWeight: 0.25,
-  tailMatchBonus: 8.0,
-  zoroBonus: 4.0,
+  tailMatchBonus: 0.0,
+  zoroBonus: 0.0,
   recentStateWeight: 0,
   shrinkageK: 3,
   shrinkageMode: 'empirical',
+  cohortMode: 'interaction',
   standardGames: 5000,
 };
 
@@ -111,6 +117,9 @@ export interface TargetMachineScore {
     expectedDiffActual?: number;
     avgGames?: number;
     shrinkageB?: number;
+    reliabilityRate?: number;
+    expectedDiffMargin80?: number;
+    expectedDiff80Range?: [number, number];
   };
   history: MachineHistoryEntry[];
 }
@@ -660,13 +669,29 @@ export class MachineHistoryAccumulator {
       }
     });
 
-    // Precompute Empirical Bayes parameters per model for selectedKey
-    const modelEBParams = new Map<
-      string,
-      {
-        sigma2: number;
-        tau2: number;
-        machinesMap: Map<
+    // Helper to compute Empirical Bayes parameters for a given cohort key ('selectedKey' or 'all')
+    const computeEBForCohortKey = (cohortKey: string) => {
+      const ebMap = new Map<
+        string,
+        {
+          sigma2: number;
+          tau2: number;
+          machinesMap: Map<
+            number,
+            {
+              diffRate: number;
+              totalDiff: number;
+              totalInCoins: number;
+              totalGames: number;
+              winCount: number;
+              cohortDays: number;
+            }
+          >;
+        }
+      >();
+
+      modelToActiveMachines.forEach((machNums, modelName) => {
+        const modelMachinesData = new Map<
           number,
           {
             diffRate: number;
@@ -676,87 +701,108 @@ export class MachineHistoryAccumulator {
             winCount: number;
             cohortDays: number;
           }
-        >;
-      }
-    >();
+        >();
 
-    modelToActiveMachines.forEach((machNums, modelName) => {
-      const modelMachinesData = new Map<
-        number,
-        {
-          diffRate: number;
-          totalDiff: number;
-          totalInCoins: number;
-          totalGames: number;
-          winCount: number;
-          cohortDays: number;
-        }
-      >();
+        let pooledSS = 0;
+        let pooledDF = 0;
+        const machineMeans: Array<{ num: number; r: number; n: number }> = [];
 
-      let pooledSS = 0;
-      let pooledDF = 0;
-      const machineMeans: Array<{ num: number; r: number; n: number }> = [];
+        for (const num of machNums) {
+          const cMap = this.machineCohortStats.get(num);
+          const cSt = cMap?.get(cohortKey);
+          const n = cSt ? cSt.count : 0;
+          const totalDiff = cSt ? cSt.totalDiff : 0;
+          const totalGames = cSt ? cSt.totalGames : 0;
+          const totalInCoins = cSt ? cSt.totalInCoins : 0;
+          const winCount = cSt ? cSt.winCount : 0;
+          const diffRate = totalInCoins > 0 ? totalDiff / totalInCoins : 0;
 
-      for (const num of machNums) {
-        const cMap = this.machineCohortStats.get(num);
-        const cSt = cMap?.get(selectedKey);
-        const n = cSt ? cSt.count : 0;
-        const totalDiff = cSt ? cSt.totalDiff : 0;
-        const totalGames = cSt ? cSt.totalGames : 0;
-        const totalInCoins = cSt ? cSt.totalInCoins : 0;
-        const winCount = cSt ? cSt.winCount : 0;
-        const diffRate = totalInCoins > 0 ? totalDiff / totalInCoins : 0;
+          modelMachinesData.set(num, {
+            diffRate,
+            totalDiff,
+            totalInCoins,
+            totalGames,
+            winCount,
+            cohortDays: n,
+          });
 
-        modelMachinesData.set(num, {
-          diffRate,
-          totalDiff,
-          totalInCoins,
-          totalGames,
-          winCount,
-          cohortDays: n,
-        });
-
-        if (cSt && n >= 1) {
-          machineMeans.push({ num, r: diffRate, n });
-          if (n >= 2 && cSt.dailyEntries && cSt.dailyEntries.length >= 2) {
-            const unwMean = cSt.dailyEntries.reduce((acc, e) => acc + e.diffRate, 0) / n;
-            let ss = 0;
-            for (const e of cSt.dailyEntries) {
-              ss += (e.diffRate - unwMean) ** 2;
+          if (cSt && n >= 1) {
+            machineMeans.push({ num, r: diffRate, n });
+            if (n >= 2 && cSt.dailyEntries && cSt.dailyEntries.length >= 2) {
+              const unwMean = cSt.dailyEntries.reduce((acc, e) => acc + e.diffRate, 0) / n;
+              let ss = 0;
+              for (const e of cSt.dailyEntries) {
+                ss += (e.diffRate - unwMean) ** 2;
+              }
+              pooledSS += ss;
+              pooledDF += n - 1;
             }
-            pooledSS += ss;
-            pooledDF += n - 1;
           }
         }
-      }
 
-      // 1. Within-machine daily variance sigma^2 (pooled across model)
-      // Fallback default variance: approx (1700 / 15000)^2 ≈ 0.012844
-      const defaultSigma2 = (1700 / 15000) ** 2;
-      const sigma2 = pooledDF >= 1 && pooledSS > 0 ? pooledSS / pooledDF : defaultSigma2;
+        // 1. Within-machine daily variance sigma^2 (pooled across model)
+        const defaultSigma2 = (1700 / 15000) ** 2;
+        const priorDF = 8;
+        const sigma2 = (pooledSS + priorDF * defaultSigma2) / (pooledDF + priorDF);
 
-      // 2. Between-machine true difference variance tau^2 (method of moments)
-      let tau2 = 0;
-      const M = machineMeans.length;
-      if (M >= 2) {
-        const grandMean = machineMeans.reduce((acc, m) => acc + m.r, 0) / M;
-        let sBetween = 0;
-        let expectedErrorSum = 0;
-        for (const m of machineMeans) {
-          sBetween += (m.r - grandMean) ** 2;
-          expectedErrorSum += sigma2 / m.n;
+        // 2. Between-machine true difference variance tau^2 (method of moments)
+        const defaultTau2 = defaultSigma2 / 8;
+        let tau2 = defaultTau2;
+        const M = machineMeans.length;
+        if (M >= 2) {
+          const grandMean = machineMeans.reduce((acc, m) => acc + m.r, 0) / M;
+          let sBetween = 0;
+          let expectedErrorSum = 0;
+          for (const m of machineMeans) {
+            sBetween += (m.r - grandMean) ** 2;
+            expectedErrorSum += sigma2 / m.n;
+          }
+          const sampleBetweenVar = sBetween / (M - 1);
+          const avgExpectedError = expectedErrorSum / M;
+          const rawTau2 = Math.max(0, sampleBetweenVar - avgExpectedError);
+          const tauWeight = M >= 10 ? 1.0 : (M - 1) / 10;
+          tau2 = tauWeight * rawTau2 + (1 - tauWeight) * defaultTau2;
         }
-        const sampleBetweenVar = sBetween / (M - 1);
-        const avgExpectedError = expectedErrorSum / M;
-        tau2 = Math.max(0, sampleBetweenVar - avgExpectedError);
-      }
 
-      modelEBParams.set(modelName, {
-        sigma2,
-        tau2,
-        machinesMap: modelMachinesData,
+        ebMap.set(modelName, {
+          sigma2,
+          tau2,
+          machinesMap: modelMachinesData,
+        });
       });
+
+      return ebMap;
+    };
+
+    const modelEBParams = computeEBForCohortKey(selectedKey);
+    const modelEBParamsAll =
+      mergedWeights.cohortMode === 'additive' ? computeEBForCohortKey('all') : undefined;
+
+    // Requirement 5: Beta prior shrinkage for high-setting behavior rate
+    let totalStoreHighSettingCount = 0;
+    let totalStoreMachineEvidenceDays = 0;
+    this.machineOverall.forEach((mState, mNum) => {
+      if (activeMachineNums.has(mNum)) {
+        totalStoreHighSettingCount += mState.highSettingCount;
+        totalStoreMachineEvidenceDays += mState.evidenceDays;
+      }
     });
+    const storeBaseHighRate =
+      totalStoreMachineEvidenceDays > 0
+        ? totalStoreHighSettingCount / totalStoreMachineEvidenceDays
+        : 0.15;
+    const priorK =
+      mergedWeights.betaPriorA !== undefined && mergedWeights.betaPriorB !== undefined
+        ? mergedWeights.betaPriorA + mergedWeights.betaPriorB
+        : 4;
+    const priorA =
+      mergedWeights.betaPriorA !== undefined
+        ? mergedWeights.betaPriorA
+        : storeBaseHighRate * priorK;
+    const priorB =
+      mergedWeights.betaPriorB !== undefined
+        ? mergedWeights.betaPriorB
+        : priorK - priorA;
 
     this.machineOverall.forEach((mState, machineNum) => {
       const {
@@ -786,7 +832,7 @@ export class MachineHistoryAccumulator {
       const cohortTotalInCoins = machData?.totalInCoins ?? 0;
       const cohortWinCount = machData?.winCount ?? 0;
 
-      // Model baseline
+      // Model baseline for selectedKey
       const modelMap = this.modelCohortStats.get(currentModel);
       const mCohort = modelMap?.get(selectedKey);
       const mOverall = modelMap?.get('all');
@@ -818,27 +864,29 @@ export class MachineHistoryAccumulator {
 
       const rawPayoutRate = (1 + rawCohortDiffRate) * 100;
 
-      // Leave-one-out baseline of other machines of the same model
+      // Leave-one-out baseline of other machines of the same model (Requirement 1b)
       let leaveOneOutDiffRate = baseDiffRate;
       let leaveOneOutWinRate = baseWinRate;
       if (eb && eb.machinesMap.size > 1) {
-        let otherDiff = 0;
-        let otherIn = 0;
-        let otherWins = 0;
-        let otherDays = 0;
+        let otherTotalDiff = 0;
+        let otherTotalInCoins = 0;
+        let otherWinSum = 0;
+        let otherCount = 0;
         eb.machinesMap.forEach((otherM, oNum) => {
           if (oNum !== machineNum && otherM.cohortDays > 0) {
-            otherDiff += otherM.totalDiff;
-            otherIn += otherM.totalInCoins;
-            otherWins += otherM.winCount;
-            otherDays += otherM.cohortDays;
+            otherTotalDiff += otherM.totalDiff;
+            otherTotalInCoins += otherM.totalInCoins;
+            otherWinSum += otherM.winCount;
+            otherCount += otherM.cohortDays;
           }
         });
-        if (otherIn > 0) {
-          leaveOneOutDiffRate = otherDiff / otherIn;
-        }
-        if (otherDays > 0) {
-          leaveOneOutWinRate = (otherWins / otherDays) * 100;
+        if (otherTotalInCoins > 0 && otherCount > 0) {
+          const rawLooRate = otherTotalDiff / otherTotalInCoins;
+          const rawLooWin = (otherWinSum / otherCount) * 100;
+          const mSize = eb.machinesMap.size;
+          const baselineWeight = Math.min(1.0, Math.max(0, (mSize - 3) / 2));
+          leaveOneOutDiffRate = baselineWeight * rawLooRate + (1 - baselineWeight) * baseDiffRate;
+          leaveOneOutWinRate = baselineWeight * rawLooWin + (1 - baselineWeight) * baseWinRate;
         }
       }
 
@@ -857,6 +905,7 @@ export class MachineHistoryAccumulator {
       let expectedDiffActual = 0;
 
       if (mergedWeights.shrinkageMode === 'fixed') {
+        // Fixed n/(n+k) mode (Requirement 1c: preserves exact legacy golden)
         const k = mergedWeights.shrinkageK || 3;
         shrinkageB = cohortEvidenceDays / (cohortEvidenceDays + k);
         shrunkDiff = shrinkageB * rawCohortAvgDiff + (1 - shrinkageB) * baseAvgDiff;
@@ -864,8 +913,59 @@ export class MachineHistoryAccumulator {
         expectedDiffStd = shrunkDiff;
         expectedDiffActual = shrunkDiff;
         shrunkPayoutRate = (1 + (shrunkDiff / (Math.max(1, avgGames) * 3))) * 100;
+      } else if (mergedWeights.cohortMode === 'additive' && modelEBParamsAll) {
+        // Requirement 4: Additive cohort mode
+        const ebAll = modelEBParamsAll.get(currentModel);
+        const machDataAll = ebAll?.machinesMap.get(machineNum);
+        const allDays = machDataAll?.cohortDays ?? 0;
+        const allDiffRate = machDataAll?.diffRate ?? 0;
+        const allWinRate = allDays > 0 ? (machDataAll!.winCount / allDays) * 100 : 50;
+
+        let leaveOneOutAllDiffRate = 0;
+        let leaveOneOutAllWinRate = 50;
+        if (ebAll && ebAll.machinesMap.size > 1) {
+          let oDiff = 0;
+          let oIn = 0;
+          let oWin = 0;
+          let oCount = 0;
+          ebAll.machinesMap.forEach((oM, oNum) => {
+            if (oNum !== machineNum && oM.cohortDays > 0) {
+              oDiff += oM.totalDiff;
+              oIn += oM.totalInCoins;
+              oWin += oM.winCount;
+              oCount += oM.cohortDays;
+            }
+          });
+          if (oIn > 0 && oCount > 0) {
+            const rawLooRate = oDiff / oIn;
+            const rawLooWin = (oWin / oCount) * 100;
+            const mSize = ebAll.machinesMap.size;
+            const baselineWeight = Math.min(1.0, Math.max(0, (mSize - 3) / 2));
+            leaveOneOutAllDiffRate = baselineWeight * rawLooRate + (1 - baselineWeight) * baseDiffRate;
+            leaveOneOutAllWinRate = baselineWeight * rawLooWin + (1 - baselineWeight) * baseWinRate;
+          }
+        }
+
+        const tau2All = ebAll?.tau2 ?? 0;
+        const sigma2All = ebAll?.sigma2 ?? (1700 / 15000) ** 2;
+        if (allDays > 0 && tau2All > 0) {
+          const samplingVarAll = sigma2All / allDays;
+          shrinkageB = tau2All / (tau2All + samplingVarAll);
+        } else {
+          shrinkageB = 0;
+        }
+
+        const machDeltaRate = allDays > 0 ? shrinkageB * (allDiffRate - leaveOneOutAllDiffRate) : 0;
+        const machDeltaWin = allDays > 0 ? shrinkageB * (allWinRate - leaveOneOutAllWinRate) : 0;
+
+        const shrunkDiffRate = baseDiffRate + machDeltaRate;
+        shrunkWinRate = baseWinRate + machDeltaWin;
+        shrunkPayoutRate = (1 + shrunkDiffRate) * 100;
+        expectedDiffStd = shrunkDiffRate * (standardGames * 3);
+        expectedDiffActual = shrunkDiffRate * (avgGames * 3);
+        shrunkDiff = expectedDiffStd;
       } else {
-        // Empirical Bayes Shrinkage (Requirement 1 & 2)
+        // Requirement 1 & 2: Empirical Bayes shrinkage (interaction mode)
         const tau2 = eb?.tau2 ?? 0;
         const sigma2 = eb?.sigma2 ?? (1700 / 15000) ** 2;
 
@@ -892,7 +992,9 @@ export class MachineHistoryAccumulator {
             : leaveOneOutWinRate;
       }
 
-      const highSettingRate = evidenceDays > 0 ? highSettingCount / evidenceDays : 0;
+      // Requirement 5: Beta prior shrinkage on high-setting behavior rate
+      const highSettingRate =
+        (highSettingCount + priorA) / (evidenceDays + priorA + priorB);
       const rawModelScore = modelScoreMap.get(currentModel) || 0;
 
       const machTail = getMachineTailDigit(machineNum, lastTail);
@@ -927,25 +1029,81 @@ export class MachineHistoryAccumulator {
             100
         ) / 100) || 0;
 
+      // Requirement 6: Confidence based on Empirical Bayes reliability tau^2 / (tau^2 + SE^2)
       let confidence: MachineConfidenceLevel = '低';
       let standardError = 0;
-      if (diffs.length > 0) {
-        const mean = mState.diffSum / diffs.length;
-        let varSum = 0;
-        for (let i = 0; i < diffs.length; i++) {
-          varSum += (diffs[i] - mean) ** 2;
+      const reliabilityRate = Math.round(shrinkageB * 100);
+
+      if (mergedWeights.shrinkageMode === 'fixed') {
+        if (diffs.length > 0) {
+          const mean = mState.diffSum / diffs.length;
+          let varSum = 0;
+          for (let i = 0; i < diffs.length; i++) {
+            varSum += (diffs[i] - mean) ** 2;
+          }
+          const variance = varSum / Math.max(1, diffs.length - 1);
+          const stdDev = Math.sqrt(variance);
+          standardError = stdDev / Math.sqrt(Math.max(1, diffs.length));
+          if (cohortEvidenceDays >= 5 && standardError <= 650) {
+            confidence = '高';
+          } else if (
+            cohortEvidenceDays >= 3 ||
+            (evidenceDays >= 6 && standardError <= 950)
+          ) {
+            confidence = '中';
+          }
         }
-        const variance = varSum / Math.max(1, diffs.length - 1);
-        const stdDev = Math.sqrt(variance);
-        standardError = stdDev / Math.sqrt(Math.max(1, diffs.length));
-        if (cohortEvidenceDays >= 5 && standardError <= 650) {
+      } else {
+        if (shrinkageB >= CONFIDENCE_THRESHOLDS.HIGH) {
           confidence = '高';
-        } else if (
-          cohortEvidenceDays >= 3 ||
-          (evidenceDays >= 6 && standardError <= 950)
-        ) {
+        } else if (shrinkageB >= CONFIDENCE_THRESHOLDS.MEDIUM) {
           confidence = '中';
+        } else {
+          confidence = '低';
         }
+
+        if (diffs.length > 0) {
+          const mean = mState.diffSum / diffs.length;
+          let varSum = 0;
+          for (let i = 0; i < diffs.length; i++) {
+            varSum += (diffs[i] - mean) ** 2;
+          }
+          const variance = varSum / Math.max(1, diffs.length - 1);
+          const stdDev = Math.sqrt(variance);
+          standardError = stdDev / Math.sqrt(Math.max(1, diffs.length));
+        }
+      }
+
+      // Requirement 8: 80% credible interval from posterior standard deviation
+      let expectedDiffMargin80 = 0;
+      let expectedDiff80Range: [number, number] = [
+        Math.round(expectedDiffStd),
+        Math.round(expectedDiffStd),
+      ];
+      if (mergedWeights.shrinkageMode !== 'fixed') {
+        const activeEb =
+          mergedWeights.cohortMode === 'additive'
+            ? modelEBParamsAll?.get(currentModel)
+            : eb;
+        const tau2 = activeEb?.tau2 ?? 0;
+        const sigma2 = activeEb?.sigma2 ?? (1700 / 15000) ** 2;
+        const effDays =
+          mergedWeights.cohortMode === 'additive' ? evidenceDays : cohortEvidenceDays;
+        let postVar = 0;
+        if (tau2 > 0) {
+          if (effDays > 0) {
+            const samplingVar = sigma2 / effDays;
+            postVar = (tau2 * samplingVar) / (tau2 + samplingVar);
+          } else {
+            postVar = tau2;
+          }
+        }
+        const postSe = Math.sqrt(postVar) * (standardGames * 3);
+        expectedDiffMargin80 = Math.round(1.28 * postSe);
+        expectedDiff80Range = [
+          Math.round(expectedDiffStd - expectedDiffMargin80),
+          Math.round(expectedDiffStd + expectedDiffMargin80),
+        ];
       }
 
       let fullHistoryEntries: MachineHistoryEntry[] = [];
@@ -1003,6 +1161,9 @@ export class MachineHistoryAccumulator {
           expectedDiffActual: Math.round(expectedDiffActual),
           avgGames: Math.round(avgGames),
           shrinkageB: Math.round(shrinkageB * 1000) / 1000,
+          reliabilityRate,
+          expectedDiffMargin80,
+          expectedDiff80Range,
         },
         history: fullHistoryEntries,
       });

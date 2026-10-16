@@ -104,6 +104,31 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
     });
   }, [dailyRecords, specialDayRules, machineTopN, hasMachineData, activeMachineWeights]);
 
+  // Requirement 4: Alternative cohortMode backtest for comparative validation
+  const alternativeCohortBacktestResult: MachineBacktestResult | null = useMemo(() => {
+    if (!hasMachineData) return null;
+    const altMode = activeMachineWeights.cohortMode === 'additive' ? 'interaction' : 'additive';
+    return runMachineBacktest(dailyRecords, specialDayRules, {
+      topN: machineTopN,
+      minEvidenceDays: 3,
+      blockLength: 7,
+      bootstrapIterations: 500,
+      weights: {
+        ...activeMachineWeights,
+        cohortMode: altMode,
+      },
+    });
+  }, [dailyRecords, specialDayRules, machineTopN, hasMachineData, activeMachineWeights]);
+
+  const interactionResult =
+    activeMachineWeights.cohortMode === 'additive'
+      ? alternativeCohortBacktestResult
+      : machineBacktestResult;
+  const additiveResult =
+    activeMachineWeights.cohortMode === 'additive'
+      ? machineBacktestResult
+      : alternativeCohortBacktestResult;
+
   // Suggested weights based on ablation items that have recommendZeroWeight: true
   const suggestedZeroWeights = useMemo(() => {
     if (!machineBacktestResult?.ablationResults) return null;
@@ -1536,6 +1561,115 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
                       </div>
                     </div>
                   )}
+
+                  {/* Requirement 4: Cohort Mode (interaction vs additive) Comparison Table & Switch Proposal */}
+                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+                    <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                      <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                        <Layers className="w-3.5 h-3.5 text-indigo-500" />
+                        コホート推定方式の比較検証 (interaction vs additive)
+                      </span>
+                      <span className="text-[11px] text-slate-500 font-medium">
+                        現在の設定: {activeMachineWeights.cohortMode === 'additive' ? '加法モデル (additive)' : '個別コホート (interaction, 既定)'}
+                      </span>
+                    </div>
+                    <div className="p-3.5 space-y-3">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs text-left">
+                          <thead className="bg-slate-100/70 text-slate-600 font-bold border-b border-slate-200">
+                            <tr>
+                              <th className="py-2 px-3">コホート方式</th>
+                              <th className="py-2 px-3 text-right">対ホール平均リフト</th>
+                              <th className="py-2 px-3 text-right">95%信頼区間</th>
+                              <th className="py-2 px-3 text-right">勝率</th>
+                              <th className="py-2 px-3">特性・推定アプローチ</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            <tr className={activeMachineWeights.cohortMode !== 'additive' ? 'bg-indigo-50/40 font-bold' : ''}>
+                              <td className="py-2.5 px-3 text-slate-900">
+                                個別コホート (interaction)
+                                {activeMachineWeights.cohortMode !== 'additive' && (
+                                  <span className="ml-1.5 text-[10px] bg-indigo-100 text-indigo-800 px-1.5 py-0.2 rounded font-black">
+                                    現在適用中
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-black">
+                                <span className={(interactionResult?.withFilter.avgLift ?? 0) >= 0 ? 'text-emerald-700' : 'text-rose-600'}>
+                                  {(interactionResult?.withFilter.avgLift ?? 0) >= 0 ? '+' : ''}
+                                  {interactionResult?.withFilter.avgLift ?? 0}枚
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-mono text-slate-600">
+                                [{interactionResult?.withFilter.ci95[0] ?? 0}枚, {interactionResult?.withFilter.ci95[1] ?? 0}枚]
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-bold text-slate-800">
+                                {interactionResult?.withFilter.avgWinRate ?? 0}%
+                              </td>
+                              <td className="py-2.5 px-3 text-slate-500 text-[11px]">
+                                台 × 同曜日・特日条件の直接交差平均から縮小推定（同条件サンプルが多い場合に高精度）
+                              </td>
+                            </tr>
+                            <tr className={activeMachineWeights.cohortMode === 'additive' ? 'bg-indigo-50/40 font-bold' : ''}>
+                              <td className="py-2.5 px-3 text-slate-900">
+                                加法モデル (additive)
+                                {activeMachineWeights.cohortMode === 'additive' && (
+                                  <span className="ml-1.5 text-[10px] bg-indigo-100 text-indigo-800 px-1.5 py-0.2 rounded font-black">
+                                    現在適用中
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-black">
+                                <span className={(additiveResult?.withFilter.avgLift ?? 0) >= 0 ? 'text-emerald-700' : 'text-rose-600'}>
+                                  {(additiveResult?.withFilter.avgLift ?? 0) >= 0 ? '+' : ''}
+                                  {additiveResult?.withFilter.avgLift ?? 0}枚
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-mono text-slate-600">
+                                [{additiveResult?.withFilter.ci95[0] ?? 0}枚, {additiveResult?.withFilter.ci95[1] ?? 0}枚]
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-bold text-slate-800">
+                                {additiveResult?.withFilter.avgWinRate ?? 0}%
+                              </td>
+                              <td className="py-2.5 px-3 text-slate-500 text-[11px]">
+                                台ごとの効果を全期間データで安定推定し、曜日・特日効果を機種・店舗単位で加算（サンプル少に頑健）
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Recommendation & Action */}
+                      {onSaveStoreMachineWeights && (
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 border-t border-slate-100">
+                          <p className="text-[11px] text-slate-600">
+                            {(additiveResult?.withFilter.avgLift ?? 0) > (interactionResult?.withFilter.avgLift ?? 0)
+                              ? `※ この店舗では、加法モデル（additive）が個別コホート対比で +${(additiveResult?.withFilter.avgLift ?? 0) - (interactionResult?.withFilter.avgLift ?? 0)}枚 上回っています。`
+                              : '※ 現時点では個別コホート（interaction）が優位または同等です。'}
+                          </p>
+                          {(additiveResult?.withFilter.avgLift ?? 0) > (interactionResult?.withFilter.avgLift ?? 0) && activeMachineWeights.cohortMode !== 'additive' ? (
+                            <button
+                              type="button"
+                              onClick={() => onSaveStoreMachineWeights({ ...activeMachineWeights, cohortMode: 'additive' })}
+                              className="text-xs px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-2xs flex items-center gap-1.5 shrink-0 cursor-pointer"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              コホート設定を「加法モデル (additive)」に切り替える
+                            </button>
+                          ) : activeMachineWeights.cohortMode === 'additive' ? (
+                            <button
+                              type="button"
+                              onClick={() => onSaveStoreMachineWeights({ ...activeMachineWeights, cohortMode: 'interaction' })}
+                              className="text-xs px-2.5 py-1 text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg border border-slate-200 cursor-pointer"
+                            >
+                              既定の個別コホート（interaction）に戻す
+                            </button>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+                  </div>
 
                   {/* Baseline Comparison Table */}
                   <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">

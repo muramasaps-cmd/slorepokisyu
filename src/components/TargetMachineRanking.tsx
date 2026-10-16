@@ -371,6 +371,31 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
 
   const isNoEdge = !isBacktestRunning && Boolean(backtestResult && !backtestResult.withFilter.hasEdge);
 
+  // Requirement 8: Top 20 expected diff average and calibration calculation
+  const top20Rankings = useMemo(() => {
+    return rankingResult?.rankings.slice(0, 20) || [];
+  }, [rankingResult]);
+
+  const top20AvgExpectedDiff = useMemo(() => {
+    if (top20Rankings.length === 0) return 0;
+    const sum = top20Rankings.reduce((acc, r) => acc + (r.stats.expectedDiffStd ?? r.stats.shrunkDiff), 0);
+    return Math.round(sum / top20Rankings.length);
+  }, [top20Rankings]);
+
+  const calibrationInfo = useMemo(() => {
+    if (!backtestResult) return null;
+    const actualLift = backtestResult.withFilter.avgLift;
+    const ci95 = backtestResult.withFilter.ci95;
+    const isUnderperforming = top20AvgExpectedDiff > 100 && actualLift < top20AvgExpectedDiff * 0.70;
+    const realizedPct = top20AvgExpectedDiff > 0 ? Math.max(0, Math.round((actualLift / top20AvgExpectedDiff) * 100)) : 0;
+    return {
+      actualLift,
+      ci95,
+      isUnderperforming,
+      realizedPct,
+    };
+  }, [backtestResult, top20AvgExpectedDiff]);
+
   return (
     <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden space-y-0">
       {/* Header Banner */}
@@ -433,6 +458,20 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
             </span>
             <p className="text-[11px] text-amber-800 leading-relaxed">
               この店舗のウォークフォワードバックテストでは、台番単位の予測リフト95%区間が0をまたいでおり（偶然のばらつき範囲内）、台番ごとの投入傾向に有意な固定性は確認できていません。参考程度にご覧ください。
+            </p>
+          </div>
+        </div>
+      )}
+      {/* Calibration Warning Banner when Actual Lift is Far Below Expected Diff (Requirement 8) */}
+      {calibrationInfo?.isUnderperforming && (
+        <div className="p-3.5 bg-amber-500/10 border-b border-amber-300 text-amber-950 text-xs flex items-start gap-2.5">
+          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <div className="space-y-0.5">
+            <span className="font-black text-amber-900 block">
+              【表示値の較正に関する注意事項】
+            </span>
+            <p className="text-[11px] text-amber-900/90 leading-relaxed font-sans">
+              過去の実績では、表示の期待値（上位20台平均 +{top20AvgExpectedDiff}枚）のうち<strong>約{calibrationInfo.realizedPct}%</strong>しか実現していません（店舗バックテストの上位20台実績リフト: {calibrationInfo.actualLift >= 0 ? '+' : ''}{calibrationInfo.actualLift}枚 [95%区間: {calibrationInfo.ci95[0]}枚〜{calibrationInfo.ci95[1]}枚]）。
             </p>
           </div>
         </div>
@@ -592,11 +631,11 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
                         <span
                           className={`text-2xs font-bold px-2 py-0.5 rounded-full border ${cStyle.bg} ${cStyle.text} ${cStyle.border}`}
                         >
-                          信頼度: {mach.confidence} (根拠{mach.evidenceDays}日)
+                          信頼度: {mach.confidence} {mach.stats.reliabilityRate !== undefined ? `(${mach.stats.reliabilityRate}%)` : ''} (根拠{mach.evidenceDays}日)
                         </span>
                       </div>
 
-                      {/* Expected diff & average turnover (Requirement 2) */}
+                      {/* Expected diff & average turnover (Requirement 2 & 8) */}
                       {mach.stats && (
                         <div className="mt-1 flex flex-wrap items-baseline gap-2 text-xs">
                           <span className="font-bold text-slate-500">期待差枚:</span>
@@ -621,6 +660,11 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
                             )}
                             枚
                           </span>
+                          {mach.stats.expectedDiff80Range && diffDisplayMode === 'std' && (
+                            <span className="text-[11px] font-mono text-slate-500 font-medium">
+                              [80%区間: {mach.stats.expectedDiff80Range[0] >= 0 ? '+' : ''}{formatNumber(mach.stats.expectedDiff80Range[0])}〜{mach.stats.expectedDiff80Range[1] >= 0 ? '+' : ''}{formatNumber(mach.stats.expectedDiff80Range[1])}枚]
+                            </span>
+                          )}
                           <span className="text-[11px] text-slate-400">
                             ({diffDisplayMode === 'std' ? '基準5,000G' : `実稼働${formatNumber(mach.stats.avgGames || 5000)}G`}換算
                             {mach.stats.shrunkPayoutRate !== undefined ? `, 推定出率 ${mach.stats.shrunkPayoutRate}%` : ''})
@@ -628,6 +672,11 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
                           <span className="text-[11px] text-slate-500">
                             • 平均稼働: {formatNumber(mach.stats.avgGames || 5000)}G/日
                           </span>
+                          {calibrationInfo && (
+                            <span className="text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 rounded font-medium">
+                              店上位実績リフト: {calibrationInfo.actualLift >= 0 ? '+' : ''}{calibrationInfo.actualLift}枚 [{calibrationInfo.ci95[0]}〜{calibrationInfo.ci95[1]}枚]
+                            </span>
+                          )}
                         </div>
                       )}
 

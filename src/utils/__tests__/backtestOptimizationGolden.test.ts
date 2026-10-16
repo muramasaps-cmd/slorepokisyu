@@ -18,6 +18,8 @@ describe('backtestOptimization Golden Consistency', () => {
   it('preserves exact calculateTargetMachineRanking outputs before and after optimization', () => {
     const ranking = calculateTargetMachineRanking(targetDate, records, specialDayRules, {
       shrinkageMode: 'fixed',
+      tailMatchBonus: 8.0,
+      zoroBonus: 4.0,
     });
     expect(ranking.rankings.length).toBeGreaterThan(0);
     // Snapshot-like assertions on Top 5 machines
@@ -77,6 +79,17 @@ describe('backtestOptimization Golden Consistency', () => {
       blockLength: 7,
       bootstrapIterations: 500,
       seed: 12345,
+      weights: {
+        diffWeight: 0.04,
+        winRateWeight: 0.3,
+        highSettingWeight: 20.0,
+        modelScoreWeight: 0.25,
+        tailMatchBonus: 8.0,
+        zoroBonus: 4.0,
+        recentStateWeight: 0,
+        shrinkageK: 3,
+        shrinkageMode: 'fixed',
+      },
     });
 
     expect(backtestResult.evaluatedDaysCount).toBe(57);

@@ -83,6 +83,8 @@ export interface CrossStoreMachineRank {
   avgGames?: number;
   shrunkPayoutRate?: number;
   cohortAvgPayoutRate?: number;
+  reliabilityRate?: number;
+  expectedDiff80Range?: [number, number];
 }
 
 export interface ExcludedStoreInfo {
@@ -311,9 +313,15 @@ export function calculateCrossStoreRanking(
         } else if (machineResult && machineResult.rankings.length > 0) {
           const islandDefs = parseIslandConfig(store.islandConfig);
           for (const mach of machineResult.rankings) {
-            // Prompt 13: Exclude confidence '低' by default, unless includeLowConfidence is true
-            const isLow = mach.confidence === '低';
-            if (isLow && !includeLowConfidence) {
+            let machConfidence = mach.confidence;
+            if (storeEvalDays < 3) {
+              machConfidence = '低';
+            } else if (storeEvalDays < 7 && machConfidence === '高') {
+              machConfidence = '中';
+            }
+
+            // Exclude confidence '低' by default, unless includeLowConfidence is true
+            if (machConfidence === '低' && !includeLowConfidence) {
               continue;
             }
 
@@ -354,31 +362,16 @@ export function calculateCrossStoreRanking(
               );
             }
 
-            // Supplementary elements appended only if space permits
-            if (reasons.length < 3 && mach.contributions.highSettingScore > 0 && mach.stats.highSettingCount > 0) {
-              reasons.push(
-                `高設定挙動 ${mach.evidenceDays}日中${mach.stats.highSettingCount}日 (${mach.stats.highSettingRate}%, 根拠${mach.evidenceDays}日)`
-              );
-            }
-            if (reasons.length < 3 && mach.contributions.tailBonusScore > 0) {
-              const label = mach.stats.isTailMatch ? '特定日末尾一致' : mach.stats.isZoro ? 'ゾロ目番' : '末尾・ゾロ目加点';
-              reasons.push(`${label} (根拠${mach.evidenceDays}日)`);
-            }
-
             // Reflect store evaluation days: fewer evaluated store days increases uncertainty interval & adjusts confidence
             const se = mach.stats.standardError && mach.stats.standardError > 0
               ? mach.stats.standardError
               : Math.round(800 / Math.sqrt(Math.max(1, mach.evidenceDays)));
             const storePenalty = storeEvalDays < 15 ? Math.sqrt(15 / Math.max(1, storeEvalDays)) : 1.0;
             const effectiveSe = Math.round(se * storePenalty);
-            const machMargin = Math.round(1.28 * effectiveSe);
-
-            let machConfidence = mach.confidence;
-            if (storeEvalDays < 3) {
-              machConfidence = '低';
-            } else if (storeEvalDays < 7 && machConfidence === '高') {
-              machConfidence = '中';
-            }
+            const machMargin =
+              mach.stats.expectedDiffMargin80 !== undefined && mach.stats.expectedDiffMargin80 > 0
+                ? Math.max(10, Math.round(mach.stats.expectedDiffMargin80 * storePenalty))
+                : Math.max(10, Math.round(1.28 * effectiveSe));
 
             const machUncertainty80: UncertaintyInterval = {
               margin: machMargin,
@@ -414,6 +407,8 @@ export function calculateCrossStoreRanking(
               avgGames,
               shrunkPayoutRate,
               cohortAvgPayoutRate,
+              reliabilityRate: mach.stats.reliabilityRate,
+              expectedDiff80Range: mach.stats.expectedDiff80Range,
             });
           }
         }

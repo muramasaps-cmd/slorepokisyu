@@ -1394,7 +1394,7 @@ export class MachineHistoryAccumulator {
       }
 
       if (confidenceMode === 'reliability') {
-        if (reliability !== null) {
+        if (reliability !== null && effectiveEvidenceDays >= 2) {
           if (reliability >= RELIABILITY_THRESHOLDS.HIGH) {
             confidence = '高';
           } else if (reliability >= RELIABILITY_THRESHOLDS.MEDIUM) {

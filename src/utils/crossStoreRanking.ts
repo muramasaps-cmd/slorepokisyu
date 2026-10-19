@@ -151,6 +151,18 @@ export interface CrossStoreRankingResult {
   legacyCrossShrink?: boolean;
 }
 
+export interface StoreBacktestEdgeSummary {
+  hasEdge: boolean;
+  lift?: number;
+  top20AvgLift?: number;
+  verdict?: string;
+  verdictMessage?: string;
+  evaluatedDays?: number;
+  ci95?: [number, number];
+  top20Ci95?: [number, number];
+  top20ActualAvgDiff?: number;
+}
+
 export interface CrossStoreRankingOptions {
   metricMode?: CrossMetricMode; // default 'diffCoins'
   topModelCount?: number; // default 20
@@ -165,16 +177,7 @@ export interface CrossStoreRankingOptions {
   diffMetric?: 'actual' | 'baseGames';
   /** 30-4: 基準ゲーム数（既定値: 5000） */
   baseGames?: number;
-  backtestResults?: Record<
-    string,
-    {
-      hasEdge: boolean;
-      lift: number;
-      verdict?: string;
-      evaluatedDays?: number;
-      ci95?: [number, number];
-    }
-  >;
+  backtestResults?: Record<string, StoreBacktestEdgeSummary>;
 }
 
 /**
@@ -888,8 +891,8 @@ export function calculateCrossStoreRanking(
 
     if (bRes) {
       hasBacktestEdge = bRes.hasEdge ? '優位性あり' : '優位性なし';
-      actualLift = bRes.lift;
-      ci95 = bRes.ci95 || null;
+      actualLift = bRes.top20AvgLift ?? bRes.lift ?? null;
+      ci95 = bRes.top20Ci95 ?? bRes.ci95 ?? null;
     }
 
     const rateLend = store.rateLend || 46;
@@ -1214,3 +1217,188 @@ export function calculateStorePastPerformance(
     isReferenceOnly: !hasEdge,
   };
 }
+
+/**
+ * Prompt 33: Filter criteria for cross-store rankings
+ */
+export interface CrossStoreFilterCriteria {
+  modelName?: string;
+  islandName?: string;
+  tailDigit?: number | null;
+  minEvidenceDays?: number;
+  confidence?: 'all' | MachineConfidenceLevel;
+}
+
+/**
+ * Prompt 33: Filters cross-store machine rankings based on:
+ * - modelName: partial case-insensitive match
+ * - islandName: exact match (for stores with island configurations)
+ * - tailDigit: machineNum % 10 matches (0-9)
+ * - minEvidenceDays: evidenceDays >= minEvidenceDays
+ * - confidence: matches confidence level ('高', '中', '低')
+ */
+export function filterMachineRankings(
+  machines: CrossStoreMachineRank[],
+  criteria?: CrossStoreFilterCriteria
+): CrossStoreMachineRank[] {
+  if (!criteria) return machines;
+  const { modelName, islandName, tailDigit, minEvidenceDays, confidence } = criteria;
+
+  return machines.filter((mach) => {
+    // 1. Model Name filter
+    if (modelName && modelName.trim() !== '') {
+      if (!mach.modelName.toLowerCase().includes(modelName.trim().toLowerCase())) {
+        return false;
+      }
+    }
+
+    // 2. Island Name filter
+    if (islandName && islandName.trim() !== '') {
+      if (!mach.islandName || mach.islandName.trim() !== islandName.trim()) {
+        return false;
+      }
+    }
+
+    // 3. Tail Digit filter (0-9)
+    if (tailDigit !== null && tailDigit !== undefined) {
+      const actualTail = ((mach.machineNum % 10) + 10) % 10;
+      if (actualTail !== tailDigit) {
+        return false;
+      }
+    }
+
+    // 4. Minimum evidence days
+    if (minEvidenceDays !== undefined && minEvidenceDays > 0) {
+      const effectiveDays = mach.evidenceDays;
+      if (effectiveDays < minEvidenceDays) {
+        return false;
+      }
+    }
+
+    // 5. Confidence filter ('高' | '中' | '低')
+    if (confidence && confidence !== 'all') {
+      if (mach.confidence !== confidence) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+}
+
+/**
+ * Prompt 33: Filters cross-store model rankings.
+ * Models are filtered by modelName and minEvidenceDays (sampleDays).
+ * If islandName, tailDigit, or confidence are specified, models are filtered
+ * to only those that have at least one machine matching the criteria in that store.
+ */
+export function filterModelRankings(
+  models: CrossStoreModelRank[],
+  criteria?: CrossStoreFilterCriteria,
+  machineRankings?: CrossStoreMachineRank[]
+): CrossStoreModelRank[] {
+  if (!criteria) return models;
+  const { modelName, islandName, tailDigit, minEvidenceDays, confidence } = criteria;
+
+  const hasMachineCriteria = Boolean(
+    (islandName && islandName.trim() !== '') ||
+    (tailDigit !== null && tailDigit !== undefined) ||
+    (confidence && confidence !== 'all')
+  );
+
+  return models.filter((model) => {
+    // 1. Model Name filter
+    if (modelName && modelName.trim() !== '') {
+      if (!model.modelName.toLowerCase().includes(modelName.trim().toLowerCase())) {
+        return false;
+      }
+    }
+
+    // 2. Minimum evidence days (sampleDays for models)
+    if (minEvidenceDays !== undefined && minEvidenceDays > 0) {
+      if (model.sampleDays < minEvidenceDays) {
+        return false;
+      }
+    }
+
+    // 3. Machine-level criteria (island, tail, confidence)
+    if (hasMachineCriteria && machineRankings && machineRankings.length > 0) {
+      const matchingMachs = machineRankings.filter(
+        (m) => m.storeId === model.storeId && m.modelName === model.modelName
+      );
+      const filteredMachs = filterMachineRankings(matchingMachs, {
+        islandName,
+        tailDigit,
+        confidence,
+        minEvidenceDays,
+      });
+      if (filteredMachs.length === 0) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+}
+
+/**
+ * Prompt 33: Retrieves machines for a specific model rank,
+ * optionally filtered by active filter criteria.
+ * Guarantees that only machines belonging to that specific store & model are returned.
+ */
+export function getMachinesForModelRank(
+  modelRank: CrossStoreModelRank,
+  machineRankings: CrossStoreMachineRank[],
+  criteria?: CrossStoreFilterCriteria
+): CrossStoreMachineRank[] {
+  // Strictly filter by storeId and modelName
+  const modelMachines = machineRankings.filter(
+    (m) => m.storeId === modelRank.storeId && m.modelName === modelRank.modelName
+  );
+
+  if (!criteria) {
+    return modelMachines;
+  }
+
+  // Apply island, tail, minEvidenceDays, confidence filters if present
+  return filterMachineRankings(modelMachines, {
+    islandName: criteria.islandName,
+    tailDigit: criteria.tailDigit,
+    minEvidenceDays: criteria.minEvidenceDays,
+    confidence: criteria.confidence,
+  });
+}
+
+export const CROSS_STORE_SETTINGS_STORAGE_KEY = 'slorepo_cross_store_settings';
+
+export interface CrossStoreSavedSettings {
+  selectedStoreIds?: string[];
+  metricMode?: CrossMetricMode;
+  diffMetric?: 'actual' | 'baseGames';
+  baseGames?: number;
+  displayCount?: number;
+  rankingView?: 'targetList' | 'models' | 'machines';
+  filters?: CrossStoreFilterCriteria;
+}
+
+export function loadCrossStoreSettings(): CrossStoreSavedSettings {
+  if (typeof localStorage === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(CROSS_STORE_SETTINGS_STORAGE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw);
+  } catch (e) {
+    console.warn('Failed to load cross store settings from localStorage:', e);
+    return {};
+  }
+}
+
+export function saveCrossStoreSettings(settings: CrossStoreSavedSettings): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(CROSS_STORE_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch (e) {
+    console.warn('Failed to save cross store settings to localStorage:', e);
+  }
+}
+

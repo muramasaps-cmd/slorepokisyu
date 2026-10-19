@@ -13,6 +13,14 @@ import {
   generateTargetListCsv,
   calculateStorePastPerformance,
   CrossStoreMachineRank,
+  CrossStoreModelRank,
+  CrossStoreFilterCriteria,
+  filterMachineRankings,
+  filterModelRankings,
+  getMachinesForModelRank,
+  loadCrossStoreSettings,
+  saveCrossStoreSettings,
+  CROSS_STORE_SETTINGS_STORAGE_KEY,
 } from '../crossStoreRanking';
 import { runMachineBacktest } from '../backtestEngine';
 import { StoreProfile, DailyRecord } from '../../data/types';
@@ -974,13 +982,13 @@ describe('crossStoreRanking utils', () => {
         rateLend: 46,
         rateExchange: 52,
         exchangeRate: '46枚貸/52枚交換',
+        totalMachinesApprox: 20,
+        dataRange: '2025-01',
         dailyRecords,
       };
 
       const testRes = calculateCrossStoreRanking([store], '2025-01-02', { includeLowConfidence: true });
-      console.log('testRes machineRankings:', testRes.machineRankings.map(m => ({ num: m.machineNum, conf: m.confidence, days: m.evidenceDays })));
       const cell = calculateStoreTargetMetrics(store, '2025-01-02', { topN: 10 });
-      console.log('cell:', cell);
 
       // Machine 999 has evidenceDays === 1, so its confidence is '低'.
       // It must be excluded from the average calculation.
@@ -1153,6 +1161,370 @@ describe('crossStoreRanking utils', () => {
       expect(dates14[13]).toBe('2025-01-14');
     });
   });
+
+  describe('プロンプト33: 横断狙いの絞り込みと展開', () => {
+    // Sample mock machine rankings
+    const mockMachines: CrossStoreMachineRank[] = [
+      {
+        rank: 1,
+        storeId: 'store-1',
+        storeName: '店舗A',
+        machineNum: 107, // tail 7
+        modelName: 'マイジャグラーV',
+        islandName: 'メイン島',
+        totalScore: 50,
+        confidence: '高',
+        evidenceDays: 10,
+        cohortEvidenceDays: 5,
+        shrunkDiff: 850,
+        expectedDiffCoins: 850,
+        expectedYenProfit: 17000,
+        cohortAvgDiff: 900,
+        cohortWinRate: 75,
+        highSettingRate: 40,
+        isTailMatch: true,
+        isZoro: false,
+        reasons: ['特日実績'],
+        uncertainty80: { margin: 150, min: 700, max: 1000, isWide: false },
+      },
+      {
+        rank: 2,
+        storeId: 'store-1',
+        storeName: '店舗A',
+        machineNum: 102, // tail 2
+        modelName: 'マイジャグラーV',
+        islandName: 'メイン島',
+        totalScore: 40,
+        confidence: '中',
+        evidenceDays: 5,
+        cohortEvidenceDays: 3,
+        shrunkDiff: 600,
+        expectedDiffCoins: 600,
+        expectedYenProfit: 12000,
+        cohortAvgDiff: 650,
+        cohortWinRate: 65,
+        highSettingRate: 25,
+        isTailMatch: false,
+        isZoro: false,
+        reasons: ['同曜日実績'],
+        uncertainty80: { margin: 200, min: 400, max: 800, isWide: false },
+      },
+      {
+        rank: 3,
+        storeId: 'store-2',
+        storeName: '店舗B',
+        machineNum: 217, // tail 7
+        modelName: 'スマスロ北斗の拳',
+        islandName: 'バラエティ島',
+        totalScore: 35,
+        confidence: '中',
+        evidenceDays: 7,
+        cohortEvidenceDays: 4,
+        shrunkDiff: 500,
+        expectedDiffCoins: 500,
+        expectedYenProfit: 10000,
+        cohortAvgDiff: 550,
+        cohortWinRate: 60,
+        highSettingRate: 30,
+        isTailMatch: true,
+        isZoro: false,
+        reasons: ['特日実績'],
+        uncertainty80: { margin: 250, min: 250, max: 750, isWide: false },
+      },
+      {
+        rank: 4,
+        storeId: 'store-2',
+        storeName: '店舗B',
+        machineNum: 220, // tail 0
+        modelName: 'スマスロ北斗の拳',
+        islandName: 'バラエティ島',
+        totalScore: 20,
+        confidence: '低',
+        evidenceDays: 2,
+        cohortEvidenceDays: 1,
+        shrunkDiff: 300,
+        expectedDiffCoins: 300,
+        expectedYenProfit: 6000,
+        cohortAvgDiff: 350,
+        cohortWinRate: 50,
+        highSettingRate: 10,
+        isTailMatch: false,
+        isZoro: false,
+        reasons: ['同曜日実績'],
+        uncertainty80: { margin: 300, min: 0, max: 600, isWide: true },
+      },
+      {
+        rank: 5,
+        storeId: 'store-1',
+        storeName: '店舗A',
+        machineNum: 333, // tail 3, zoro
+        modelName: 'アイムジャグラーEX',
+        islandName: undefined, // no island config
+        totalScore: 15,
+        confidence: '高',
+        evidenceDays: 15,
+        cohortEvidenceDays: 8,
+        shrunkDiff: 200,
+        expectedDiffCoins: 200,
+        expectedYenProfit: 4000,
+        cohortAvgDiff: 220,
+        cohortWinRate: 55,
+        highSettingRate: 20,
+        isTailMatch: false,
+        isZoro: true,
+        reasons: ['ゾロ目'],
+        uncertainty80: { margin: 100, min: 100, max: 300, isWide: false },
+      },
+    ];
+
+    // Sample mock model rankings
+    const mockModels: CrossStoreModelRank[] = [
+      {
+        rank: 1,
+        storeId: 'store-1',
+        storeName: '店舗A',
+        modelName: 'マイジャグラーV',
+        totalMachines: 10,
+        expectedDiffCoins: 450,
+        expectedYenProfit: 9000,
+        predictedWinRate: 60,
+        predictedPayoutRate: 103.5,
+        compositeScore: 65,
+        tacticalReason: '特日実績好調',
+        isSpecialDay: true,
+        sampleDays: 8,
+        uncertainty80: { margin: 120, min: 330, max: 570, isWide: false },
+      },
+      {
+        rank: 2,
+        storeId: 'store-2',
+        storeName: '店舗B',
+        modelName: 'スマスロ北斗の拳',
+        totalMachines: 8,
+        expectedDiffCoins: 380,
+        expectedYenProfit: 7600,
+        predictedWinRate: 55,
+        predictedPayoutRate: 102.8,
+        compositeScore: 50,
+        tacticalReason: '高稼働機種',
+        isSpecialDay: false,
+        sampleDays: 6,
+        uncertainty80: { margin: 150, min: 230, max: 530, isWide: false },
+      },
+      {
+        rank: 3,
+        storeId: 'store-1',
+        storeName: '店舗A',
+        modelName: 'アイムジャグラーEX',
+        totalMachines: 15,
+        expectedDiffCoins: 200,
+        expectedYenProfit: 4000,
+        predictedWinRate: 52,
+        predictedPayoutRate: 101.5,
+        compositeScore: 40,
+        tacticalReason: '台数最多',
+        isSpecialDay: true,
+        sampleDays: 12,
+        uncertainty80: { margin: 90, min: 110, max: 290, isWide: false },
+      },
+    ];
+
+    describe('1. 絞り込みの条件ごとに、結果が正しく絞られること', () => {
+      it('機種名で正しく台番ランキングが絞り込まれること (部分一致・大文字小文字無視)', () => {
+        const filteredJuggler = filterMachineRankings(mockMachines, { modelName: 'マイジャグ' });
+        expect(filteredJuggler).toHaveLength(2);
+        expect(filteredJuggler.every((m) => m.modelName === 'マイジャグラーV')).toBe(true);
+
+        const filteredHokuto = filterMachineRankings(mockMachines, { modelName: '北斗' });
+        expect(filteredHokuto).toHaveLength(2);
+        expect(filteredHokuto.every((m) => m.modelName === 'スマスロ北斗の拳')).toBe(true);
+
+        const filteredNone = filterMachineRankings(mockMachines, { modelName: '存在しない機種' });
+        expect(filteredNone).toHaveLength(0);
+      });
+
+      it('機種名で正しく機種ランキングが絞り込まれること', () => {
+        const filtered = filterModelRankings(mockModels, { modelName: 'ジャグラー' });
+        expect(filtered).toHaveLength(2);
+        expect(filtered.map((m) => m.modelName)).toEqual(['マイジャグラーV', 'アイムジャグラーEX']);
+      });
+
+      it('島名で正しく台番ランキングが絞り込まれること (島設定がある店舗)', () => {
+        const filteredMain = filterMachineRankings(mockMachines, { islandName: 'メイン島' });
+        expect(filteredMain).toHaveLength(2);
+        expect(filteredMain.every((m) => m.islandName === 'メイン島')).toBe(true);
+
+        const filteredVariety = filterMachineRankings(mockMachines, { islandName: 'バラエティ島' });
+        expect(filteredVariety).toHaveLength(2);
+        expect(filteredVariety.every((m) => m.islandName === 'バラエティ島')).toBe(true);
+      });
+
+      it('末尾で正しく台番ランキングが絞り込まれること (末尾7など)', () => {
+        const filteredTail7 = filterMachineRankings(mockMachines, { tailDigit: 7 });
+        expect(filteredTail7).toHaveLength(2);
+        expect(filteredTail7.map((m) => m.machineNum)).toEqual([107, 217]);
+
+        const filteredTail0 = filterMachineRankings(mockMachines, { tailDigit: 0 });
+        expect(filteredTail0).toHaveLength(1);
+        expect(filteredTail0[0].machineNum).toBe(220);
+
+        const filteredTail5 = filterMachineRankings(mockMachines, { tailDigit: 5 });
+        expect(filteredTail5).toHaveLength(0);
+      });
+
+      it('最小の根拠日数で正しく台番・機種ランキングが絞り込まれること', () => {
+        const filteredMachMin8 = filterMachineRankings(mockMachines, { minEvidenceDays: 8 });
+        expect(filteredMachMin8).toHaveLength(2);
+        expect(filteredMachMin8.map((m) => m.machineNum)).toEqual([107, 333]);
+
+        const filteredModelMin8 = filterModelRankings(mockModels, { minEvidenceDays: 8 });
+        expect(filteredModelMin8).toHaveLength(2);
+        expect(filteredModelMin8.map((m) => m.modelName)).toEqual(['マイジャグラーV', 'アイムジャグラーEX']);
+
+        const filteredModelMin10 = filterModelRankings(mockModels, { minEvidenceDays: 10 });
+        expect(filteredModelMin10).toHaveLength(1);
+        expect(filteredModelMin10[0].modelName).toBe('アイムジャグラーEX');
+      });
+
+      it('信頼度で正しく台番ランキングが絞り込まれること (高/中/低)', () => {
+        const filteredHigh = filterMachineRankings(mockMachines, { confidence: '高' });
+        expect(filteredHigh).toHaveLength(2);
+        expect(filteredHigh.every((m) => m.confidence === '高')).toBe(true);
+
+        const filteredMed = filterMachineRankings(mockMachines, { confidence: '中' });
+        expect(filteredMed).toHaveLength(2);
+        expect(filteredMed.every((m) => m.confidence === '中')).toBe(true);
+
+        const filteredLow = filterMachineRankings(mockMachines, { confidence: '低' });
+        expect(filteredLow).toHaveLength(1);
+        expect(filteredLow[0].confidence).toBe('低');
+
+        const filteredAll = filterMachineRankings(mockMachines, { confidence: 'all' });
+        expect(filteredAll).toHaveLength(5);
+      });
+
+      it('複合条件 (機種 + 末尾 + 信頼度) で正しく絞り込まれること', () => {
+        const complex = filterMachineRankings(mockMachines, {
+          modelName: 'マイジャグラー',
+          tailDigit: 7,
+          confidence: '高',
+        });
+        expect(complex).toHaveLength(1);
+        expect(complex[0].machineNum).toBe(107);
+
+        // Model filtered by tail digit using matching machines
+        const modelWithTail7 = filterModelRankings(
+          mockModels,
+          { tailDigit: 7 },
+          mockMachines
+        );
+        expect(modelWithTail7.map((m) => m.modelName)).toEqual(['マイジャグラーV', 'スマスロ北斗の拳']);
+      });
+    });
+
+    describe('2. 展開した台番が、その機種の台番だけであること', () => {
+      it('機種行を展開した際、その店舗・その機種の台番のみが抽出され他機種・他店舗が混入しないこと', () => {
+        const modelA = mockModels[0]; // store-1, マイジャグラーV
+        const expandedA = getMachinesForModelRank(modelA, mockMachines);
+
+        expect(expandedA).toHaveLength(2);
+        // Verify every machine strictly belongs to store-1 and マイジャグラーV
+        expect(expandedA.every((m) => m.storeId === 'store-1' && m.modelName === 'マイジャグラーV')).toBe(true);
+        expect(expandedA.map((m) => m.machineNum)).toEqual([107, 102]);
+
+        const modelB = mockModels[1]; // store-2, スマスロ北斗の拳
+        const expandedB = getMachinesForModelRank(modelB, mockMachines);
+
+        expect(expandedB).toHaveLength(2);
+        expect(expandedB.every((m) => m.storeId === 'store-2' && m.modelName === 'スマスロ北斗の拳')).toBe(true);
+        expect(expandedB.map((m) => m.machineNum)).toEqual([217, 220]);
+
+        const modelC = mockModels[2]; // store-1, アイムジャグラーEX
+        const expandedC = getMachinesForModelRank(modelC, mockMachines);
+
+        expect(expandedC).toHaveLength(1);
+        expect(expandedC[0].storeId).toBe('store-1');
+        expect(expandedC[0].modelName).toBe('アイムジャグラーEX');
+        expect(expandedC[0].machineNum).toBe(333);
+      });
+
+      it('展開された台番一覧にも絞り込み条件（末尾・信頼度など）が正常に連動適用されること', () => {
+        const modelA = mockModels[0]; // store-1, マイジャグラーV (台番: 107[末尾7,高], 102[末尾2,中])
+        const expandedTail7 = getMachinesForModelRank(modelA, mockMachines, { tailDigit: 7 });
+
+        expect(expandedTail7).toHaveLength(1);
+        expect(expandedTail7[0].machineNum).toBe(107);
+
+        const expandedMed = getMachinesForModelRank(modelA, mockMachines, { confidence: '中' });
+        expect(expandedMed).toHaveLength(1);
+        expect(expandedMed[0].machineNum).toBe(102);
+      });
+    });
+
+    describe('3. 保存と復元 (localStorage)', () => {
+      beforeEach(() => {
+        // Mock localStorage in test environment
+        const store: Record<string, string> = {};
+        globalThis.localStorage = {
+          getItem: (key: string) => store[key] || null,
+          setItem: (key: string, value: string) => {
+            store[key] = value;
+          },
+          removeItem: (key: string) => {
+            delete store[key];
+          },
+          clear: () => {
+            for (const k in store) delete store[k];
+          },
+          key: (idx: number) => Object.keys(store)[idx] || null,
+          length: 0,
+        };
+      });
+
+      it('絞り込み条件・表示形式が localStorage に保存され、正しく復元されること', () => {
+        const settingsToSave = {
+          selectedStoreIds: ['store-1', 'store-2'],
+          metricMode: 'yen' as const,
+          diffMetric: 'baseGames' as const,
+          baseGames: 6000,
+          displayCount: 50,
+          rankingView: 'models' as const,
+          filters: {
+            modelName: 'マイジャグラー',
+            islandName: 'メイン島',
+            tailDigit: 7,
+            minEvidenceDays: 5,
+            confidence: '高' as const,
+          },
+        };
+
+        saveCrossStoreSettings(settingsToSave);
+
+        const loaded = loadCrossStoreSettings();
+        expect(loaded).toBeDefined();
+        expect(loaded.selectedStoreIds).toEqual(['store-1', 'store-2']);
+        expect(loaded.metricMode).toBe('yen');
+        expect(loaded.diffMetric).toBe('baseGames');
+        expect(loaded.baseGames).toBe(6000);
+        expect(loaded.displayCount).toBe(50);
+        expect(loaded.rankingView).toBe('models');
+
+        expect(loaded.filters).toBeDefined();
+        expect(loaded.filters?.modelName).toBe('マイジャグラー');
+        expect(loaded.filters?.islandName).toBe('メイン島');
+        expect(loaded.filters?.tailDigit).toBe(7);
+        expect(loaded.filters?.minEvidenceDays).toBe(5);
+        expect(loaded.filters?.confidence).toBe('高');
+      });
+
+      it('localStorage にデータが存在しない場合は空オブジェクトが返ること', () => {
+        localStorage.clear();
+        const loaded = loadCrossStoreSettings();
+        expect(loaded).toEqual({});
+      });
+    });
+  });
 });
+
 
 

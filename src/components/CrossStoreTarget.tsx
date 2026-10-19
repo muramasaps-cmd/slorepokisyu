@@ -18,7 +18,14 @@ import {
   generateTargetListCsv,
   calculateStorePastPerformance,
   StorePastPerformanceResult,
+  CrossStoreFilterCriteria,
+  filterMachineRankings,
+  filterModelRankings,
+  getMachinesForModelRank,
+  loadCrossStoreSettings,
+  saveCrossStoreSettings,
 } from '../utils/crossStoreRanking';
+import { parseIslandConfig } from '../utils/islandUtils';
 import { runMachineBacktest } from '../utils/backtestEngine';
 import { formatNumber, formatYen } from '../utils/formatters';
 import {
@@ -52,6 +59,7 @@ import {
   ChevronUp,
   Check,
   Scale,
+  SlidersHorizontal,
 } from 'lucide-react';
 
 interface CrossStoreTargetProps {
@@ -89,6 +97,7 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
   };
 
   const hashParams = getHashParams();
+  const savedSettings = useMemo(() => loadCrossStoreSettings(), []);
 
   // Target Date state
   const [targetDate, setTargetDate] = useState<string>(() => {
@@ -99,10 +108,14 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
     return tom.toISOString().slice(0, 10);
   });
 
-  // Selected stores state
+  // Selected stores state (URL hash > savedSettings > all stores)
   const [selectedStoreIds, setSelectedStoreIds] = useState<string[]>(() => {
     if (hashParams.stores && hashParams.stores.length > 0) {
       const validIds = hashParams.stores.filter((id) => stores.some((s) => s.id === id));
+      if (validIds.length > 0) return validIds;
+    }
+    if (savedSettings.selectedStoreIds && savedSettings.selectedStoreIds.length > 0) {
+      const validIds = savedSettings.selectedStoreIds.filter((id) => stores.some((s) => s.id === id));
       if (validIds.length > 0) return validIds;
     }
     return stores.map((s) => s.id);
@@ -121,17 +134,77 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
   }, [targetDate, selectedStoreIds]);
 
   // Metric mode: diffCoins vs yen
-  const [metricMode, setMetricMode] = useState<CrossMetricMode>('diffCoins');
+  const [metricMode, setMetricMode] = useState<CrossMetricMode>(() => {
+    return savedSettings.metricMode || 'diffCoins';
+  });
 
   // 30-4: 指標の切替 (diffMetric: 'actual' | 'baseGames', 既定 'actual') & 基準G数 (既定 5,000)
-  const [diffMetric, setDiffMetric] = useState<'actual' | 'baseGames'>('actual');
-  const [baseGames, setBaseGames] = useState<number>(5000);
+  const [diffMetric, setDiffMetric] = useState<'actual' | 'baseGames'>(() => {
+    return savedSettings.diffMetric || 'actual';
+  });
+  const [baseGames, setBaseGames] = useState<number>(() => {
+    return savedSettings.baseGames || 5000;
+  });
 
   // Display count: 10 vs 20 vs 50
-  const [displayCount, setDisplayCount] = useState<number>(20);
+  const [displayCount, setDisplayCount] = useState<number>(() => {
+    return savedSettings.displayCount || 20;
+  });
 
   // Active view: 'targetList' | 'models' | 'machines'
-  const [rankingView, setRankingView] = useState<'targetList' | 'models' | 'machines'>('targetList');
+  const [rankingView, setRankingView] = useState<'targetList' | 'models' | 'machines'>(() => {
+    return savedSettings.rankingView || 'targetList';
+  });
+
+  // Prompt 33: 絞り込み条件 (Filter criteria)
+  const [filterCriteria, setFilterCriteria] = useState<CrossStoreFilterCriteria>(() => {
+    return (
+      savedSettings.filters || {
+        modelName: '',
+        islandName: '',
+        tailDigit: null,
+        minEvidenceDays: 0,
+        confidence: 'all',
+      }
+    );
+  });
+
+  // Prompt 33: 機種行の展開状態 (Set of `${storeId}___${modelName}`)
+  const [expandedModelKeys, setExpandedModelKeys] = useState<Set<string>>(new Set());
+
+  const toggleExpandModel = (storeId: string, modelName: string) => {
+    setExpandedModelKeys((prev) => {
+      const next = new Set(prev);
+      const key = `${storeId}___${modelName}`;
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  // Save settings (including filter criteria) to localStorage whenever relevant states change
+  useEffect(() => {
+    saveCrossStoreSettings({
+      selectedStoreIds,
+      metricMode,
+      diffMetric,
+      baseGames,
+      displayCount,
+      rankingView,
+      filters: filterCriteria,
+    });
+  }, [
+    selectedStoreIds,
+    metricMode,
+    diffMetric,
+    baseGames,
+    displayCount,
+    rankingView,
+    filterCriteria,
+  ]);
 
   // Active store ID for "狙い台リスト (来店中)"
   const [activeTargetStoreId, setActiveTargetStoreId] = useState<string>(() => {
@@ -612,6 +685,67 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
       setSelectedStoreIds([...selectedStoreIds, id]);
     }
   };
+
+  // Prompt 33: Available models & islands from selected stores
+  const availableModels = useMemo(() => {
+    const set = new Set<string>();
+    stores.forEach((s) => {
+      if (selectedStoreIds.includes(s.id)) {
+        (s.dailyRecords || []).forEach((r) => {
+          (r.models || []).forEach((m) => {
+            if (m.modelName) set.add(m.modelName);
+          });
+          (r.machines || []).forEach((mach) => {
+            if (mach.modelName) set.add(mach.modelName);
+          });
+        });
+      }
+    });
+    return Array.from(set).sort();
+  }, [stores, selectedStoreIds]);
+
+  const availableIslands = useMemo(() => {
+    const set = new Set<string>();
+    stores.forEach((s) => {
+      if (selectedStoreIds.includes(s.id)) {
+        if (s.islandDefinitions) {
+          s.islandDefinitions.forEach((isl) => {
+            if (isl.name) set.add(isl.name);
+          });
+        }
+        if (s.islandConfig) {
+          const parsed = parseIslandConfig(s.islandConfig);
+          parsed.forEach((isl) => {
+            if (isl.name) set.add(isl.name);
+          });
+        }
+      }
+    });
+    return Array.from(set).sort();
+  }, [stores, selectedStoreIds]);
+
+  // Prompt 33: Filtered machine and model rankings
+  const filteredMachineRankings = useMemo(() => {
+    return filterMachineRankings(rankingResult.machineRankings, filterCriteria);
+  }, [rankingResult.machineRankings, filterCriteria]);
+
+  const filteredModelRankings = useMemo(() => {
+    return filterModelRankings(
+      rankingResult.modelRankings,
+      filterCriteria,
+      rankingResult.machineRankings
+    );
+  }, [rankingResult.modelRankings, rankingResult.machineRankings, filterCriteria]);
+
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (filterCriteria.modelName && filterCriteria.modelName.trim() !== '') count++;
+    if (filterCriteria.islandName && filterCriteria.islandName.trim() !== '') count++;
+    if (filterCriteria.tailDigit !== null && filterCriteria.tailDigit !== undefined) count++;
+    if (filterCriteria.minEvidenceDays && filterCriteria.minEvidenceDays > 0) count++;
+    if (filterCriteria.confidence && filterCriteria.confidence !== 'all') count++;
+    return count;
+  }, [filterCriteria]);
 
   const isSingleStore = stores.length <= 1;
 
@@ -1352,10 +1486,154 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
         </div>
       </div>
 
+      {/* Prompt 33 Requirement 1 & 3: ランキング絞り込みパネル (機種・島・末尾・最小根拠日数・信頼度) */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-3.5 sm:p-4 shadow-2xs space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+          <div className="flex items-center gap-2">
+            <SlidersHorizontal className="w-4 h-4 text-indigo-600" />
+            <span className="font-bold text-slate-800 text-xs sm:text-sm">
+              ランキング絞り込み
+            </span>
+            {activeFilterCount > 0 && (
+              <span className="px-2 py-0.5 rounded-full text-2xs font-extrabold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                {activeFilterCount}件適用中
+              </span>
+            )}
+          </div>
+
+          {activeFilterCount > 0 && (
+            <button
+              type="button"
+              onClick={() =>
+                setFilterCriteria({
+                  modelName: '',
+                  islandName: '',
+                  tailDigit: null,
+                  minEvidenceDays: 0,
+                  confidence: 'all',
+                })
+              }
+              className="px-2.5 py-1 text-2xs font-bold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg border border-rose-200 transition-colors flex items-center gap-1 cursor-pointer"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>条件クリア</span>
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 text-xs">
+          {/* 1. 機種絞り込み */}
+          <div className="space-y-1">
+            <label className="text-[11px] font-bold text-slate-600 block">機種</label>
+            <input
+              type="text"
+              list="cross-store-models-list"
+              placeholder="全機種 (入力または選択)"
+              value={filterCriteria.modelName || ''}
+              onChange={(e) =>
+                setFilterCriteria((prev) => ({ ...prev, modelName: e.target.value }))
+              }
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 font-bold focus:bg-white focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+            />
+            <datalist id="cross-store-models-list">
+              {availableModels.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+          </div>
+
+          {/* 2. 島絞り込み (島設定がある店) */}
+          <div className="space-y-1">
+            <label className="text-[11px] font-bold text-slate-600 block">
+              島 {availableIslands.length === 0 && <span className="text-slate-400 font-normal">(設定なし)</span>}
+            </label>
+            <select
+              value={filterCriteria.islandName || ''}
+              disabled={availableIslands.length === 0}
+              onChange={(e) =>
+                setFilterCriteria((prev) => ({ ...prev, islandName: e.target.value }))
+              }
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 font-bold focus:bg-white focus:outline-hidden focus:ring-1 focus:ring-indigo-500 disabled:opacity-50 cursor-pointer"
+            >
+              <option value="">すべての島</option>
+              {availableIslands.map((isl) => (
+                <option key={isl} value={isl}>
+                  {isl}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 3. 台番末尾 (0-9) */}
+          <div className="space-y-1">
+            <label className="text-[11px] font-bold text-slate-600 block">台番末尾</label>
+            <select
+              value={filterCriteria.tailDigit !== null && filterCriteria.tailDigit !== undefined ? filterCriteria.tailDigit : ''}
+              onChange={(e) =>
+                setFilterCriteria((prev) => ({
+                  ...prev,
+                  tailDigit: e.target.value === '' ? null : Number(e.target.value),
+                }))
+              }
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 font-bold focus:bg-white focus:outline-hidden focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+            >
+              <option value="">すべての末尾</option>
+              {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((t) => (
+                <option key={t} value={t}>
+                  末尾 {t}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 4. 最小の根拠日数 */}
+          <div className="space-y-1">
+            <label className="text-[11px] font-bold text-slate-600 block">最小根拠日数</label>
+            <select
+              value={filterCriteria.minEvidenceDays || 0}
+              onChange={(e) =>
+                setFilterCriteria((prev) => ({
+                  ...prev,
+                  minEvidenceDays: Number(e.target.value),
+                }))
+              }
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 font-bold focus:bg-white focus:outline-hidden focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+            >
+              <option value={0}>指定なし (0日〜)</option>
+              <option value={3}>3日以上</option>
+              <option value={5}>5日以上</option>
+              <option value={7}>7日以上</option>
+              <option value={10}>10日以上</option>
+            </select>
+          </div>
+
+          {/* 5. 信頼度 */}
+          <div className="space-y-1">
+            <label className="text-[11px] font-bold text-slate-600 block">信頼度</label>
+            <select
+              value={filterCriteria.confidence || 'all'}
+              onChange={(e) =>
+                setFilterCriteria((prev) => ({
+                  ...prev,
+                  confidence: e.target.value as 'all' | '高' | '中' | '低',
+                }))
+              }
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 font-bold focus:bg-white focus:outline-hidden focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+            >
+              <option value="all">すべての信頼度</option>
+              <option value="高">高信頼のみ (高)</option>
+              <option value="中">中信頼 (中)</option>
+              <option value="低">低信頼 (低)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
       {/* 4. Sub-tab View Switcher: 狙い台リスト (来店中) vs 狙う機種 vs 狙う台 */}
       {(() => {
         const activeStoreObj = stores.find((s) => s.id === activeTargetStoreId) || stores[0];
-        const storeCandidates = rankingResult.storeMachineRankings?.[activeTargetStoreId] || [];
+        const rawStoreCandidates = rankingResult.storeMachineRankings?.[activeTargetStoreId] || [];
+        const storeCandidates = filterMachineRankings(rawStoreCandidates, filterCriteria);
         const { activeCandidates, checkedCandidates, rolledUpCount } = filterAndRollupTargetList(
           storeCandidates,
           checkedMap,
@@ -1392,7 +1670,7 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                   }`}
                 >
                   <Cpu className="w-3.5 h-3.5" />
-                  <span>横断 狙い機種ランキング ({rankingResult.modelRankings.length}件)</span>
+                  <span>横断 狙い機種ランキング ({filteredModelRankings.length}件)</span>
                 </button>
                 <button
                   type="button"
@@ -1404,7 +1682,7 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                   }`}
                 >
                   <Layers className="w-3.5 h-3.5" />
-                  <span>横断 狙い台(台番別)ランキング ({rankingResult.machineRankings.length}件)</span>
+                  <span>横断 狙い台(台番別)ランキング ({filteredMachineRankings.length}件)</span>
                 </button>
               </div>
 
@@ -1922,14 +2200,14 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
               </div>
             )}
 
-            {/* 4. Models Ranking View */}
+            {/* 4. Models Ranking View (Prompt 33: 行展開で機種下の台番一覧を表示) */}
             {rankingView === 'models' && (
               <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs text-left">
                     <thead className="bg-slate-100/80 text-slate-600 text-[11px] border-b border-slate-200 uppercase">
                       <tr>
-                        <th className="px-4 py-3 font-bold w-12 text-center">順位</th>
+                        <th className="px-3 py-3 font-bold w-16 text-center">展開/順位</th>
                         <th className="px-4 py-3 font-bold">店舗名</th>
                         <th className="px-4 py-3 font-bold">機種名</th>
                         <th className="px-3 py-3 text-right font-bold">台数</th>
@@ -1943,78 +2221,211 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {rankingResult.modelRankings.length === 0 ? (
+                      {filteredModelRankings.length === 0 ? (
                         <tr>
                           <td colSpan={9} className="p-8 text-center text-slate-400">
-                            該当する機種ランキングデータがありません。
+                            {activeFilterCount > 0
+                              ? '絞り込み条件に一致する機種ランキングデータがありません。'
+                              : '該当する機種ランキングデータがありません。'}
                           </td>
                         </tr>
                       ) : (
-                        rankingResult.modelRankings.map((m) => (
-                          <tr key={`${m.storeId}-${m.modelName}`} className="hover:bg-slate-50">
-                            <td className="px-4 py-3 text-center font-black">
-                              <span
-                                className={`w-6 h-6 inline-flex items-center justify-center rounded-lg text-xs ${
-                                  m.rank === 1
-                                    ? 'bg-amber-500 text-slate-950 font-black'
-                                    : m.rank === 2
-                                    ? 'bg-slate-300 text-slate-900 font-bold'
-                                    : m.rank === 3
-                                    ? 'bg-amber-700 text-white font-bold'
-                                    : 'text-slate-600'
+                        filteredModelRankings.map((m) => {
+                          const modelKey = `${m.storeId}___${m.modelName}`;
+                          const isExpanded = expandedModelKeys.has(modelKey);
+                          const expandedMachines = isExpanded
+                            ? getMachinesForModelRank(m, rankingResult.machineRankings, filterCriteria)
+                            : [];
+
+                          return (
+                            <React.Fragment key={modelKey}>
+                              <tr
+                                onClick={() => toggleExpandModel(m.storeId, m.modelName)}
+                                className={`hover:bg-slate-50 cursor-pointer transition-colors ${
+                                  isExpanded ? 'bg-indigo-50/40' : ''
                                 }`}
+                                title="クリックでこの機種の対象台番一覧を展開/折りたたみ"
                               >
-                                #{m.rank}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 font-bold text-slate-900">
-                              <div className="flex items-center gap-1.5">
-                                <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                                <span>{m.storeName}</span>
-                                {m.isSpecialDay && (
-                                  <span className="px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 text-[10px] font-black">
-                                    特日
-                                  </span>
-                                )}
-                              </div>
-                            </td>
-                            <td className="px-4 py-3 font-black text-indigo-700">
-                              {m.modelName}
-                            </td>
-                            <td className="px-3 py-3 text-right font-medium text-slate-600">
-                              {m.totalMachines}台
-                            </td>
-                            <td className="px-3 py-3 text-right font-mono font-black text-sm">
-                              {metricMode === 'yen' ? (
-                                <span className={m.expectedYenProfit >= 0 ? 'text-amber-700' : 'text-rose-600'}>
-                                  {m.expectedYenProfit >= 0 ? `+${formatYen(m.expectedYenProfit)}` : formatYen(m.expectedYenProfit)}
-                                </span>
-                              ) : (
-                                <span className={m.expectedDiffCoins >= 0 ? 'text-blue-600' : 'text-rose-600'}>
-                                  {m.expectedDiffCoins >= 0 ? `+${formatNumber(m.expectedDiffCoins)}` : formatNumber(m.expectedDiffCoins)}枚
-                                </span>
+                                <td className="px-3 py-3 text-center font-black">
+                                  <div className="flex items-center justify-center gap-1">
+                                    <span className="text-slate-400 hover:text-indigo-600 transition-colors">
+                                      {isExpanded ? (
+                                        <ChevronUp className="w-3.5 h-3.5 text-indigo-600" />
+                                      ) : (
+                                        <ChevronDown className="w-3.5 h-3.5" />
+                                      )}
+                                    </span>
+                                    <span
+                                      className={`w-5 h-5 inline-flex items-center justify-center rounded text-2xs ${
+                                        m.rank === 1
+                                          ? 'bg-amber-500 text-slate-950 font-black'
+                                          : m.rank === 2
+                                          ? 'bg-slate-300 text-slate-900 font-bold'
+                                          : m.rank === 3
+                                          ? 'bg-amber-700 text-white font-bold'
+                                          : 'text-slate-600'
+                                      }`}
+                                    >
+                                      #{m.rank}
+                                    </span>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 font-bold text-slate-900">
+                                  <div className="flex items-center gap-1.5">
+                                    <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                    <span>{m.storeName}</span>
+                                    {m.isSpecialDay && (
+                                      <span className="px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 text-[10px] font-black">
+                                        特日
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 font-black text-indigo-700">
+                                  <div className="flex items-center gap-1.5">
+                                    <span>{m.modelName}</span>
+                                    <span className="text-2xs font-normal text-slate-400">
+                                      (台番 {isExpanded ? '▲' : '▼'})
+                                    </span>
+                                  </div>
+                                </td>
+                                <td className="px-3 py-3 text-right font-medium text-slate-600">
+                                  {m.totalMachines}台
+                                </td>
+                                <td className="px-3 py-3 text-right font-mono font-black text-sm">
+                                  {metricMode === 'yen' ? (
+                                    <span className={m.expectedYenProfit >= 0 ? 'text-amber-700' : 'text-rose-600'}>
+                                      {m.expectedYenProfit >= 0 ? `+${formatYen(m.expectedYenProfit)}` : formatYen(m.expectedYenProfit)}
+                                    </span>
+                                  ) : (
+                                    <span className={m.expectedDiffCoins >= 0 ? 'text-blue-600' : 'text-rose-600'}>
+                                      {m.expectedDiffCoins >= 0 ? `+${formatNumber(m.expectedDiffCoins)}` : formatNumber(m.expectedDiffCoins)}枚
+                                    </span>
+                                  )}
+                                  {/* Uncertainty Range */}
+                                  {m.uncertainty80 && (
+                                    <div className="text-[10px] text-slate-400 font-normal">
+                                      80%: ±{m.uncertainty80.margin}枚
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="px-3 py-3 text-right font-mono text-slate-700 font-bold">
+                                  {m.predictedWinRate}%
+                                </td>
+                                <td className="px-3 py-3 text-right font-mono text-slate-600">
+                                  {m.predictedPayoutRate}%
+                                </td>
+                                <td className="px-3 py-3 text-right font-mono text-slate-400 text-[11px]">
+                                  {m.compositeScore}pt
+                                </td>
+                                <td className="px-4 py-3 text-xs text-slate-600 max-w-sm truncate" title={m.tacticalReason}>
+                                  {m.tacticalReason || '根拠が少ないため参考表示'}
+                                </td>
+                              </tr>
+
+                              {/* Prompt 33 Requirement 2: 展開された台番一覧 */}
+                              {isExpanded && (
+                                <tr className="bg-slate-50/80 border-b border-indigo-100">
+                                  <td colSpan={9} className="p-3 sm:p-4">
+                                    <div className="bg-white rounded-xl border border-indigo-200 p-3 sm:p-4 shadow-2xs space-y-2.5">
+                                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
+                                        <div className="flex items-center gap-2">
+                                          <Layers className="w-4 h-4 text-indigo-600" />
+                                          <span className="font-bold text-indigo-950 text-xs sm:text-sm">
+                                            【{m.storeName}】「{m.modelName}」の対象台番一覧 ({expandedMachines.length}台)
+                                          </span>
+                                        </div>
+                                        <span className="text-2xs text-slate-400">
+                                          ※ 機種行をクリックすると折りたたみます
+                                        </span>
+                                      </div>
+
+                                      {expandedMachines.length === 0 ? (
+                                        <div className="p-4 text-center text-xs text-slate-400 bg-slate-50 rounded-lg border border-slate-200">
+                                          この機種の対象台番データがありません（絞り込み条件に一致する台がありません）。
+                                        </div>
+                                      ) : (
+                                        <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                                          <table className="w-full text-xs text-left">
+                                            <thead className="bg-slate-50 text-slate-500 text-[10px] border-b border-slate-200 uppercase">
+                                              <tr>
+                                                <th className="px-3 py-2 font-bold">台番</th>
+                                                <th className="px-3 py-2 text-center font-bold">信頼度</th>
+                                                <th className="px-3 py-2 text-right font-bold">
+                                                  {metricMode === 'yen' ? '期待収支 (円)' : '期待差枚 (縮小済)'}
+                                                </th>
+                                                <th className="px-3 py-2 text-right font-bold">80%範囲</th>
+                                                <th className="px-3 py-2 text-right font-bold">店内スコア</th>
+                                                <th className="px-4 py-2 font-bold">選定理由</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100">
+                                              {expandedMachines.map((em) => (
+                                                <tr key={`${em.storeId}-${em.machineNum}`} className="hover:bg-slate-50/80">
+                                                  <td className="px-3 py-2 font-mono font-black text-slate-900">
+                                                    {em.machineNum}番
+                                                    {em.islandName && (
+                                                      <span className="ml-1 text-[10px] text-slate-400 font-normal">
+                                                        ({em.islandName})
+                                                      </span>
+                                                    )}
+                                                  </td>
+                                                  <td className="px-3 py-2 text-center">
+                                                    <span
+                                                      className={`px-1.5 py-0.2 rounded text-[10px] font-bold border ${
+                                                        em.confidence === '高'
+                                                          ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                                          : em.confidence === '中'
+                                                          ? 'bg-amber-50 text-amber-700 border-amber-300'
+                                                          : 'bg-slate-100 text-slate-600 border-slate-300'
+                                                      }`}
+                                                    >
+                                                      {em.confidence} (根拠{em.evidenceDays}日)
+                                                    </span>
+                                                  </td>
+                                                  <td className="px-3 py-2 text-right font-mono font-black text-xs">
+                                                    {metricMode === 'yen' ? (
+                                                      <span className={em.expectedYenProfit >= 0 ? 'text-amber-700' : 'text-rose-600'}>
+                                                        {em.expectedYenProfit >= 0 ? `+${formatYen(em.expectedYenProfit)}` : formatYen(em.expectedYenProfit)}
+                                                      </span>
+                                                    ) : (
+                                                      <span className={em.shrunkDiff >= 0 ? 'text-blue-600' : 'text-rose-600'}>
+                                                        {em.shrunkDiff >= 0 ? `+${formatNumber(em.shrunkDiff)}` : formatNumber(em.shrunkDiff)}枚
+                                                      </span>
+                                                    )}
+                                                  </td>
+                                                  <td className="px-3 py-2 text-right font-mono text-[10px] text-slate-500">
+                                                    {em.interval80
+                                                      ? `${em.interval80[0] >= 0 ? `+${em.interval80[0]}` : em.interval80[0]}〜${em.interval80[1] >= 0 ? `+${em.interval80[1]}` : em.interval80[1]}枚`
+                                                      : em.uncertainty80
+                                                      ? `±${em.uncertainty80.margin}枚`
+                                                      : '-'}
+                                                  </td>
+                                                  <td className="px-3 py-2 text-right font-mono text-slate-400 text-[10px]">
+                                                    {em.totalScore >= 0 ? `+${em.totalScore}` : em.totalScore}pt
+                                                  </td>
+                                                  <td className="px-4 py-2 text-2xs text-slate-600">
+                                                    <div className="space-y-0.5 max-w-md">
+                                                      {em.reasons.map((r, rIdx) => (
+                                                        <div key={rIdx} className="truncate" title={r}>
+                                                          • {r}
+                                                        </div>
+                                                      ))}
+                                                    </div>
+                                                  </td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
                               )}
-                              {/* Uncertainty Range */}
-                              {m.uncertainty80 && (
-                                <div className="text-[10px] text-slate-400 font-normal">
-                                  80%: ±{m.uncertainty80.margin}枚
-                                </div>
-                              )}
-                            </td>
-                            <td className="px-3 py-3 text-right font-mono text-slate-700 font-bold">
-                              {m.predictedWinRate}%
-                            </td>
-                            <td className="px-3 py-3 text-right font-mono text-slate-600">
-                              {m.predictedPayoutRate}%
-                            </td>
-                            <td className="px-3 py-3 text-right font-mono text-slate-400 text-[11px]">
-                              {m.compositeScore}pt
-                            </td>
-                            <td className="px-4 py-3 text-xs text-slate-600 max-w-sm truncate" title={m.tacticalReason}>
-                              {m.tacticalReason || '根拠が少ないため参考表示'}
-                            </td>
-                          </tr>
-                        ))
+                            </React.Fragment>
+                          );
+                        })
                       )}
                     </tbody>
                   </table>
@@ -2042,16 +2453,18 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {rankingResult.machineRankings.length === 0 ? (
+                      {filteredMachineRankings.length === 0 ? (
                         <tr>
                           <td colSpan={8} className="p-8 text-center text-slate-400">
-                            {includeLowConfidence
+                            {activeFilterCount > 0
+                              ? '絞り込み条件に一致する台番号別データがありません。'
+                              : includeLowConfidence
                               ? '台番号別のランキングデータが存在しません。'
                               : '信頼度「中」以上の台番号別データがありません。「低信頼も表示」にチェックを入れると表示されます。'}
                           </td>
                         </tr>
                       ) : (
-                        rankingResult.machineRankings.map((mach) => (
+                        filteredMachineRankings.map((mach) => (
                           <tr key={`${mach.storeId}-${mach.machineNum}`} className="hover:bg-slate-50">
                             <td className="px-4 py-3 text-center font-black">
                               <span

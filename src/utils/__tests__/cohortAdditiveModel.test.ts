@@ -54,6 +54,16 @@ describe('30-7: Cohort Additive Model (コホートの加法モデル)', () => {
         playerCoinProfit: totalDiff,
         hallYenProfit: 0,
         playerYenProfit: 0,
+        inCoins: 5000 * 3 * machines.length,
+        outCoins: 5000 * 3 * machines.length + totalDiff,
+        payoutRate: 100,
+        estimatedRevenue: 0,
+        exchangeGapProfit: 0,
+        gModelHallProfit: 0,
+        gModelPlayerProfit: 0,
+        isOldEventDay: false,
+        is7Day: false,
+        notable: '',
         machines,
       });
     }

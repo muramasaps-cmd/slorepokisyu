@@ -16,11 +16,7 @@ describe('backtestOptimization Golden Consistency', () => {
   const targetDate = '2025-03-02';
 
   it('preserves exact calculateTargetMachineRanking outputs before and after optimization', () => {
-    const ranking = calculateTargetMachineRanking(targetDate, records, specialDayRules, {
-      shrinkageMode: 'fixed',
-      tailMatchBonus: 8.0,
-      zoroBonus: 4.0,
-    });
+    const ranking = calculateTargetMachineRanking(targetDate, records, specialDayRules);
     expect(ranking.rankings.length).toBeGreaterThan(0);
     // Snapshot-like assertions on Top 5 machines
     const top5 = ranking.rankings.slice(0, 5).map((r) => ({
@@ -43,29 +39,29 @@ describe('backtestOptimization Golden Consistency', () => {
         {
           "compositeScore": undefined,
           "evidenceDays": 60,
-          "machineNum": 132,
-          "modelName": "押忍！番長4",
+          "machineNum": 129,
+          "modelName": "アイムジャグラーEX",
           "rank": 2,
         },
         {
           "compositeScore": undefined,
           "evidenceDays": 60,
-          "machineNum": 111,
-          "modelName": "スマスロ北斗の拳",
+          "machineNum": 137,
+          "modelName": "アイムジャグラーEX",
           "rank": 3,
         },
         {
           "compositeScore": undefined,
           "evidenceDays": 60,
-          "machineNum": 138,
-          "modelName": "マイジャグラーV",
+          "machineNum": 113,
+          "modelName": "アイムジャグラーEX",
           "rank": 4,
         },
         {
           "compositeScore": undefined,
           "evidenceDays": 60,
-          "machineNum": 112,
-          "modelName": "押忍！番長4",
+          "machineNum": 133,
+          "modelName": "アイムジャグラーEX",
           "rank": 5,
         },
       ]

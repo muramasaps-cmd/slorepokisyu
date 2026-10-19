@@ -121,7 +121,7 @@ export interface CrossStoreRankingOptions {
   selectedStoreIds?: string[]; // if specified, filters to these store IDs
   includeLowConfidence?: boolean; // default false: exclude low confidence machines
   onProgress?: (progress: number, currentStore?: string) => void;
-  /** 30-4: 二重縮小オプション（既定値: true = 現行） */
+  /** 30-4 / 30-6: 二重縮小オプション（既定値: false = 単一縮小 / posteriorMean） */
   legacyCrossShrink?: boolean;
   /** 30-4: 差枚指標（既定値: 'actual'） */
   diffMetric?: 'actual' | 'baseGames';
@@ -161,7 +161,7 @@ export function calculateCrossStoreRanking(
   const topMachineCount = options?.topMachineCount || 20;
   const filterStoreIds = options?.selectedStoreIds;
   const includeLowConfidence = options?.includeLowConfidence ?? false;
-  const legacyCrossShrink = options?.legacyCrossShrink ?? true;
+  const legacyCrossShrink = options?.legacyCrossShrink ?? false;
   const diffMetric = options?.diffMetric || 'actual';
   const baseGames = options?.baseGames ?? 5000;
 

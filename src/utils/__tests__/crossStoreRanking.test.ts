@@ -155,7 +155,11 @@ describe('crossStoreRanking utils', () => {
       '低信頼店舗',
       50,
       [{ name: 'マイジャグラーV', diff: 400, machines: 5 }],
-      [{ num: 301, model: 'マイジャグラーV', diff: 1200 }],
+      [
+        { num: 301, model: 'マイジャグラーV', diff: 1200 },
+        { num: 302, model: 'マイジャグラーV', diff: 0 },
+        { num: 303, model: 'マイジャグラーV', diff: -400 },
+      ],
       1
     );
 
@@ -165,7 +169,11 @@ describe('crossStoreRanking utils', () => {
       '中信頼店舗',
       50,
       [{ name: 'スマスロ北斗の拳', diff: 500, machines: 5 }],
-      [{ num: 401, model: 'スマスロ北斗の拳', diff: 2000 }],
+      [
+        { num: 401, model: 'スマスロ北斗の拳', diff: 2000 },
+        { num: 402, model: 'スマスロ北斗の拳', diff: 0 },
+        { num: 403, model: 'スマスロ北斗の拳', diff: -500 },
+      ],
       3
     );
 

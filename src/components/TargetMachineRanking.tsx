@@ -37,6 +37,8 @@ import {
   ArrowRight,
   TrendingUp,
   RotateCw,
+  Scale,
+  Play,
 } from 'lucide-react';
 
 interface TargetMachineRankingProps {
@@ -139,9 +141,9 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
     return parseIslandConfig(islandConfig);
   }, [islandConfig]);
 
-  // Backtest options (stable memo)
+  // Backtest options (stable memo: topN 20 for top 20 machines lift evaluation)
   const backtestOptions = useMemo<MachineBacktestOptions>(() => ({
-    topN: 10,
+    topN: 20,
     minEvidenceDays: 3,
     blockLength: 7,
     bootstrapIterations: 500, // fast run for UI indicator
@@ -396,6 +398,30 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
     };
   }, [backtestResult, top20AvgExpectedDiff]);
 
+  const handleRunBacktest = () => {
+    if (isBacktestRunning) return;
+    setIsBacktestRunning(true);
+    setBacktestProgress(0);
+    setTimeout(() => {
+      try {
+        const res = runMachineBacktest(dailyRecords, specialDayRules, {
+          ...backtestOptions,
+          onProgress: (p) => setBacktestProgress(p),
+        });
+        if (cacheKey) {
+          setMemoryBacktestCache(cacheKey, res);
+          putBacktestToIdb(cacheKey, res, storeId).catch(() => {});
+        }
+        setBacktestResult(res);
+      } catch (err) {
+        console.error('Backtest error:', err);
+      } finally {
+        setIsBacktestRunning(false);
+        setBacktestProgress(null);
+      }
+    }, 50);
+  };
+
   return (
     <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden space-y-0">
       {/* Header Banner */}
@@ -444,8 +470,107 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
                 </>
               )}
             </div>
-          ) : null}
+          ) : (
+            <button
+              type="button"
+              onClick={handleRunBacktest}
+              className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-2xs"
+            >
+              <Play className="w-3.5 h-3.5" />
+              <span>台番バックテストを実行</span>
+            </button>
+          )}
         </div>
+      </div>
+
+      {/* 30-6: 画面の期待差枚と実績リフトの並置・較正表示 (Requirement 1 & 2) */}
+      <div className="p-3.5 sm:p-4 bg-slate-50 border-b border-slate-200 space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 font-bold text-slate-800 text-xs">
+            <Scale className="w-4 h-4 text-indigo-600" />
+            <span>表示値の較正（期待差枚 vs 過去検証実績リフト）</span>
+          </div>
+          {backtestResult && (
+            <span
+              className={`px-2 py-0.5 rounded-full text-2xs font-bold border flex items-center gap-1 ${
+                backtestResult.withFilter.hasEdge
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                  : 'bg-amber-50 text-amber-800 border-amber-300'
+              }`}
+            >
+              {backtestResult.withFilter.hasEdge ? (
+                <>
+                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                  優位性あり
+                </>
+              ) : (
+                <>
+                  <AlertTriangle className="w-3 h-3 text-amber-600" />
+                  優位性なし
+                </>
+              )}
+            </span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-center font-mono">
+          {/* 画面の期待差枚 (上位20台平均) */}
+          <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs flex flex-col justify-center">
+            <div className="text-[11px] text-slate-500 font-sans font-bold">画面の期待差枚 (上位20台平均)</div>
+            <div className={`text-lg font-black ${top20AvgExpectedDiff >= 0 ? 'text-indigo-600' : 'text-slate-700'}`}>
+              {top20AvgExpectedDiff >= 0 ? `+${formatNumber(top20AvgExpectedDiff)}` : formatNumber(top20AvgExpectedDiff)}枚
+            </div>
+            <div className="text-[10px] text-slate-400 font-sans mt-0.5">当日の台番号別予測スコア上位20台</div>
+          </div>
+
+          {/* 過去検証の実績リフト (上位20台・95%区間) */}
+          <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs flex flex-col justify-center">
+            <div className="text-[11px] text-slate-500 font-sans font-bold">過去検証の実績リフト (上位20台・95%区間)</div>
+            {isBacktestRunning ? (
+              <div className="text-xs font-bold text-sky-600 flex items-center justify-center gap-1.5 py-1">
+                <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                <span>検証中... {backtestProgress !== null ? `(${backtestProgress}%)` : ''}</span>
+              </div>
+            ) : backtestResult ? (
+              <div>
+                <span className={`text-lg font-black ${backtestResult.withFilter.avgLift >= 0 ? 'text-emerald-600' : 'text-slate-700'}`}>
+                  {backtestResult.withFilter.avgLift >= 0 ? `+${formatNumber(backtestResult.withFilter.avgLift)}` : formatNumber(backtestResult.withFilter.avgLift)}枚
+                </span>
+                <span className="text-xs text-slate-500 font-normal ml-1.5">
+                  [95%区間: {backtestResult.withFilter.ci95[0]}枚〜{backtestResult.withFilter.ci95[1]}枚]
+                </span>
+              </div>
+            ) : (
+              <div className="flex items-center justify-center gap-2 py-0.5">
+                <span className="text-xs text-slate-400">未検証</span>
+                <button
+                  type="button"
+                  onClick={handleRunBacktest}
+                  className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer shadow-2xs flex items-center gap-1"
+                >
+                  <Play className="w-3 h-3" />
+                  検証を実行
+                </button>
+              </div>
+            )}
+            <div className="text-[10px] text-slate-400 font-sans mt-0.5">過去全日の翌日実測検証結果</div>
+          </div>
+        </div>
+
+        {/* 較正警告表示 */}
+        {calibrationInfo?.isUnderperforming && (
+          <div className="p-3 bg-amber-500/10 border border-amber-300 rounded-xl text-amber-950 text-xs flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div className="space-y-0.5">
+              <span className="font-bold text-amber-900 block text-[11px]">
+                過去の実績では、表示の期待値のうち約{calibrationInfo.realizedPct}%しか実現していません
+              </span>
+              <p className="text-[11px] text-amber-900/90 leading-relaxed font-sans">
+                表示の上位20台平均 +{top20AvgExpectedDiff}枚 に対し、過去検証実績リフトは {calibrationInfo.actualLift >= 0 ? '+' : ''}{calibrationInfo.actualLift}枚 [95%区間: {calibrationInfo.ci95[0]}枚〜{calibrationInfo.ci95[1]}枚] です。期待差枚の過大推定にご注意ください。
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Warning Banner when Backtest shows No Statistical Edge */}
@@ -458,20 +583,6 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
             </span>
             <p className="text-[11px] text-amber-800 leading-relaxed">
               この店舗のウォークフォワードバックテストでは、台番単位の予測リフト95%区間が0をまたいでおり（偶然のばらつき範囲内）、台番ごとの投入傾向に有意な固定性は確認できていません。参考程度にご覧ください。
-            </p>
-          </div>
-        </div>
-      )}
-      {/* Calibration Warning Banner when Actual Lift is Far Below Expected Diff (Requirement 8) */}
-      {calibrationInfo?.isUnderperforming && (
-        <div className="p-3.5 bg-amber-500/10 border-b border-amber-300 text-amber-950 text-xs flex items-start gap-2.5">
-          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-          <div className="space-y-0.5">
-            <span className="font-black text-amber-900 block">
-              【表示値の較正に関する注意事項】
-            </span>
-            <p className="text-[11px] text-amber-900/90 leading-relaxed font-sans">
-              過去の実績では、表示の期待値（上位20台平均 +{top20AvgExpectedDiff}枚）のうち<strong>約{calibrationInfo.realizedPct}%</strong>しか実現していません（店舗バックテストの上位20台実績リフト: {calibrationInfo.actualLift >= 0 ? '+' : ''}{calibrationInfo.actualLift}枚 [95%区間: {calibrationInfo.ci95[0]}枚〜{calibrationInfo.ci95[1]}枚]）。
             </p>
           </div>
         </div>

@@ -17,6 +17,13 @@ import {
 } from '../utils/crossStoreRanking';
 import { runMachineBacktest } from '../utils/backtestEngine';
 import { formatNumber, formatYen } from '../utils/formatters';
+import {
+  computeMachineBacktestCacheKey,
+  getMemoryBacktestCache,
+  setMemoryBacktestCache,
+  getBacktestFromIdb,
+  putBacktestToIdb,
+} from '../utils/machineBacktestCache';
 import type { CrossRankingWorkerRequest, CrossRankingWorkerResponse } from '../workers/crossRankingWorker';
 import {
   Building2,
@@ -40,6 +47,7 @@ import {
   ChevronDown,
   ChevronUp,
   Check,
+  Scale,
 } from 'lucide-react';
 
 interface CrossStoreTargetProps {
@@ -265,18 +273,126 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
 
   const [testingStoreId, setTestingStoreId] = useState<string | null>(null);
 
-  const runStoreEdgeTest = (store: StoreProfile) => {
+  // Pre-load backtest results from cache (memory or IndexedDB) for all stores
+  useEffect(() => {
+    stores.forEach((store) => {
+      if (edgeCache[store.id]) return;
+      const priorRecords = (store.dailyRecords || []).filter((r) => r.date < targetDate);
+      if (priorRecords.length < 3) return;
+      const hasMach = priorRecords.some((r) => r.machines && r.machines.length > 0);
+      if (!hasMach) return;
+
+      const opts = {
+        topN: 20,
+        minEvidenceDays: 3,
+        bootstrapIterations: 1000,
+        weights: store.customMachineRankingWeights,
+      };
+      const key = computeMachineBacktestCacheKey(
+        store.id,
+        priorRecords,
+        store.customMachineRankingWeights,
+        store.specialDayRules,
+        opts,
+        store.modelAliasDictionary,
+        store.includeReusedMachinesInStats
+      );
+
+      const memRes = getMemoryBacktestCache(key);
+      if (memRes) {
+        setEdgeCache((prev) => ({
+          ...prev,
+          [store.id]: {
+            hasEdge: memRes.withFilter.hasEdge,
+            verdictMessage: memRes.withFilter.verdictMessage,
+            evaluatedDays: memRes.evaluatedDaysCount,
+            top20AvgLift: memRes.withFilter.avgLift,
+            top20Ci95: memRes.withFilter.ci95,
+            top20ActualAvgDiff: memRes.withFilter.avgActualDiff,
+          },
+        }));
+      } else {
+        getBacktestFromIdb(key)
+          .then((idbRes) => {
+            if (idbRes) {
+              setMemoryBacktestCache(key, idbRes);
+              setEdgeCache((prev) => ({
+                ...prev,
+                [store.id]: {
+                  hasEdge: idbRes.withFilter.hasEdge,
+                  verdictMessage: idbRes.withFilter.verdictMessage,
+                  evaluatedDays: idbRes.evaluatedDaysCount,
+                  top20AvgLift: idbRes.withFilter.avgLift,
+                  top20Ci95: idbRes.withFilter.ci95,
+                  top20ActualAvgDiff: idbRes.withFilter.avgActualDiff,
+                },
+              }));
+            }
+          })
+          .catch(() => {});
+      }
+    });
+  }, [stores, targetDate, edgeCache]);
+
+  const runStoreEdgeTest = async (store: StoreProfile) => {
     if (testingStoreId) return;
     setTestingStoreId(store.id);
+
+    const priorRecords = (store.dailyRecords || []).filter((r) => r.date < targetDate);
+    const opts = {
+      topN: 20, // 30-6: 上位20台の実績リフト
+      minEvidenceDays: 3,
+      bootstrapIterations: 1000,
+      weights: store.customMachineRankingWeights,
+    };
+    const key = computeMachineBacktestCacheKey(
+      store.id,
+      priorRecords,
+      store.customMachineRankingWeights,
+      store.specialDayRules,
+      opts,
+      store.modelAliasDictionary,
+      store.includeReusedMachinesInStats
+    );
+
+    // 1. Check memory or IDB cache first
+    let cachedRes = getMemoryBacktestCache(key);
+    if (!cachedRes) {
+      try {
+        cachedRes = (await getBacktestFromIdb(key)) ?? undefined;
+      } catch (err) {
+        console.debug('IDB cache lookup error:', err);
+      }
+    }
+
+    if (cachedRes) {
+      const edgeInfo = {
+        hasEdge: cachedRes.withFilter.hasEdge,
+        verdictMessage: cachedRes.withFilter.verdictMessage,
+        evaluatedDays: cachedRes.evaluatedDaysCount,
+        top20AvgLift: cachedRes.withFilter.avgLift,
+        top20Ci95: cachedRes.withFilter.ci95,
+        top20ActualAvgDiff: cachedRes.withFilter.avgActualDiff,
+      };
+      setEdgeCache((prev) => {
+        const next = { ...prev, [store.id]: edgeInfo };
+        try {
+          localStorage.setItem('slorepo_cross_edge_cache', JSON.stringify(next));
+        } catch (err) {
+          console.debug('Failed to save to localStorage:', err);
+        }
+        return next;
+      });
+      setTestingStoreId(null);
+      return;
+    }
+
+    // 2. Otherwise run backtest
     setTimeout(() => {
       try {
-        const priorRecords = (store.dailyRecords || []).filter((r) => r.date < targetDate);
-        const res = runMachineBacktest(priorRecords, store.specialDayRules, {
-          topN: 20, // 30-6: 上位20台の実績リフト
-          minEvidenceDays: 3,
-          bootstrapIterations: 1000,
-          weights: store.customMachineRankingWeights,
-        });
+        const res = runMachineBacktest(priorRecords, store.specialDayRules, opts);
+        setMemoryBacktestCache(key, res);
+        putBacktestToIdb(key, res, store.id).catch(() => {});
 
         const edgeInfo = {
           hasEdge: res.withFilter.hasEdge,
@@ -508,49 +624,62 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                         </span>
                       </button>
 
-                      {/* Store Edge Badge (Prompt 13 requirement 4) */}
+                      {/* Store Edge Badge and Top 20 Lift (30-6 Requirement 1) */}
                       {hasMach && (
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           {edgeInfo ? (
-                            <span
-                              className={`px-1.5 py-0.5 rounded text-[10px] font-bold border flex items-center gap-0.5 ${
-                                edgeInfo.hasEdge
-                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                                  : 'bg-slate-100 text-slate-600 border-slate-300'
-                              }`}
-                              title={edgeInfo.verdictMessage}
+                            <div className="flex items-center gap-1 flex-wrap">
+                              <span
+                                className={`px-1.5 py-0.5 rounded text-[10px] font-bold border flex items-center gap-0.5 ${
+                                  edgeInfo.hasEdge
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                    : 'bg-slate-100 text-slate-600 border-slate-300'
+                                }`}
+                                title={edgeInfo.verdictMessage}
+                              >
+                                {edgeInfo.hasEdge ? (
+                                  <>
+                                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                                    優位性あり
+                                  </>
+                                ) : (
+                                  <>
+                                    <HelpCircle className="w-2.5 h-2.5 text-slate-400" />
+                                    優位性なし
+                                  </>
+                                )}
+                              </span>
+                              <span
+                                className="text-[10px] font-mono font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200"
+                                title={`上位20台実績リフト (95%信頼区間: ${edgeInfo.top20Ci95[0]}〜${edgeInfo.top20Ci95[1]}枚)`}
+                              >
+                                上位20台リフト: {edgeInfo.top20AvgLift >= 0 ? `+${edgeInfo.top20AvgLift}` : edgeInfo.top20AvgLift}枚
+                                <span className="text-slate-400 font-normal ml-0.5">
+                                  [{edgeInfo.top20Ci95[0]}〜{edgeInfo.top20Ci95[1]}枚]
+                                </span>
+                              </span>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => runStoreEdgeTest(s)}
+                              disabled={isTesting}
+                              className="px-2 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-bold border border-indigo-200 cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                              title="この店舗の台番バックテスト（上位20台の実績リフト）を実行"
                             >
-                              {edgeInfo.hasEdge ? (
+                              {isTesting ? (
                                 <>
-                                  <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
-                                  優位性あり
+                                  <RotateCw className="w-2.5 h-2.5 animate-spin" />
+                                  検証中...
                                 </>
                               ) : (
                                 <>
-                                  <HelpCircle className="w-2.5 h-2.5 text-slate-400" />
-                                  優位性なし
+                                  <Play className="w-2.5 h-2.5" />
+                                  検証を実行
                                 </>
                               )}
-                            </span>
-                          ) : (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 text-slate-500 border border-slate-200">
-                              未検証
-                            </span>
+                            </button>
                           )}
-
-                          <button
-                            type="button"
-                            onClick={() => runStoreEdgeTest(s)}
-                            disabled={isTesting}
-                            className="p-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-bold border border-slate-200 cursor-pointer disabled:opacity-50"
-                            title="この店舗の台番バックテスト（優位性判定）を実行"
-                          >
-                            {isTesting ? (
-                              <RotateCw className="w-2.5 h-2.5 animate-spin" />
-                            ) : (
-                              <Play className="w-2.5 h-2.5" />
-                            )}
-                          </button>
                         </div>
                       )}
                     </div>
@@ -810,6 +939,111 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                       </span>
                     </div>
                   </div>
+
+                  {/* 30-6: 画面の期待差枚と実績リフトの並置・較正表示 */}
+                  {(() => {
+                    const top20StoreCandidates = storeCandidates.slice(0, 20);
+                    const top20StoreExpectedDiff = top20StoreCandidates.length > 0
+                      ? Math.round(
+                          top20StoreCandidates.reduce((acc, m) => acc + (m.expectedDiffCoins || m.shrunkDiff), 0) /
+                            top20StoreCandidates.length
+                        )
+                      : 0;
+                    const activeEdge = edgeCache[activeTargetStoreId];
+                    const isTestingActiveStore = testingStoreId === activeTargetStoreId;
+                    const isUnderperforming =
+                      Boolean(activeEdge && top20StoreExpectedDiff > 100 && activeEdge.top20AvgLift < top20StoreExpectedDiff * 0.70);
+                    const realizedPct =
+                      activeEdge && top20StoreExpectedDiff > 0
+                        ? Math.max(0, Math.round((activeEdge.top20AvgLift / top20StoreExpectedDiff) * 100))
+                        : 0;
+
+                    return (
+                      <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2.5 text-xs">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 font-bold text-slate-800">
+                            <Scale className="w-4 h-4 text-indigo-600" />
+                            <span>表示値の較正（期待値 vs 過去検証実績リフト）</span>
+                          </div>
+                          {activeEdge && (
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-2xs font-bold border flex items-center gap-1 ${
+                                activeEdge.hasEdge
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                  : 'bg-slate-100 text-slate-600 border-slate-300'
+                              }`}
+                            >
+                              {activeEdge.hasEdge ? (
+                                <>
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  優位性あり
+                                </>
+                              ) : (
+                                <>
+                                  <HelpCircle className="w-3 h-3 text-slate-400" />
+                                  優位性なし
+                                </>
+                              )}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-center font-mono">
+                          {/* 画面の期待差枚 (上位20台平均) */}
+                          <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-2xs flex flex-col justify-center">
+                            <div className="text-[10px] text-slate-400 font-sans font-bold">画面の期待差枚 (上位20台平均)</div>
+                            <div className={`text-base font-black ${top20StoreExpectedDiff >= 0 ? 'text-indigo-600' : 'text-slate-700'}`}>
+                              {top20StoreExpectedDiff >= 0 ? `+${formatNumber(top20StoreExpectedDiff)}` : formatNumber(top20StoreExpectedDiff)}枚
+                            </div>
+                          </div>
+
+                          {/* 過去検証の実績リフト (上位20台・95%区間) */}
+                          <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-2xs flex flex-col justify-center">
+                            <div className="text-[10px] text-slate-400 font-sans font-bold">過去検証の実績リフト (上位20台・95%区間)</div>
+                            {isTestingActiveStore ? (
+                              <div className="text-xs font-bold text-sky-600 flex items-center justify-center gap-1 py-1">
+                                <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                                <span>検証中...</span>
+                              </div>
+                            ) : activeEdge ? (
+                              <div>
+                                <span className={`text-base font-black ${activeEdge.top20AvgLift >= 0 ? 'text-emerald-600' : 'text-slate-600'}`}>
+                                  {activeEdge.top20AvgLift >= 0 ? `+${formatNumber(activeEdge.top20AvgLift)}` : formatNumber(activeEdge.top20AvgLift)}枚
+                                </span>
+                                <span className="text-[11px] text-slate-500 font-normal ml-1">
+                                  [{activeEdge.top20Ci95[0]}〜{activeEdge.top20Ci95[1]}枚]
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center justify-center gap-2 py-0.5">
+                                <span className="text-xs text-slate-400">未検証</span>
+                                <button
+                                  type="button"
+                                  onClick={() => activeStoreObj && runStoreEdgeTest(activeStoreObj)}
+                                  className="px-2 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-2xs font-bold border border-indigo-200 cursor-pointer"
+                                >
+                                  検証を実行
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* 較正警告表示 */}
+                        {isUnderperforming && activeEdge && (
+                          <div className="p-2.5 bg-amber-500/10 border border-amber-300 rounded-lg text-amber-950 text-xs flex items-center gap-2">
+                            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                            <p className="font-bold text-[11px] leading-snug">
+                              過去の実績では、表示の期待値のうち約{realizedPct}%しか実現していません
+                              <span className="font-normal text-amber-800 ml-1">
+                                （表示上位20台平均 +{top20StoreExpectedDiff}枚 に対し、過去検証実績リフトは {activeEdge.top20AvgLift >= 0 ? '+' : ''}{activeEdge.top20AvgLift}枚 [95%区間: {activeEdge.top20Ci95[0]}〜{activeEdge.top20Ci95[1]}枚] です）
+                              </span>
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {/* Past Performance Card (Requirement 4) */}
                   {activePastPerf && (

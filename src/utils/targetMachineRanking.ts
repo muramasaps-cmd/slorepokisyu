@@ -219,12 +219,12 @@ export const DEFAULT_MACHINE_RANKING_WEIGHTS: MachineRankingWeights = {
   zoroBonus: 0.0,
   recentStateWeight: 0,
   shrinkageK: 3,
-  shrinkageMode: 'fixed',
-  confidenceMode: 'legacy',
+  shrinkageMode: 'empirical',
+  confidenceMode: 'reliability',
   cohortMode: 'interaction',
   standardGames: 5000,
   baseGames: 5000,
-  highSettingShrinkage: { enabled: false, priorStrength: 4 },
+  highSettingShrinkage: { enabled: true, priorStrength: 4 },
 };
 
 export interface MachineFeatureIndex {
@@ -473,6 +473,16 @@ export class MachineHistoryAccumulator {
   cohortDateCounts: Map<string, number> = new Map();
   dateCohortKeys: Map<string, Set<string>> = new Map();
   modelCohortStats: Map<string, Map<string, { totalDiff: number; totalGames: number; totalInCoins: number; winCount: number; count: number }>> = new Map();
+  storeCohortStats: Map<
+    string,
+    {
+      totalDiff: number;
+      totalGames: number;
+      totalInCoins: number;
+      winCount: number;
+      count: number;
+    }
+  > = new Map();
   machineCohortStats: Map<
     number,
     Map<
@@ -591,6 +601,17 @@ export class MachineHistoryAccumulator {
             st.totalInCoins += inCoins;
             if (isWin) st.winCount++;
             st.count++;
+
+            let storeSt = this.storeCohortStats.get(k);
+            if (!storeSt) {
+              storeSt = { totalDiff: 0, totalGames: 0, totalInCoins: 0, winCount: 0, count: 0 };
+              this.storeCohortStats.set(k, storeSt);
+            }
+            storeSt.totalDiff += diff;
+            storeSt.totalGames += games;
+            storeSt.totalInCoins += inCoins;
+            if (isWin) storeSt.winCount++;
+            storeSt.count++;
           }
 
           // Machine stats
@@ -1008,8 +1029,17 @@ export class MachineHistoryAccumulator {
         : 0.15;
     const hsShrinkageConfig =
       options?.highSettingShrinkage ?? mergedWeights.highSettingShrinkage;
-    const hsShrinkageEnabled = hsShrinkageConfig?.enabled ?? false;
+    const hsShrinkageEnabled = hsShrinkageConfig?.enabled ?? true;
     const hsPriorStrength = hsShrinkageConfig?.priorStrength ?? 4;
+
+    const storeCohort = this.storeCohortStats.get(selectedKey);
+    const storeOverall = this.storeCohortStats.get('all');
+    const storeCohortAvgDiff = storeCohort && storeCohort.count > 0 ? storeCohort.totalDiff / storeCohort.count : 0;
+    const storeAllAvgDiff = storeOverall && storeOverall.count > 0 ? storeOverall.totalDiff / storeOverall.count : 0;
+    const storeCohortEffectDiff = storeCohortAvgDiff - storeAllAvgDiff;
+    const storeCohortWinRate = storeCohort && storeCohort.count > 0 ? (storeCohort.winCount / storeCohort.count) * 100 : 50;
+    const storeAllWinRate = storeOverall && storeOverall.count > 0 ? (storeOverall.winCount / storeOverall.count) * 100 : 50;
+    const storeCohortEffectWinRate = storeCohortWinRate - storeAllWinRate;
 
     this.machineOverall.forEach((mState, machineNum) => {
       const {
@@ -1115,7 +1145,52 @@ export class MachineHistoryAccumulator {
       const shrinkageParams = getModelShrinkageParams(currentModel);
       const { sigma2, tau2 } = shrinkageParams;
 
+      // Machine all-period stats (used in additive mode)
+      const machAllDays = mState.evidenceDays;
+      const machAllDiffSum = mState.diffSum;
+      const machAllAvgDiff = machAllDays > 0 ? machAllDiffSum / machAllDays : 0;
+      let machAllWinCount = 0;
+      for (let di = 0; di < mState.diffs.length; di++) {
+        if (mState.diffs[di] > 0) machAllWinCount++;
+      }
+      const machAllWinRate = machAllDays > 0 ? (machAllWinCount / machAllDays) * 100 : 50;
+
+      const modelAllAvgDiff = mOverall && mOverall.count > 0 ? mOverall.totalDiff / mOverall.count : (storeWideParams.grandMean || 0);
+      const modelAllWinRate = mOverall && mOverall.count > 0 ? (mOverall.winCount / mOverall.count) * 100 : 50;
+
+      let shrinkageBAll = 0;
       if (mergedWeights.shrinkageMode === 'empirical') {
+        if (machAllDays > 0 && tau2 > 0) {
+          const samplingVarAll = sigma2 / machAllDays;
+          shrinkageBAll = tau2 / (tau2 + samplingVarAll);
+        } else {
+          shrinkageBAll = 0;
+        }
+      } else {
+        const k = mergedWeights.shrinkageK || 3;
+        shrinkageBAll = machAllDays > 0 ? machAllDays / (machAllDays + k) : 0;
+      }
+
+      const shrunkAllDiff = shrinkageBAll * machAllAvgDiff + (1 - shrinkageBAll) * modelAllAvgDiff;
+      const shrunkAllWinRate = shrinkageBAll * machAllWinRate + (1 - shrinkageBAll) * modelAllWinRate;
+
+      let cohortEffectDiff = storeCohortEffectDiff;
+      let cohortEffectWinRate = storeCohortEffectWinRate;
+      if (mCohort && mCohort.count > 0 && mOverall && mOverall.count > 0) {
+        const modelCohortAvgDiff = mCohort.totalDiff / mCohort.count;
+        const modelCohortWinRate = (mCohort.winCount / mCohort.count) * 100;
+        cohortEffectDiff = modelCohortAvgDiff - modelAllAvgDiff;
+        cohortEffectWinRate = modelCohortWinRate - modelAllWinRate;
+      }
+
+      if (mergedWeights.cohortMode === 'additive') {
+        shrinkageB = shrinkageBAll;
+        shrunkDiff = shrunkAllDiff + cohortEffectDiff;
+        shrunkWinRate = Math.min(100, Math.max(0, shrunkAllWinRate + cohortEffectWinRate));
+        expectedDiffStd = shrunkDiff;
+        expectedDiffActual = shrunkDiff;
+        shrunkPayoutRate = (1 + (shrunkDiff / (Math.max(1, avgGames) * 3))) * 100;
+      } else if (mergedWeights.shrinkageMode === 'empirical') {
         if (cohortEvidenceDays > 0 && tau2 > 0) {
           const samplingVar = sigma2 / cohortEvidenceDays;
           shrinkageB = tau2 / (tau2 + samplingVar);
@@ -1156,22 +1231,53 @@ export class MachineHistoryAccumulator {
         modelCohortRate = rateGrandMean;
       }
 
+      let modelAllRate = 0;
+      if (mOverall && mOverall.totalGames > 0) {
+        modelAllRate = mOverall.totalDiff / mOverall.totalGames;
+      } else {
+        modelAllRate = rateGrandMean;
+      }
+
       let rateB = 0;
       let expectedDiffAtBaseGames = 0;
-      if (mergedWeights.shrinkageMode === 'empirical') {
-        if (cohortTotalGames > 0 && tau2_r > 0) {
-          const samplingVar = s2_r / cohortTotalGames;
-          rateB = (tau2_r + samplingVar > 0) ? tau2_r / (tau2_r + samplingVar) : 0;
+      if ((mergedWeights.shrinkageMode ?? 'empirical') === 'empirical') {
+        if (mergedWeights.cohortMode === 'additive') {
+          const mGamesSum = mState.gamesSum || 0;
+          const mDiffSum = mState.diffSum || 0;
+          const machineAllRate = mGamesSum > 0 ? mDiffSum / mGamesSum : 0;
+          if (mGamesSum > 0 && tau2_r > 0) {
+            const samplingVar = s2_r / mGamesSum;
+            rateB = (tau2_r + samplingVar > 0) ? tau2_r / (tau2_r + samplingVar) : 0;
+          } else {
+            rateB = 0;
+          }
+          const shrunkAllRate = rateB * machineAllRate + (1 - rateB) * modelAllRate;
+          const cohortRateEffect = modelCohortRate - modelAllRate;
+          const shrunkRate = shrunkAllRate + cohortRateEffect;
+          expectedDiffAtBaseGames = Math.round(baseGames * shrunkRate * 10) / 10;
         } else {
-          rateB = 0;
-        }
+          if (cohortTotalGames > 0 && tau2_r > 0) {
+            const samplingVar = s2_r / cohortTotalGames;
+            rateB = (tau2_r + samplingVar > 0) ? tau2_r / (tau2_r + samplingVar) : 0;
+          } else {
+            rateB = 0;
+          }
 
-        const effectiveMachineRate = cohortTotalGames > 0 ? machineCohortRate : modelCohortRate;
-        const shrunkRate = rateB * effectiveMachineRate + (1 - rateB) * modelCohortRate;
-        expectedDiffAtBaseGames = Math.round(baseGames * shrunkRate * 10) / 10;
+          const effectiveMachineRate = cohortTotalGames > 0 ? machineCohortRate : modelCohortRate;
+          const shrunkRate = rateB * effectiveMachineRate + (1 - rateB) * modelCohortRate;
+          expectedDiffAtBaseGames = Math.round(baseGames * shrunkRate * 10) / 10;
+        }
       } else {
-        // 'fixed' のとき（既定）は、expectedDiffAtBaseGames に、縮小しない r × baseGames を入れる（比較用）
-        expectedDiffAtBaseGames = Math.round(baseGames * machineCohortRate * 10) / 10;
+        // 'fixed' のときは、expectedDiffAtBaseGames に、縮小しない r × baseGames を入れる（比較用）
+        if (mergedWeights.cohortMode === 'additive') {
+          const mGamesSum = mState.gamesSum || 0;
+          const mDiffSum = mState.diffSum || 0;
+          const machineAllRate = mGamesSum > 0 ? mDiffSum / mGamesSum : 0;
+          const cohortRateEffect = modelCohortRate - modelAllRate;
+          expectedDiffAtBaseGames = Math.round(baseGames * (machineAllRate + cohortRateEffect) * 10) / 10;
+        } else {
+          expectedDiffAtBaseGames = Math.round(baseGames * machineCohortRate * 10) / 10;
+        }
       }
 
       // 30-5: 高設定挙動の率の縮小（enabled のとき、その機種の全台平均率で縮小。既定 enabled=false は現行の比率）
@@ -1237,16 +1343,22 @@ export class MachineHistoryAccumulator {
       let interval80: [number, number] | null = null;
       let reliability: number | null = null;
 
-      if (mergedWeights.shrinkageMode === 'empirical') {
+      const activeShrinkageMode = mergedWeights.shrinkageMode ?? 'empirical';
+      const effectiveEvidenceDays =
+        mergedWeights.cohortMode === 'additive' ? evidenceDays : cohortEvidenceDays;
+      const effectiveB =
+        mergedWeights.cohortMode === 'additive' ? shrinkageBAll : shrinkageB;
+
+      if (activeShrinkageMode === 'empirical') {
         const rawRel =
-          cohortEvidenceDays > 0 && tau2 + sigma2 / cohortEvidenceDays > 0
-            ? tau2 / (tau2 + sigma2 / cohortEvidenceDays)
+          effectiveEvidenceDays > 0 && tau2 + sigma2 / effectiveEvidenceDays > 0
+            ? tau2 / (tau2 + sigma2 / effectiveEvidenceDays)
             : 0;
         reliability = Math.round(rawRel * 10000) / 10000;
 
         const rawPostSd =
-          cohortEvidenceDays > 0 && tau2 > 0
-            ? Math.sqrt((shrinkageB * sigma2) / cohortEvidenceDays)
+          effectiveEvidenceDays > 0 && tau2 > 0
+            ? Math.sqrt((effectiveB * sigma2) / effectiveEvidenceDays)
             : 0;
         posteriorSd = Math.round(rawPostSd * 10) / 10;
 
@@ -1264,11 +1376,11 @@ export class MachineHistoryAccumulator {
 
       // Requirement 6 / 30-2: Confidence determination
       const confidenceMode =
-        options?.confidenceMode ?? mergedWeights.confidenceMode ?? 'legacy';
+        options?.confidenceMode ?? mergedWeights.confidenceMode ?? 'reliability';
 
       let confidence: MachineConfidenceLevel = '低';
       let standardError = 0;
-      const reliabilityRate = Math.round(shrinkageB * 100);
+      const reliabilityRate = Math.round(effectiveB * 100);
 
       if (diffs.length > 0) {
         const mean = mState.diffSum / diffs.length;
@@ -1296,18 +1408,18 @@ export class MachineHistoryAccumulator {
       } else {
         // 'legacy' mode (existing behavior)
         if (mergedWeights.shrinkageMode === 'fixed') {
-          if (cohortEvidenceDays >= 5 && standardError <= 650) {
+          if (effectiveEvidenceDays >= 5 && standardError <= 650) {
             confidence = '高';
           } else if (
-            cohortEvidenceDays >= 3 ||
+            effectiveEvidenceDays >= 3 ||
             (evidenceDays >= 6 && standardError <= 950)
           ) {
             confidence = '中';
           }
         } else {
-          if (shrinkageB >= CONFIDENCE_THRESHOLDS.HIGH) {
+          if (effectiveB >= CONFIDENCE_THRESHOLDS.HIGH) {
             confidence = '高';
-          } else if (shrinkageB >= CONFIDENCE_THRESHOLDS.MEDIUM) {
+          } else if (effectiveB >= CONFIDENCE_THRESHOLDS.MEDIUM) {
             confidence = '中';
           } else {
             confidence = '低';

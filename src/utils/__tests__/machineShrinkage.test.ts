@@ -634,10 +634,12 @@ describe('machineShrinkage (30-1: 経験ベイズ縮小エンジン)', () => {
         );
       }
 
-      const res = calculateTargetMachineRanking('2026-05-11', records);
+      const res = calculateTargetMachineRanking('2026-05-11', records, undefined, {
+        shrinkageMode: 'fixed',
+      });
       const mach101 = res.rankings.find((r) => r.machineNum === 101)!;
 
-      // In default 'fixed' mode, expectedDiffAtBaseGames matches un-shrunk r * baseGames
+      // In 'fixed' mode, expectedDiffAtBaseGames matches un-shrunk r * baseGames
       // r = 500 / 5000 = 0.10, baseGames = 5000 -> 500
       expect(mach101.expectedDiffAtBaseGames).toBe(500);
       expect(mach101.stats.expectedDiffAtBaseGames).toBe(500);
@@ -694,10 +696,11 @@ describe('machineShrinkage (30-1: 経験ベイズ縮小エンジン)', () => {
       expect(m101Disabled.stats.highSettingCount).toBe(1);
       expect(m101Disabled.stats.highSettingRate).toBe(100.0);
 
-      // Also verify default without passing highSettingShrinkage behaves identically (enabled=false by default)
+      // Also verify default without passing highSettingShrinkage behaves identically to enabled=true (30-6: enabled=true by default)
       const resDefault = calculateTargetMachineRanking(targetDate, records);
       const m101Default = resDefault.rankings.find((r) => r.machineNum === 101)!;
-      expect(m101Default.stats.highSettingRate).toBe(100.0);
+      expect(m101Default.stats.highSettingRate).toBeLessThan(40.0);
+      expect(m101Default.stats.highSettingRate).toBeCloseTo(33.3, 0);
 
       // 2. enabled = true: 観測1日で該当のとき、基準率（約16.7%）に近い値に縮小されること
       const resEnabled = calculateTargetMachineRanking(targetDate, records, undefined, {
@@ -773,9 +776,9 @@ describe('machineShrinkage (30-1: 経験ベイズ縮小エンジン)', () => {
       expect(Math.abs(m201Disabled.stats.highSettingRate - m201Enabled.stats.highSettingRate)).toBeLessThanOrEqual(0.5);
     });
 
-    it('3. DEFAULT_MACHINE_RANKING_WEIGHTS で enabled=false, priorStrength=4 が既定値であること', () => {
+    it('3. DEFAULT_MACHINE_RANKING_WEIGHTS で enabled=true, priorStrength=4 が既定値であること', () => {
       expect(DEFAULT_MACHINE_RANKING_WEIGHTS.highSettingShrinkage).toEqual({
-        enabled: false,
+        enabled: true,
         priorStrength: 4,
       });
     });

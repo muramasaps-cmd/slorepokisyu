@@ -67,14 +67,14 @@ export interface MachineRankingWeights {
   zoroBonus: number; // bonus for zoro machine number (default 0.0)
   recentStateWeight: number; // weight for prior day diff (default 0)
   shrinkageK: number; // empirical Bayes shrinkage hyperparameter (default 3)
-  shrinkageMode?: ShrinkageMode; // default 'fixed'
-  confidenceMode?: ConfidenceMode; // default 'legacy'
+  shrinkageMode?: ShrinkageMode; // default 'empirical'
+  confidenceMode?: ConfidenceMode; // default 'reliability'
   cohortMode?: CohortMode; // default 'interaction'
   baseGames?: number; // default 5000 (30-3: 基準ゲーム数換算)
   standardGames?: number; // default 5000
   betaPriorA?: number;
   betaPriorB?: number;
-  highSettingShrinkage?: { enabled: boolean; priorStrength: number }; // 30-5 (default enabled: false, priorStrength: 4)
+  highSettingShrinkage?: { enabled: boolean; priorStrength: number }; // 30-5 (default enabled: true, priorStrength: 4)
 }
 
 export type MachineConfidenceLevel = '高' | '中' | '低';

@@ -85,6 +85,13 @@ export interface CrossStoreMachineRank {
   cohortAvgPayoutRate?: number;
   reliabilityRate?: number;
   expectedDiff80Range?: [number, number];
+  interval80?: [number, number] | null; // 30-2 / 30-4: 80% credible interval
+  posteriorMean?: number; // 30-1 / 30-4: empirical Bayes posterior mean
+  posteriorSd?: number | null;
+  reliability?: number | null;
+  expectedDiffAtBaseGames?: number; // 30-3 / 30-4: expected diff converted to base games
+  diffMetric?: 'actual' | 'baseGames'; // 30-4
+  baseGames?: number; // 30-4
 }
 
 export interface ExcludedStoreInfo {
@@ -102,6 +109,9 @@ export interface CrossStoreRankingResult {
   modelRankings: CrossStoreModelRank[];
   machineRankings: CrossStoreMachineRank[];
   storeMachineRankings: Record<string, CrossStoreMachineRank[]>;
+  diffMetric?: 'actual' | 'baseGames';
+  baseGames?: number;
+  legacyCrossShrink?: boolean;
 }
 
 export interface CrossStoreRankingOptions {
@@ -111,6 +121,12 @@ export interface CrossStoreRankingOptions {
   selectedStoreIds?: string[]; // if specified, filters to these store IDs
   includeLowConfidence?: boolean; // default false: exclude low confidence machines
   onProgress?: (progress: number, currentStore?: string) => void;
+  /** 30-4: 二重縮小オプション（既定値: true = 現行） */
+  legacyCrossShrink?: boolean;
+  /** 30-4: 差枚指標（既定値: 'actual'） */
+  diffMetric?: 'actual' | 'baseGames';
+  /** 30-4: 基準ゲーム数（既定値: 5000） */
+  baseGames?: number;
 }
 
 /**
@@ -145,6 +161,9 @@ export function calculateCrossStoreRanking(
   const topMachineCount = options?.topMachineCount || 20;
   const filterStoreIds = options?.selectedStoreIds;
   const includeLowConfidence = options?.includeLowConfidence ?? false;
+  const legacyCrossShrink = options?.legacyCrossShrink ?? true;
+  const diffMetric = options?.diffMetric || 'actual';
+  const baseGames = options?.baseGames ?? 5000;
 
   const targetStores = filterStoreIds && filterStoreIds.length > 0
     ? stores.filter((s) => filterStoreIds.includes(s.id))
@@ -301,6 +320,7 @@ export function calculateCrossStoreRanking(
             rankingWeights: store.customRankingWeights,
             includeReusedMachines: store.includeReusedMachinesInStats,
             aliasDictionary: store.modelAliasDictionary,
+            baseGames,
           }
         );
 
@@ -325,8 +345,31 @@ export function calculateCrossStoreRanking(
               continue;
             }
 
-            // 3.a: Eliminate double shrinkage (evidenceWeight and storeWeight)
-            const shrunkDiff = Math.round(mach.stats.shrunkDiff);
+            // 30-4: 指標の選択 (diffMetric: 'actual' | 'baseGames')
+            let rawExpectedDiff = 0;
+            if (diffMetric === 'baseGames') {
+              rawExpectedDiff =
+                mach.expectedDiffAtBaseGames ??
+                mach.stats.expectedDiffAtBaseGames ??
+                mach.stats.shrunkDiff;
+            } else {
+              rawExpectedDiff = mach.posteriorMean ?? mach.stats.shrunkDiff;
+            }
+
+            // 30-4 Requirement 1: legacyCrossShrink (既定 true = 現行二重縮小, false = 単一縮小 / posteriorMean そのまま)
+            let expectedDiffCoins = 0;
+            const evidenceDays =
+              mach.cohortEvidenceDays > 0 ? mach.cohortEvidenceDays : mach.evidenceDays;
+            const evidenceWeight = evidenceDays / (evidenceDays + 3);
+            const storeWeight = Math.min(1.0, storeEvalDays / 15);
+
+            if (legacyCrossShrink) {
+              expectedDiffCoins = Math.round(rawExpectedDiff * evidenceWeight * storeWeight);
+            } else {
+              expectedDiffCoins = Math.round(rawExpectedDiff);
+            }
+
+            const shrunkDiff = expectedDiffCoins;
             const expectedDiffStd = mach.stats.expectedDiffStd ?? shrunkDiff;
             const expectedDiffActual = mach.stats.expectedDiffActual ?? shrunkDiff;
             const avgGames = mach.stats.avgGames ?? 5000;
@@ -334,10 +377,10 @@ export function calculateCrossStoreRanking(
             const cohortAvgPayoutRate = mach.stats.cohortAvgPayoutRate;
 
             const { rateLend: machRateLend, rateExchange: machRateExch } = getStoreRatesForModel(store, mach.modelName);
-            const expYen = convertCoinsToYen(shrunkDiff, machRateLend, machRateExch);
+            const expYen = convertCoinsToYen(expectedDiffCoins, machRateLend, machRateExch);
             const island = getMachineIsland(mach.machineNum, islandDefs);
 
-            // 3.b: Align reasons with ranking value (expected diff / cohort evidence)
+            // 30-4 Requirement 3: 並びと理由を揃える（並びが期待差枚順なら、理由は「同条件の実績・根拠日数・縮小後の期待値」に限る）
             const isSpecial = Boolean(machineResult.isSpecialDay);
             const storeFactorText = isSpecial
               ? `来店日が店舗特日 (実績${mach.cohortEvidenceDays}日)`
@@ -353,13 +396,25 @@ export function calculateCrossStoreRanking(
                 ? `出率${cohortAvgPayoutRate}%`
                 : `勝率${mach.stats.cohortWinRate}%`;
               reasons.push(`同条件台平均 ${avgDiffText} (${payoutText}, 根拠${mach.cohortEvidenceDays}日)`);
-              reasons.push(
-                `縮小推定期待差枚 ${shrunkDiff >= 0 ? '+' : ''}${shrunkDiff}枚 (根拠${mach.cohortEvidenceDays}日, 基準5000G換算)`
-              );
+              if (diffMetric === 'baseGames') {
+                reasons.push(
+                  `縮小推定期待差枚 ${expectedDiffCoins >= 0 ? '+' : ''}${expectedDiffCoins}枚 (根拠${mach.cohortEvidenceDays}日, 基準${baseGames}G換算)`
+                );
+              } else {
+                reasons.push(
+                  `縮小推定期待差枚 ${expectedDiffCoins >= 0 ? '+' : ''}${expectedDiffCoins}枚 (根拠${mach.cohortEvidenceDays}日)`
+                );
+              }
             } else {
-              reasons.push(
-                `所属機種平均からの縮小推定 ${shrunkDiff >= 0 ? '+' : ''}${shrunkDiff}枚 (根拠${mach.evidenceDays}日)`
-              );
+              if (diffMetric === 'baseGames') {
+                reasons.push(
+                  `所属機種平均からの縮小推定 ${expectedDiffCoins >= 0 ? '+' : ''}${expectedDiffCoins}枚 (根拠${mach.evidenceDays}日, 基準${baseGames}G換算)`
+                );
+              } else {
+                reasons.push(
+                  `所属機種平均からの縮小推定 ${expectedDiffCoins >= 0 ? '+' : ''}${expectedDiffCoins}枚 (根拠${mach.evidenceDays}日)`
+                );
+              }
             }
 
             // Reflect store evaluation days: fewer evaluated store days increases uncertainty interval & adjusts confidence
@@ -375,10 +430,29 @@ export function calculateCrossStoreRanking(
 
             const machUncertainty80: UncertaintyInterval = {
               margin: machMargin,
-              min: shrunkDiff - machMargin,
-              max: shrunkDiff + machMargin,
+              min: expectedDiffCoins - machMargin,
+              max: expectedDiffCoins + machMargin,
               isWide: machMargin >= 700 || machConfidence === '低' || storeEvalDays < 7,
             };
+
+            // 30-2 / 30-4: 80%範囲 (interval80)
+            let interval80: [number, number] | null = null;
+            if (mach.interval80 && mach.interval80.length === 2) {
+              if (!legacyCrossShrink) {
+                if (storePenalty > 1.0) {
+                  const halfSpan = (mach.interval80[1] - mach.interval80[0]) / 2;
+                  const scaledSpan = Math.round(halfSpan * storePenalty);
+                  interval80 = [expectedDiffCoins - scaledSpan, expectedDiffCoins + scaledSpan];
+                } else {
+                  interval80 = [mach.interval80[0], mach.interval80[1]];
+                }
+              } else {
+                interval80 = [
+                  Math.round(mach.interval80[0] * evidenceWeight * storeWeight),
+                  Math.round(mach.interval80[1] * evidenceWeight * storeWeight),
+                ];
+              }
+            }
 
             eligibleMachines.push({
               rank: 0,
@@ -391,8 +465,8 @@ export function calculateCrossStoreRanking(
               confidence: machConfidence,
               evidenceDays: mach.evidenceDays,
               cohortEvidenceDays: mach.cohortEvidenceDays,
-              shrunkDiff,
-              expectedDiffCoins: shrunkDiff,
+              shrunkDiff: expectedDiffCoins,
+              expectedDiffCoins,
               expectedYenProfit: expYen,
               cohortAvgDiff: mach.stats.cohortAvgDiff,
               cohortWinRate: mach.stats.cohortWinRate,
@@ -409,6 +483,13 @@ export function calculateCrossStoreRanking(
               cohortAvgPayoutRate,
               reliabilityRate: mach.stats.reliabilityRate,
               expectedDiff80Range: mach.stats.expectedDiff80Range,
+              interval80,
+              posteriorMean: mach.posteriorMean ?? mach.stats.shrunkDiff,
+              posteriorSd: mach.posteriorSd ?? null,
+              reliability: mach.reliability ?? null,
+              expectedDiffAtBaseGames: mach.expectedDiffAtBaseGames ?? mach.stats.expectedDiffAtBaseGames,
+              diffMetric,
+              baseGames,
             });
           }
         }
@@ -481,6 +562,9 @@ export function calculateCrossStoreRanking(
     modelRankings: eligibleModels.slice(0, topModelCount),
     machineRankings: eligibleMachines.slice(0, topMachineCount),
     storeMachineRankings,
+    diffMetric,
+    baseGames,
+    legacyCrossShrink,
   };
 }
 

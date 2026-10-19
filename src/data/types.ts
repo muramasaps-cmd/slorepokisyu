@@ -56,6 +56,7 @@ export interface RankingWeights {
 
 export type ShrinkageMode = 'empirical' | 'fixed';
 export type CohortMode = 'interaction' | 'additive';
+export type ConfidenceMode = 'legacy' | 'reliability';
 
 export interface MachineRankingWeights {
   diffWeight: number; // pts per diff coin (default 0.04)
@@ -66,11 +67,90 @@ export interface MachineRankingWeights {
   zoroBonus: number; // bonus for zoro machine number (default 0.0)
   recentStateWeight: number; // weight for prior day diff (default 0)
   shrinkageK: number; // empirical Bayes shrinkage hyperparameter (default 3)
-  shrinkageMode?: ShrinkageMode; // default 'empirical'
+  shrinkageMode?: ShrinkageMode; // default 'fixed'
+  confidenceMode?: ConfidenceMode; // default 'legacy'
   cohortMode?: CohortMode; // default 'interaction'
+  baseGames?: number; // default 5000 (30-3: 基準ゲーム数換算)
   standardGames?: number; // default 5000
   betaPriorA?: number;
   betaPriorB?: number;
+  highSettingShrinkage?: { enabled: boolean; priorStrength: number }; // 30-5 (default enabled: false, priorStrength: 4)
+}
+
+export type MachineConfidenceLevel = '高' | '中' | '低';
+
+export interface MachineRankingContributions {
+  cohortDiffScore: number;
+  cohortWinRateScore: number;
+  highSettingScore: number;
+  modelScore: number;
+  tailBonusScore: number;
+  recentStateScore: number;
+}
+
+export interface MachineHistoryEntry {
+  date: string;
+  dayOfWeek: string;
+  diff: number;
+  games: number;
+  payoutRate?: number;
+  bb?: number;
+  rb?: number;
+  isInCohort: boolean;
+  isHighSetting: boolean;
+}
+
+export interface MachineShrinkageDiagnostics {
+  sigma2: number;
+  tau2: number;
+  B: number;
+  s2_r?: number;
+  tau2_r?: number;
+  B_r?: number;
+}
+
+export interface TargetMachineScore {
+  machineNum: number;
+  modelName: string;
+  rank: number;
+  totalScore: number;
+  confidence: MachineConfidenceLevel;
+  evidenceDays: number;
+  cohortEvidenceDays: number;
+  contributions: MachineRankingContributions;
+  stats: {
+    cohortAvgDiff: number;
+    shrunkDiff: number;
+    cohortWinRate: number;
+    shrunkWinRate: number;
+    modelCohortAvgDiff: number;
+    modelCohortWinRate: number;
+    highSettingRate: number;
+    highSettingCount: number;
+    modelScore: number;
+    isTailMatch: boolean;
+    isZoro: boolean;
+    priorDayDiff: number | null;
+    priorDayDate: string | null;
+    standardError?: number;
+    cohortAvgPayoutRate?: number;
+    shrunkPayoutRate?: number;
+    expectedDiffStd?: number;
+    expectedDiffActual?: number;
+    expectedDiffAtBaseGames?: number;
+    avgGames?: number;
+    shrinkageB?: number;
+    reliabilityRate?: number;
+    expectedDiffMargin80?: number;
+    expectedDiff80Range?: [number, number];
+  };
+  history: MachineHistoryEntry[];
+  shrinkageDiagnostics?: MachineShrinkageDiagnostics;
+  posteriorMean: number;
+  posteriorSd: number | null;
+  interval80: [number, number] | null;
+  reliability: number | null;
+  expectedDiffAtBaseGames: number;
 }
 
 export interface StoreProfile extends StoreInfo {

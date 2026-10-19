@@ -625,4 +625,208 @@ describe('crossStoreRanking utils', () => {
       expect(pastPerf.isReferenceOnly).toBe(!backtestRes.withFilter.hasEdge);
     });
   });
+
+  // 10. 30-4: 横断ランキングの整理（二重縮小・並びと理由の一致・指標の切替）
+  describe('30-4: 横断ランキングの整理', () => {
+    it('1. legacyCrossShrink=false で、並びが期待差枚の降順で、二重の縮小が掛かっていないこと（期待差枚 = posteriorMean）', () => {
+      // Store with 5 days of data (storeEvalDays = 5 < 15)
+      const store = createMockStore(
+        'store-cross-shrink',
+        '二重縮小検証店舗',
+        50,
+        [{ name: 'マイジャグラーV', diff: 600, machines: 3 }],
+        [
+          { num: 101, model: 'マイジャグラーV', diff: 2000 },
+          { num: 102, model: 'マイジャグラーV', diff: 1000 },
+          { num: 103, model: 'マイジャグラーV', diff: 300 },
+        ],
+        5
+      );
+
+      // A. legacyCrossShrink: false (二重縮小なし)
+      const resNew = calculateCrossStoreRanking([store], '2025-01-02', {
+        legacyCrossShrink: false,
+        includeLowConfidence: true,
+      });
+
+      expect(resNew.machineRankings.length).toBeGreaterThanOrEqual(3);
+
+      // Verify strict descending order
+      for (let i = 0; i < resNew.machineRankings.length - 1; i++) {
+        expect(resNew.machineRankings[i].expectedDiffCoins).toBeGreaterThanOrEqual(
+          resNew.machineRankings[i + 1].expectedDiffCoins
+        );
+      }
+
+      // Verify no double shrinkage: expectedDiffCoins === Math.round(posteriorMean)
+      resNew.machineRankings.forEach((m) => {
+        expect(m.posteriorMean).toBeDefined();
+        expect(m.expectedDiffCoins).toBe(Math.round(m.posteriorMean!));
+        expect(m.shrunkDiff).toBe(Math.round(m.posteriorMean!));
+      });
+
+      // B. legacyCrossShrink: true (既定: 二重縮小あり)
+      const resLegacy = calculateCrossStoreRanking([store], '2025-01-02', {
+        legacyCrossShrink: true,
+        includeLowConfidence: true,
+      });
+
+      // With storeEvalDays=5 (<15) and evidenceDays=5 (<15), double shrinkage scales down
+      const topNew = resNew.machineRankings[0];
+      const topLegacy = resLegacy.machineRankings[0];
+      expect(topLegacy.expectedDiffCoins).toBeLessThan(topNew.expectedDiffCoins);
+      expect(topLegacy.expectedDiffCoins).toBe(
+        Math.round(topLegacy.posteriorMean! * (5 / (5 + 3)) * (5 / 15))
+      );
+    });
+
+    it('2. diffMetric="baseGames" で、稼働の違う2店の同じ出率の台が、同じ程度の期待差枚になること', () => {
+      // Store Low: average games 2,700, diff 270 (rate r = 0.10)
+      const storeLow = createMockStore(
+        'store-low-games',
+        '低稼働店舗',
+        50,
+        [{ name: 'マイジャグラーV', diff: 270, machines: 3 }],
+        [{ num: 101, model: 'マイジャグラーV', diff: 270 }],
+        15
+      );
+      // Override daily games to 2700
+      storeLow.dailyRecords.forEach((r) => {
+        r.avgGames = 2700;
+        if (r.machines) {
+          r.machines.forEach((m) => {
+            m.games = 2700;
+            m.diff = 270;
+            m.payoutRate = 103.3;
+          });
+        }
+      });
+
+      // Store High: average games 6,000, diff 600 (rate r = 0.10)
+      const storeHigh = createMockStore(
+        'store-high-games',
+        '高稼働店舗',
+        50,
+        [{ name: 'マイジャグラーV', diff: 600, machines: 3 }],
+        [{ num: 201, model: 'マイジャグラーV', diff: 600 }],
+        15
+      );
+      // Override daily games to 6000
+      storeHigh.dailyRecords.forEach((r) => {
+        r.avgGames = 6000;
+        if (r.machines) {
+          r.machines.forEach((m) => {
+            m.games = 6000;
+            m.diff = 600;
+            m.payoutRate = 103.3;
+          });
+        }
+      });
+
+      // A. diffMetric: 'actual' (現行: 実稼働差枚)
+      const resActual = calculateCrossStoreRanking([storeLow, storeHigh], '2025-01-02', {
+        diffMetric: 'actual',
+        legacyCrossShrink: false,
+        includeLowConfidence: true,
+      });
+
+      const machLowActual = resActual.machineRankings.find((m) => m.machineNum === 101)!;
+      const machHighActual = resActual.machineRankings.find((m) => m.machineNum === 201)!;
+      expect(machLowActual).toBeDefined();
+      expect(machHighActual).toBeDefined();
+      // In actual games diff, Store High diff is ~2x Store Low diff
+      expect(machHighActual.expectedDiffCoins / machLowActual.expectedDiffCoins).toBeGreaterThan(1.8);
+
+      // B. diffMetric: 'baseGames' (基準5,000G換算)
+      const resBase = calculateCrossStoreRanking([storeLow, storeHigh], '2025-01-02', {
+        diffMetric: 'baseGames',
+        baseGames: 5000,
+        legacyCrossShrink: false,
+        includeLowConfidence: true,
+      });
+
+      const machLowBase = resBase.machineRankings.find((m) => m.machineNum === 101)!;
+      const machHighBase = resBase.machineRankings.find((m) => m.machineNum === 201)!;
+      expect(machLowBase).toBeDefined();
+      expect(machHighBase).toBeDefined();
+
+      // At baseGames 5000, both rate r = 0.10 machines yield ~500 coins, nearly identical
+      expect(machLowBase.expectedDiffCoins).toBeCloseTo(500, -1);
+      expect(machHighBase.expectedDiffCoins).toBeCloseTo(500, -1);
+      expect(Math.abs(machLowBase.expectedDiffCoins - machHighBase.expectedDiffCoins)).toBeLessThanOrEqual(25);
+    });
+
+    it('3. 理由に出る要素が、並びに効いていること（並び順に寄与しない末尾・ゾロ目・高設定等は理由から外れていること）', () => {
+      const store = createMockStore(
+        'store-reasons-check',
+        '理由一貫性店舗',
+        50,
+        [{ name: 'スマスロ北斗の拳', diff: 1000, machines: 3 }],
+        [
+          { num: 777, model: 'スマスロ北斗の拳', diff: 3000 }, // Zoro & Tail 7
+          { num: 101, model: 'スマスロ北斗の拳', diff: 2000 },
+        ],
+        5
+      );
+
+      const res = calculateCrossStoreRanking([store], '2025-01-02', {
+        includeLowConfidence: true,
+      });
+
+      // Rankings are ordered purely by expected diff
+      expect(res.machineRankings[0].machineNum).toBe(777);
+      expect(res.machineRankings[1].machineNum).toBe(101);
+
+      res.machineRankings.forEach((mach) => {
+        mach.reasons.forEach((reason) => {
+          // Reasons must NOT mention non-ranking drivers: 末尾, ゾロ目, 高設定
+          expect(reason).not.toMatch(/末尾/);
+          expect(reason).not.toMatch(/ゾロ目/);
+          expect(reason).not.toMatch(/高設定/);
+          // Reasons must explain cohort evidence and shrunk expected diff
+          expect(reason).toMatch(/(?:特日|同曜日|同条件|縮小推定|機種平均)/);
+        });
+      });
+    });
+
+    it('4. interval80 が存在する場合、CrossStoreMachineRank に格納されること', () => {
+      const store = createMockStore(
+        'store-interval-check',
+        '区間検証店舗',
+        50,
+        [{ name: 'マイジャグラーV', diff: 500, machines: 5 }],
+        [
+          { num: 101, model: 'マイジャグラーV', diff: 2000 },
+          { num: 102, model: 'マイジャグラーV', diff: 1000 },
+        ],
+        10
+      );
+
+      // Run with empirical shrinkage
+      store.customMachineRankingWeights = {
+        diffWeight: 0.04,
+        winRateWeight: 0.3,
+        highSettingWeight: 20.0,
+        modelScoreWeight: 0.25,
+        tailMatchBonus: 0.0,
+        zoroBonus: 0.0,
+        recentStateWeight: 0,
+        shrinkageK: 3,
+        shrinkageMode: 'empirical',
+      };
+
+      const res = calculateCrossStoreRanking([store], '2025-01-02', {
+        legacyCrossShrink: false,
+        includeLowConfidence: true,
+      });
+
+      const mach = res.machineRankings[0];
+      expect(mach).toBeDefined();
+      if (mach.interval80) {
+        expect(mach.interval80).toHaveLength(2);
+        expect(mach.interval80[0]).toBeLessThanOrEqual(mach.interval80[1]);
+      }
+    });
+  });
 });
+

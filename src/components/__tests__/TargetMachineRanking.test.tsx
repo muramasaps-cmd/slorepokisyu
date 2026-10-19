@@ -36,6 +36,11 @@ describe('TargetMachineRanking formatMachineReasons', () => {
         priorDayDate: '2025-01-05',
       },
       history: [],
+      posteriorMean: 750,
+      posteriorSd: null,
+      interval80: null,
+      reliability: null,
+      expectedDiffAtBaseGames: 750,
     };
 
     const reasons = formatMachineReasons(mockScore);

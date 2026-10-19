@@ -111,8 +111,9 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
   // Metric mode: diffCoins vs yen
   const [metricMode, setMetricMode] = useState<CrossMetricMode>('diffCoins');
 
-  // G-count conversion mode: std (5,000G) vs actual (avgGames)
-  const [diffDisplayMode, setDiffDisplayMode] = useState<'std' | 'actual'>('std');
+  // 30-4: 指標の切替 (diffMetric: 'actual' | 'baseGames', 既定 'actual') & 基準G数 (既定 5,000)
+  const [diffMetric, setDiffMetric] = useState<'actual' | 'baseGames'>('actual');
+  const [baseGames, setBaseGames] = useState<number>(5000);
 
   // Display count: 10 vs 20 vs 50
   const [displayCount, setDisplayCount] = useState<number>(20);
@@ -239,9 +240,19 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
   const [workerProgress, setWorkerProgress] = useState<{ percent: number; store?: string } | null>(null);
   const workerRef = useRef<Worker | null>(null);
 
-  // Store backtest edge cache ({ [storeId]: { hasEdge: boolean; verdictMessage: string; evaluatedDays: number } })
+  // Store backtest edge & calibration cache (30-6: 上位20台の実績リフト & 95%区間)
   const [edgeCache, setEdgeCache] = useState<
-    Record<string, { hasEdge: boolean; verdictMessage: string; evaluatedDays: number }>
+    Record<
+      string,
+      {
+        hasEdge: boolean;
+        verdictMessage: string;
+        evaluatedDays: number;
+        top20AvgLift: number;
+        top20Ci95: [number, number];
+        top20ActualAvgDiff?: number;
+      }
+    >
   >(() => {
     try {
       const saved = localStorage.getItem('slorepo_cross_edge_cache');
@@ -261,7 +272,7 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
       try {
         const priorRecords = (store.dailyRecords || []).filter((r) => r.date < targetDate);
         const res = runMachineBacktest(priorRecords, store.specialDayRules, {
-          topN: 10,
+          topN: 20, // 30-6: 上位20台の実績リフト
           minEvidenceDays: 3,
           bootstrapIterations: 1000,
           weights: store.customMachineRankingWeights,
@@ -271,6 +282,9 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
           hasEdge: res.withFilter.hasEdge,
           verdictMessage: res.withFilter.verdictMessage,
           evaluatedDays: res.evaluatedDaysCount,
+          top20AvgLift: res.withFilter.avgLift,
+          top20Ci95: res.withFilter.ci95,
+          top20ActualAvgDiff: res.withFilter.avgActualDiff,
         };
 
         setEdgeCache((prev) => {
@@ -325,6 +339,8 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
           topMachineCount: displayCount,
           selectedStoreIds,
           includeLowConfidence,
+          diffMetric,
+          baseGames,
         },
       };
       worker.postMessage(req);
@@ -337,7 +353,7 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
       console.warn('Worker initialization failed, using sync calculateCrossStoreRanking:', err);
       setWorkerProgress(null);
     }
-  }, [stores, targetDate, metricMode, displayCount, selectedStoreIds, includeLowConfidence]);
+  }, [stores, targetDate, metricMode, displayCount, selectedStoreIds, includeLowConfidence, diffMetric, baseGames]);
 
   // Synchronous calculation
   const syncResult: CrossStoreRankingResult = useMemo(() => {
@@ -347,10 +363,41 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
       topMachineCount: displayCount,
       selectedStoreIds,
       includeLowConfidence,
+      diffMetric,
+      baseGames,
     });
-  }, [stores, targetDate, metricMode, displayCount, selectedStoreIds, includeLowConfidence]);
+  }, [stores, targetDate, metricMode, displayCount, selectedStoreIds, includeLowConfidence, diffMetric, baseGames]);
 
   const rankingResult = workerResult || syncResult;
+
+  // 30-6: Helper to compute top 20 expected diff average for a store
+  const getStoreTop20ExpectedDiff = (storeId: string): number => {
+    const list = rankingResult.storeMachineRankings?.[storeId] || [];
+    const top20 = list.slice(0, 20);
+    if (top20.length === 0) return 0;
+    const sum = top20.reduce((acc, m) => acc + (m.expectedDiffCoins ?? m.shrunkDiff ?? 0), 0);
+    return Math.round(sum / top20.length);
+  };
+
+  const getStoreCalibration = (storeId: string) => {
+    const edgeInfo = edgeCache[storeId];
+    if (!edgeInfo || edgeInfo.top20AvgLift === undefined) return null;
+    const top20ExpectedDiff = getStoreTop20ExpectedDiff(storeId);
+    const actualLift = edgeInfo.top20AvgLift;
+    const ci95 = edgeInfo.top20Ci95 || [0, 0];
+    const isUnderperforming = top20ExpectedDiff > 100 && actualLift < top20ExpectedDiff * 0.70;
+    const realizedPct = top20ExpectedDiff > 0
+      ? Math.max(0, Math.round((actualLift / top20ExpectedDiff) * 100))
+      : 0;
+    return {
+      edgeInfo,
+      top20ExpectedDiff,
+      actualLift,
+      ci95,
+      isUnderperforming,
+      realizedPct,
+    };
+  };
 
   const toggleStore = (id: string) => {
     if (selectedStoreIds.includes(id)) {
@@ -553,32 +600,47 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
               </button>
             </div>
 
-            {/* G数換算切替 (Requirement 2) */}
+            {/* 指標切替: 実稼働差枚 (現行) vs 基準G換算 (30-4) */}
             <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200 font-bold">
               <button
                 type="button"
-                onClick={() => setDiffDisplayMode('std')}
+                onClick={() => setDiffMetric('actual')}
                 className={`px-2.5 py-1 rounded-md text-xs transition-all cursor-pointer ${
-                  diffDisplayMode === 'std'
+                  diffMetric === 'actual'
                     ? 'bg-white text-slate-900 shadow-2xs'
                     : 'text-slate-500 hover:text-slate-900'
                 }`}
-                title="基準5,000G稼働に揃えた期待差枚を表示"
+                title="各台の過去の実際の平均稼働G数に合わせた期待差枚を表示・並べ替え（現行）"
               >
-                基準5,000G換算
+                実稼働差枚
               </button>
               <button
                 type="button"
-                onClick={() => setDiffDisplayMode('actual')}
+                onClick={() => setDiffMetric('baseGames')}
                 className={`px-2.5 py-1 rounded-md text-xs transition-all cursor-pointer ${
-                  diffDisplayMode === 'actual'
+                  diffMetric === 'baseGames'
                     ? 'bg-white text-indigo-700 shadow-2xs'
                     : 'text-slate-500 hover:text-slate-900'
                 }`}
-                title="各台の過去の実際の平均稼働G数に合わせた期待差枚を表示"
+                title="出率ベースで指定の基準ゲーム数に換算した期待差枚を表示・並べ替え"
               >
-                実稼働換算
+                基準G換算
               </button>
+              {diffMetric === 'baseGames' && (
+                <div className="flex items-center gap-1 pl-1.5 pr-1 border-l border-slate-300">
+                  <span className="text-2xs text-slate-500 font-medium">基準G:</span>
+                  <input
+                    type="number"
+                    min={1000}
+                    max={15000}
+                    step={500}
+                    value={baseGames}
+                    onChange={(e) => setBaseGames(Math.max(100, Number(e.target.value) || 5000))}
+                    className="w-16 px-1.5 py-0.5 text-xs font-mono bg-white border border-slate-300 rounded text-right font-bold text-slate-800 focus:outline-hidden"
+                  />
+                  <span className="text-2xs text-slate-500 font-medium">G</span>
+                </div>
+              )}
             </div>
 
             {/* Display Count Select */}
@@ -938,30 +1000,26 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                             </span>
                           </div>
 
-                          {/* Expected Diff & Uncertainty (Requirement 3) */}
+                          {/* Expected Diff & Uncertainty (30-4) */}
                           <div className="bg-slate-50/80 rounded-lg p-2.5 border border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 text-xs">
                             <div className="flex items-baseline gap-1.5 flex-wrap">
                               <span className="text-[11px] font-bold text-slate-500">期待差枚:</span>
                               <span
                                 className={`font-mono font-black text-sm ${
-                                  (diffDisplayMode === 'std' ? (mach.expectedDiffStd ?? mach.shrunkDiff) : (mach.expectedDiffActual ?? mach.shrunkDiff)) >= 0
+                                  mach.shrunkDiff >= 0
                                     ? 'text-blue-600'
                                     : 'text-rose-600'
                                 }`}
                               >
-                                {(diffDisplayMode === 'std' ? (mach.expectedDiffStd ?? mach.shrunkDiff) : (mach.expectedDiffActual ?? mach.shrunkDiff)) >= 0 ? '+' : ''}
-                                {formatNumber(
-                                  diffDisplayMode === 'std'
-                                    ? mach.expectedDiffStd ?? mach.shrunkDiff
-                                    : mach.expectedDiffActual ?? mach.shrunkDiff
-                                )}
+                                {mach.shrunkDiff >= 0 ? '+' : ''}
+                                {formatNumber(mach.shrunkDiff)}
                                 枚
                               </span>
                               <span className="text-2xs text-slate-400">
-                                ({diffDisplayMode === 'std' ? '基準5,000G' : `実稼働${formatNumber(mach.avgGames || 5000)}G`}換算
+                                ({diffMetric === 'baseGames' ? `基準${formatNumber(baseGames)}G` : `実稼働${formatNumber(mach.avgGames || 5000)}G`}換算
                                 {mach.shrunkPayoutRate !== undefined ? `, 推定出率 ${mach.shrunkPayoutRate}%` : ''})
                               </span>
-                              {mach.avgGames && (
+                              {mach.avgGames && diffMetric !== 'baseGames' && (
                                 <span className="text-2xs text-slate-500">
                                   • 平均稼働: {formatNumber(mach.avgGames)}G/日
                                 </span>
@@ -973,8 +1031,24 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                               )}
                             </div>
 
-                            {/* Uncertainty Display: 80% range */}
-                            {mach.uncertainty80 && (
+                            {/* Uncertainty Display: 80% range (30-2 / 30-4 interval80優先表示) */}
+                            {mach.interval80 ? (
+                              <div className="flex items-center gap-1 text-[11px] text-slate-600 flex-wrap">
+                                <span className="text-2xs text-slate-400 font-bold">80%範囲:</span>
+                                <span className="font-mono text-2xs font-bold">
+                                  {mach.interval80[0] >= 0 ? `+${mach.interval80[0]}` : mach.interval80[0]} 〜{' '}
+                                  {mach.interval80[1] >= 0 ? `+${mach.interval80[1]}` : mach.interval80[1]}枚
+                                </span>
+                                {mach.uncertainty80?.isWide && (
+                                  <span
+                                    className="px-1.5 py-0.2 rounded bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-bold shrink-0"
+                                    title="不確実性の幅が広くブレに注意が必要です"
+                                  >
+                                    ⚠️ ブレ注意
+                                  </span>
+                                )}
+                              </div>
+                            ) : mach.uncertainty80 && (
                               <div className="flex items-center gap-1 text-[11px] text-slate-600 flex-wrap">
                                 <span className="text-2xs text-slate-400 font-bold">80%区間:</span>
                                 <span className="font-mono text-2xs font-bold">
@@ -1269,8 +1343,15 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                                   {mach.shrunkDiff >= 0 ? `+${formatNumber(mach.shrunkDiff)}` : formatNumber(mach.shrunkDiff)}枚
                                 </span>
                               )}
-                              {/* Uncertainty Range */}
-                              {mach.uncertainty80 && (
+                              {/* Uncertainty Range (30-2 / 30-4: interval80優先表示) */}
+                              {mach.interval80 ? (
+                                <div className="text-[10px] text-slate-500 font-normal flex items-center justify-end gap-1">
+                                  <span>80%範囲: {mach.interval80[0] >= 0 ? `+${mach.interval80[0]}` : mach.interval80[0]}〜{mach.interval80[1] >= 0 ? `+${mach.interval80[1]}` : mach.interval80[1]}枚</span>
+                                  {mach.uncertainty80?.isWide && (
+                                    <span className="text-rose-500 font-bold" title="不確実性の幅が広いため注意">⚠️</span>
+                                  )}
+                                </div>
+                              ) : mach.uncertainty80 && (
                                 <div className="text-[10px] text-slate-400 font-normal flex items-center justify-end gap-1">
                                   <span>80%: ±{mach.uncertainty80.margin}枚</span>
                                   {mach.uncertainty80.isWide && (

@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   calculateCrossStoreRanking,
+  calculateStoreTargetMetrics,
+  generateCandidateScanDates,
+  scanCandidateDates,
   convertCoinsToYen,
   calculateUncertainty80,
   filterAndRollupTargetList,
@@ -836,5 +839,320 @@ describe('crossStoreRanking utils', () => {
       }
     });
   });
+
+  describe('プロンプト32: 横断狙いの店舗ランキングと来店日スキャン', () => {
+    it('1. 店舗ランキングの並びが上位N台の期待差枚の平均の降順であること', () => {
+      const storeHigh = createMockStore(
+        'store-high',
+        '高期待値店',
+        50,
+        [{ name: 'アイムジャグラー', diff: 800, machines: 5 }],
+        [
+          { num: 1, model: 'アイムジャグラー', diff: 2500 },
+          { num: 2, model: 'アイムジャグラー', diff: 2000 },
+          { num: 3, model: 'アイムジャグラー', diff: 1800 },
+        ],
+        5
+      );
+
+      const storeMid = createMockStore(
+        'store-mid',
+        '中期待値店',
+        50,
+        [{ name: 'アイムジャグラー', diff: 200, machines: 5 }],
+        [
+          { num: 1, model: 'アイムジャグラー', diff: 600 },
+          { num: 2, model: 'アイムジャグラー', diff: 500 },
+          { num: 3, model: 'アイムジャグラー', diff: 400 },
+        ],
+        5
+      );
+
+      const storeLow = createMockStore(
+        'store-low',
+        '低期待値店',
+        50,
+        [{ name: 'アイムジャグラー', diff: -300, machines: 5 }],
+        [
+          { num: 1, model: 'アイムジャグラー', diff: -400 },
+          { num: 2, model: 'アイムジャグラー', diff: -500 },
+          { num: 3, model: 'アイムジャグラー', diff: -600 },
+        ],
+        5
+      );
+
+      const res = calculateCrossStoreRanking(
+        [storeMid, storeLow, storeHigh], // Deliberately unordered input
+        '2025-01-02',
+        { topStoreMachineN: 10 }
+      );
+
+      expect(res.storeRankings).toBeDefined();
+      expect(res.storeRankings).toHaveLength(3);
+
+      const rankings = res.storeRankings!;
+      // Verified strictly descending order by topNAvgExpectedDiff
+      expect(rankings[0].storeId).toBe('store-high');
+      expect(rankings[1].storeId).toBe('store-mid');
+      expect(rankings[2].storeId).toBe('store-low');
+
+      expect(rankings[0].topNAvgExpectedDiff).toBeGreaterThan(rankings[1].topNAvgExpectedDiff);
+      expect(rankings[1].topNAvgExpectedDiff).toBeGreaterThan(rankings[2].topNAvgExpectedDiff);
+
+      // Rank values are 1, 2, 3
+      expect(rankings[0].rank).toBe(1);
+      expect(rankings[1].rank).toBe(2);
+      expect(rankings[2].rank).toBe(3);
+    });
+
+    it('2. 信頼度が低い台が平均から除外され、除外台数が集計されること', () => {
+      // 5 prior days in chronological order
+      const dates = ['2024-11-28', '2024-12-05', '2024-12-12', '2024-12-19', '2024-12-26'];
+      const dailyRecords: DailyRecord[] = dates.map((dateStr, idx) => {
+        // Machine 999 only exists on the last day (1 evidence day -> active but low confidence)
+        // Machines 101, 102 exist on all days (5 evidence days -> higher confidence)
+        const machines = [
+          { machineNum: 101, modelName: 'マイジャグラーV', diff: 300, games: 5000, payoutRate: 102.0 },
+          { machineNum: 102, modelName: 'マイジャグラーV', diff: 400, games: 5000, payoutRate: 102.5 },
+        ];
+        if (idx === dates.length - 1) {
+          machines.push({
+            machineNum: 999,
+            modelName: 'マイジャグラーV',
+            diff: 5000, // Extremely high diff, but only 1 day of evidence
+            games: 5000,
+            payoutRate: 133.0,
+          });
+        }
+        return {
+          date: dateStr,
+          yearMonth: dateStr.slice(0, 7),
+          year: Number(dateStr.slice(0, 4)),
+          month: Number(dateStr.slice(5, 7)),
+          day: Number(dateStr.slice(8, 10)),
+          dayOfWeek: '木',
+          avgDiffCoins: 350,
+          avgGames: 5000,
+          winRate: 60,
+          winMachines: 2,
+          totalMachines: machines.length,
+          totalDiffCoins: machines.reduce((s, m) => s + m.diff, 0),
+          hallCoinProfit: -1000,
+          playerCoinProfit: 1000,
+          hallYenProfit: -20000,
+          playerYenProfit: 20000,
+          inCoins: 300000,
+          outCoins: 301000,
+          payoutRate: 102.0,
+          estimatedRevenue: 100000,
+          exchangeGapProfit: 5000,
+          gModelHallProfit: 10000,
+          gModelPlayerProfit: -10000,
+          isOldEventDay: false,
+          is7Day: false,
+          notable: '',
+          models: [
+            {
+              modelName: 'マイジャグラーV',
+              avgDiffCoins: 350,
+              totalDiffCoins: 700,
+              avgGames: 5000,
+              winRate: 60,
+              winMachines: 2,
+              totalMachines: machines.length,
+            },
+          ],
+          machines,
+        };
+      });
+
+      const store: StoreProfile = {
+        id: 'store-confidence-test',
+        name: '信頼度テスト店',
+        address: '東京都',
+        oldEventDays: '7のつく日',
+        rateLend: 46,
+        rateExchange: 52,
+        exchangeRate: '46枚貸/52枚交換',
+        dailyRecords,
+      };
+
+      const testRes = calculateCrossStoreRanking([store], '2025-01-02', { includeLowConfidence: true });
+      console.log('testRes machineRankings:', testRes.machineRankings.map(m => ({ num: m.machineNum, conf: m.confidence, days: m.evidenceDays })));
+      const cell = calculateStoreTargetMetrics(store, '2025-01-02', { topN: 10 });
+      console.log('cell:', cell);
+
+      // Machine 999 has evidenceDays === 1, so its confidence is '低'.
+      // It must be excluded from the average calculation.
+      expect(cell.excludedLowConfidenceCount).toBeGreaterThanOrEqual(1);
+
+      // Average should reflect only machines with sufficient confidence (around +300〜+400),
+      // definitely not inflated by the +5000 1-day spike.
+      expect(cell.topNAvgExpectedDiff).toBeLessThan(1500);
+      expect(cell.evaluatedMachinesCount).toBe(2);
+    });
+
+    it('3. スキャンの結果が、個別に来店日を指定した結果と一致すること', () => {
+      const storeA = createMockStore(
+        'store-scan-a',
+        'スキャン店舗A',
+        50,
+        [{ name: 'マイジャグラーV', diff: 600, machines: 5 }],
+        [
+          { num: 101, model: 'マイジャグラーV', diff: 1500 },
+          { num: 102, model: 'マイジャグラーV', diff: 1000 },
+        ],
+        5
+      );
+      const storeB = createMockStore(
+        'store-scan-b',
+        'スキャン店舗B',
+        52,
+        [{ name: 'アイムジャグラー', diff: 300, machines: 5 }],
+        [
+          { num: 201, model: 'アイムジャグラー', diff: 700 },
+          { num: 202, model: 'アイムジャグラー', diff: 500 },
+        ],
+        5
+      );
+
+      const targetDate = '2025-01-02';
+      const scanDates = ['2025-01-02', '2025-01-03'];
+
+      const scanRes = scanCandidateDates([storeA, storeB], scanDates, { topN: 10 });
+      const singleRes = calculateCrossStoreRanking([storeA, storeB], targetDate, { topStoreMachineN: 10 });
+
+      expect(singleRes.storeRankings).toBeDefined();
+
+      for (const st of [storeA, storeB]) {
+        const scanCell = scanRes.grid[st.id][targetDate];
+        const singleRank = singleRes.storeRankings!.find((s) => s.storeId === st.id)!;
+
+        expect(scanCell).toBeDefined();
+        expect(singleRank).toBeDefined();
+
+        // Must match exactly
+        expect(scanCell.topNAvgExpectedDiff).toBe(singleRank.topNAvgExpectedDiff);
+        expect(scanCell.evaluatedMachinesCount).toBe(singleRank.evaluatedMachinesCount);
+        expect(scanCell.excludedLowConfidenceCount).toBe(singleRank.excludedLowConfidenceCount);
+        expect(scanCell.isSpecialDay).toBe(singleRank.isSpecialDay);
+        expect(scanCell.evaluationDays).toBe(singleRank.evaluationDays);
+      }
+    });
+
+    it('4. 来店日以降のデータを書き換えても結果が変わらないこと', () => {
+      const store = createMockStore(
+        'store-leakage-test',
+        '未来情報不変テスト店',
+        50,
+        [{ name: 'マイジャグラーV', diff: 500, machines: 5 }],
+        [
+          { num: 101, model: 'マイジャグラーV', diff: 1200 },
+          { num: 102, model: 'マイジャグラーV', diff: 800 },
+        ],
+        5
+      );
+
+      const targetDate = '2025-01-02';
+
+      // 1. Calculate metrics before adding future records
+      const beforeCell = calculateStoreTargetMetrics(store, targetDate, { topN: 10 });
+      const beforeScan = scanCandidateDates([store], [targetDate], { topN: 10 });
+
+      // 2. Add future records on and after targetDate (e.g. 2025-01-02, 2025-01-03) with massive diff
+      const futureRecords: DailyRecord[] = [
+        {
+          date: '2025-01-02',
+          yearMonth: '2025-01',
+          year: 2025,
+          month: 1,
+          day: 2,
+          dayOfWeek: '木',
+          avgDiffCoins: 9999,
+          avgGames: 9000,
+          winRate: 100,
+          winMachines: 10,
+          totalMachines: 10,
+          totalDiffCoins: 99990,
+          hallCoinProfit: -99990,
+          playerCoinProfit: 99990,
+          hallYenProfit: -1999800,
+          playerYenProfit: 1999800,
+          inCoins: 900000,
+          outCoins: 999990,
+          payoutRate: 111.1,
+          estimatedRevenue: 100000,
+          exchangeGapProfit: 0,
+          gModelHallProfit: 0,
+          gModelPlayerProfit: 0,
+          isOldEventDay: true,
+          is7Day: false,
+          notable: '',
+          machines: [
+            { machineNum: 101, modelName: 'マイジャグラーV', diff: 99999, games: 9000, payoutRate: 130 },
+          ],
+        },
+        {
+          date: '2025-01-03',
+          yearMonth: '2025-01',
+          year: 2025,
+          month: 1,
+          day: 3,
+          dayOfWeek: '金',
+          avgDiffCoins: 8888,
+          avgGames: 9000,
+          winRate: 100,
+          winMachines: 10,
+          totalMachines: 10,
+          totalDiffCoins: 88880,
+          hallCoinProfit: -88880,
+          playerCoinProfit: 88880,
+          hallYenProfit: -1777600,
+          playerYenProfit: 1777600,
+          inCoins: 900000,
+          outCoins: 988880,
+          payoutRate: 110.0,
+          estimatedRevenue: 100000,
+          exchangeGapProfit: 0,
+          gModelHallProfit: 0,
+          gModelPlayerProfit: 0,
+          isOldEventDay: false,
+          is7Day: false,
+          notable: '',
+          machines: [
+            { machineNum: 101, modelName: 'マイジャグラーV', diff: 88888, games: 9000, payoutRate: 130 },
+          ],
+        },
+      ];
+
+      store.dailyRecords = [...(store.dailyRecords || []), ...futureRecords];
+
+      // 3. Recalculate metrics for targetDate = '2025-01-02'
+      const afterCell = calculateStoreTargetMetrics(store, targetDate, { topN: 10 });
+      const afterScan = scanCandidateDates([store], [targetDate], { topN: 10 });
+
+      // Must be strictly identical: no future leakage
+      expect(afterCell.topNAvgExpectedDiff).toBe(beforeCell.topNAvgExpectedDiff);
+      expect(afterCell.evaluatedMachinesCount).toBe(beforeCell.evaluatedMachinesCount);
+      expect(afterCell.excludedLowConfidenceCount).toBe(beforeCell.excludedLowConfidenceCount);
+      expect(afterCell.evaluationDays).toBe(beforeCell.evaluationDays);
+
+      expect(afterScan.grid[store.id][targetDate].topNAvgExpectedDiff).toBe(
+        beforeScan.grid[store.id][targetDate].topNAvgExpectedDiff
+      );
+    });
+
+    it('5. generateCandidateScanDates が指定した日数の日付配列を生成すること', () => {
+      const dates7 = generateCandidateScanDates('2025-01-01', 7);
+      expect(dates7).toHaveLength(7);
+      expect(dates7[0]).toBe('2025-01-01');
+      expect(dates7[6]).toBe('2025-01-07');
+
+      const dates14 = generateCandidateScanDates('2025-01-01', 14);
+      expect(dates14).toHaveLength(14);
+      expect(dates14[13]).toBe('2025-01-14');
+    });
+  });
 });
+
 

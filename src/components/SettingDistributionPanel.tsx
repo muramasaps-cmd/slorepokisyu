@@ -1820,7 +1820,7 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
                     設定混合比率 π の推定値と95%ブートストラップ区間
                   </h4>
                   <p className="text-[11px] text-slate-500 mt-0.5">
-                    日単位ブロックブートストラップ（ブロック長7日、{BOOTSTRAP_REPS}回）による95%信頼区間
+                    日単位ブロックブートストラップ（ブロック長7日、{BOOTSTRAP_REPS}回）による95%信頼区間。※ σを固定した区間です。台数が少ないと実際より狭く出ることがあります。
                   </p>
                 </div>
                 <span className="text-[11px] font-mono bg-slate-100 text-slate-700 px-2.5 py-1 rounded-lg">
@@ -1928,6 +1928,14 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
                     })}
                   </tbody>
                 </table>
+                <p className="text-[11px] text-slate-500 mt-2 px-1">
+                  ※ σを固定した区間です。台数が少ないと実際より狭く出ることがあります。
+                  {estimationResult.bootstrapNonConvergedCount !== undefined && estimationResult.bootstrapNonConvergedCount > 0 && (
+                    <span className="text-amber-600 ml-1.5 font-medium">
+                      （未収束再標本: {estimationResult.bootstrapNonConvergedCount}件除外）
+                    </span>
+                  )}
+                </p>
               </div>
             </details>
           </div>

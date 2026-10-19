@@ -6,6 +6,10 @@ import {
   CrossMetricMode,
   CrossStoreModelRank,
   CrossStoreMachineRank,
+  CrossStoreStoreRank,
+  CandidateDateScanResult,
+  generateCandidateScanDates,
+  scanCandidateDates,
   MachineCheckStatus,
   loadTargetCheckStatus,
   saveTargetCheckStatus,
@@ -420,6 +424,87 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
     }, 50);
   };
 
+  // Candidate Date Scan state (Prompt 32: 今後14日間・日数は設定可・Worker計算と進捗・キャッシュ)
+  const [scanStartDate, setScanStartDate] = useState<string>(() => targetDate);
+  const [scanDaysCount, setScanDaysCount] = useState<number>(14);
+  const [scanTopN, setScanTopN] = useState<number>(10);
+  const [scanResult, setScanResult] = useState<CandidateDateScanResult | null>(null);
+  const [scanProgress, setScanProgress] = useState<{
+    percent: number;
+    currentDate?: string;
+    currentStore?: string;
+  } | null>(null);
+  const scanWorkerRef = useRef<Worker | null>(null);
+  const [scanTrigger, setScanTrigger] = useState<number>(0);
+
+  const scanDates = useMemo(() => {
+    return generateCandidateScanDates(scanStartDate, scanDaysCount);
+  }, [scanStartDate, scanDaysCount]);
+
+  useEffect(() => {
+    try {
+      const worker = new Worker(
+        new URL('../workers/crossRankingWorker.ts', import.meta.url),
+        { type: 'module' }
+      );
+      scanWorkerRef.current = worker;
+      setScanProgress({ percent: 10 });
+
+      worker.onmessage = (e: MessageEvent<CrossRankingWorkerResponse>) => {
+        if (e.data.type === 'SCAN_PROGRESS') {
+          setScanProgress({
+            percent: e.data.progress,
+            currentDate: e.data.currentDate,
+            currentStore: e.data.currentStore,
+          });
+        } else if (e.data.type === 'SCAN_RESULT') {
+          setScanResult(e.data.result);
+          setScanProgress(null);
+        } else if (e.data.type === 'ERROR') {
+          console.error('Candidate scan worker failed:', e.data.error);
+          setScanProgress(null);
+        }
+      };
+
+      const req: CrossRankingWorkerRequest = {
+        type: 'SCAN_CANDIDATE_DATES',
+        stores,
+        dates: scanDates,
+        options: {
+          topN: scanTopN,
+          diffMetric,
+          baseGames,
+        },
+      };
+      worker.postMessage(req);
+
+      return () => {
+        worker.terminate();
+        scanWorkerRef.current = null;
+      };
+    } catch (err) {
+      console.warn('Worker initialization for candidate scan failed, falling back to sync:', err);
+      setScanProgress(null);
+      const res = scanCandidateDates(stores, scanDates, {
+        topN: scanTopN,
+        diffMetric,
+        baseGames,
+      });
+      setScanResult(res);
+    }
+  }, [stores, scanDates, scanTopN, diffMetric, baseGames, scanTrigger]);
+
+  const fallbackScanResult = useMemo(() => {
+    if (scanResult) return null;
+    return scanCandidateDates(stores, scanDates, {
+      topN: scanTopN,
+      diffMetric,
+      baseGames,
+    });
+  }, [stores, scanDates, scanTopN, diffMetric, baseGames, scanResult]);
+
+  const activeScanResult = scanResult || fallbackScanResult;
+
   // Synchronous fallback / memoized ranking
   const [workerResult, setWorkerResult] = useState<CrossStoreRankingResult | null>(null);
 
@@ -453,10 +538,12 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
           metricMode,
           topModelCount: displayCount,
           topMachineCount: displayCount,
+          topStoreMachineN: 10,
           selectedStoreIds,
           includeLowConfidence,
           diffMetric,
           baseGames,
+          backtestResults: edgeCache,
         },
       };
       worker.postMessage(req);
@@ -469,7 +556,7 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
       console.warn('Worker initialization failed, using sync calculateCrossStoreRanking:', err);
       setWorkerProgress(null);
     }
-  }, [stores, targetDate, metricMode, displayCount, selectedStoreIds, includeLowConfidence, diffMetric, baseGames]);
+  }, [stores, targetDate, metricMode, displayCount, selectedStoreIds, includeLowConfidence, diffMetric, baseGames, edgeCache]);
 
   // Synchronous calculation
   const syncResult: CrossStoreRankingResult = useMemo(() => {
@@ -477,12 +564,14 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
       metricMode,
       topModelCount: displayCount,
       topMachineCount: displayCount,
+      topStoreMachineN: 10,
       selectedStoreIds,
       includeLowConfidence,
       diffMetric,
       baseGames,
+      backtestResults: edgeCache,
     });
-  }, [stores, targetDate, metricMode, displayCount, selectedStoreIds, includeLowConfidence, diffMetric, baseGames]);
+  }, [stores, targetDate, metricMode, displayCount, selectedStoreIds, includeLowConfidence, diffMetric, baseGames, edgeCache]);
 
   const rankingResult = workerResult || syncResult;
 
@@ -821,7 +910,449 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
         )}
       </div>
 
-      {/* 2. Sub-tab View Switcher: 狙い台リスト (来店中) vs 狙う機種 vs 狙う台 */}
+      {/* 2. 来店日の候補スキャン (今後14日間・店×日マトリクス) */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3.5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-2">
+              <span className="p-1 rounded bg-indigo-500/10 text-indigo-600 border border-indigo-500/20">
+                <Calendar className="w-4 h-4" />
+              </span>
+              <h3 className="text-sm sm:text-base font-black text-slate-900 tracking-tight">
+                来店日の候補スキャン（今後{scanDaysCount}日間・店×日）
+              </h3>
+            </div>
+            <p className="text-2xs text-slate-500">
+              各店舗の上位{scanTopN}台（低信頼台を除く）の期待差枚平均を日別マトリクスで一覧。セルをクリックするとその日に来店日を切替えます。
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto text-xs">
+            {/* Days range selector */}
+            <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-lg">
+              <span className="text-2xs text-slate-500 font-bold">スキャン期間:</span>
+              <select
+                value={scanDaysCount}
+                onChange={(e) => setScanDaysCount(Number(e.target.value))}
+                className="bg-transparent font-bold text-slate-800 focus:outline-hidden cursor-pointer text-xs"
+              >
+                <option value={7}>7日間</option>
+                <option value={14}>14日間（既定）</option>
+                <option value={21}>21日間</option>
+                <option value={30}>30日間</option>
+              </select>
+            </div>
+
+            {/* Reset start date to targetDate or tomorrow */}
+            <button
+              type="button"
+              onClick={() => {
+                setScanStartDate(targetDate);
+                setScanTrigger((c) => c + 1);
+              }}
+              className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold border border-slate-200 transition-colors flex items-center gap-1 cursor-pointer"
+              title="選択中の来店日からスキャン期間を再計算"
+            >
+              <RotateCw className="w-3 h-3 text-slate-500" />
+              <span>来店日から再スキャン</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Scan Progress Bar if active */}
+        {scanProgress !== null && (
+          <div className="space-y-1 animate-in fade-in">
+            <div className="flex justify-between text-[11px] text-slate-500 font-bold">
+              <span>
+                候補日スキャン計算中... {scanProgress.currentDate ? `(${scanProgress.currentDate} ${scanProgress.currentStore || ''})` : ''}
+              </span>
+              <span>{scanProgress.percent}%</span>
+            </div>
+            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+              <div
+                className="bg-indigo-600 h-1.5 transition-all duration-150"
+                style={{ width: `${scanProgress.percent}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Matrix Grid: Store × Date */}
+        <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-2xs">
+          <table className="w-full text-xs text-left border-collapse">
+            <thead className="bg-slate-100/80 text-slate-700 text-2xs uppercase">
+              <tr>
+                <th className="px-3 py-2.5 font-bold sticky left-0 bg-slate-100 z-10 border-r border-slate-200 min-w-[130px] sm:min-w-[150px]">
+                  店舗名
+                </th>
+                {scanDates.map((dStr) => {
+                  const isCurrentTarget = dStr === targetDate;
+                  const parts = dStr.split('-');
+                  const monthDay = `${Number(parts[1])}/${Number(parts[2])}`;
+                  const dObj = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+                  const dowNames = ['日', '月', '火', '水', '木', '金', '土'];
+                  const dow = dowNames[dObj.getDay()];
+                  const isSun = dObj.getDay() === 0;
+                  const isSat = dObj.getDay() === 6;
+
+                  return (
+                    <th
+                      key={dStr}
+                      onClick={() => setTargetDate(dStr)}
+                      className={`px-2.5 py-2 text-center font-bold border-r border-slate-200 cursor-pointer select-none transition-colors whitespace-nowrap min-w-[70px] ${
+                        isCurrentTarget
+                          ? 'bg-amber-100 text-amber-950 ring-2 ring-amber-500 inset-0'
+                          : 'hover:bg-slate-200'
+                      }`}
+                      title={`クリックして来店日を ${dStr} に設定`}
+                    >
+                      <div className="flex flex-col items-center">
+                        <span className="font-mono text-xs">{monthDay}</span>
+                        <span
+                          className={`text-[10px] ${
+                            isSun ? 'text-rose-600 font-black' : isSat ? 'text-blue-600 font-black' : 'text-slate-500'
+                          }`}
+                        >
+                          ({dow})
+                        </span>
+                        {isCurrentTarget && (
+                          <span className="mt-0.5 px-1 py-0.2 bg-amber-500 text-slate-950 rounded text-[9px] font-black">
+                            選択中
+                          </span>
+                        )}
+                      </div>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {stores.map((store) => {
+                return (
+                  <tr key={store.id} className="hover:bg-slate-50/80 transition-colors">
+                    {/* Sticky Store Name cell */}
+                    <td className="px-3 py-2 font-bold text-slate-900 sticky left-0 bg-white hover:bg-slate-50 z-10 border-r border-slate-200 shadow-2xs">
+                      <div className="truncate max-w-[130px] sm:max-w-[150px]" title={store.name}>
+                        {store.name}
+                      </div>
+                      <div className="text-[10px] text-slate-400 font-normal">
+                        {store.exchangeRate || `${store.rateExchange || 52}枚`}
+                      </div>
+                    </td>
+
+                    {/* Date cells */}
+                    {scanDates.map((dStr) => {
+                      const cell = activeScanResult?.grid?.[store.id]?.[dStr];
+                      const isCurrentTarget = dStr === targetDate;
+                      const hasData = cell && cell.evaluationDays > 0;
+                      const diffVal = cell?.topNAvgExpectedDiff ?? 0;
+                      const isSpecial = cell?.isSpecialDay;
+
+                      return (
+                        <td
+                          key={dStr}
+                          onClick={() => setTargetDate(dStr)}
+                          className={`px-2 py-2 text-center border-r border-slate-100 cursor-pointer transition-all select-none ${
+                            isCurrentTarget
+                              ? 'bg-amber-50/80 font-black ring-1 ring-amber-400'
+                              : isSpecial
+                              ? 'bg-amber-50/40 hover:bg-amber-100/50'
+                              : 'hover:bg-slate-100'
+                          }`}
+                          title={
+                            cell
+                              ? `【${store.name}】${dStr}\n上位${scanTopN}台期待差枚平均: ${diffVal >= 0 ? '+' : ''}${diffVal}枚\n評価根拠日数: ${cell.evaluationDays}日\n除外低信頼台: ${cell.excludedLowConfidenceCount}台${
+                                  cell.isSpecialDay ? `\n★特日 (${cell.specialDayReason || '特日'})` : ''
+                                }\nクリックでこの日に切り替え`
+                              : `クリックして ${dStr} に来店日を設定`
+                          }
+                        >
+                          <div className="flex flex-col items-center justify-center gap-0.5">
+                            {isSpecial && (
+                              <span className="px-1 py-0.1 bg-amber-500 text-slate-950 font-black text-[9px] rounded-full shadow-2xs">
+                                ★特
+                              </span>
+                            )}
+                            {hasData ? (
+                              <span
+                                className={`font-mono text-xs font-black ${
+                                  diffVal > 0
+                                    ? 'text-blue-600'
+                                    : diffVal < 0
+                                    ? 'text-rose-600'
+                                    : 'text-slate-500'
+                                }`}
+                              >
+                                {diffVal >= 0 ? `+${diffVal}` : diffVal}
+                              </span>
+                            ) : (
+                              <span className="text-slate-300 font-mono text-xs">-</span>
+                            )}
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Legend */}
+        <div className="flex flex-wrap items-center justify-between text-[11px] text-slate-500 gap-2 pt-1 border-t border-slate-100">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="flex items-center gap-1">
+              <span className="px-1.5 py-0.2 bg-amber-500 text-slate-950 font-black text-[9px] rounded-full">★特</span>
+              <span>店舗特日</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="font-mono text-blue-600 font-bold">+数値</span>
+              <span>上位{scanTopN}台プラス期待値</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="font-mono text-rose-600 font-bold">-数値</span>
+              <span>マイナス期待値</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="px-1 py-0.2 bg-amber-100 text-amber-950 rounded text-[9px] font-bold">選択中</span>
+              <span>現在の指定来店日</span>
+            </span>
+          </div>
+          <span className="text-slate-400">
+            ※ セルをクリックすると、その日を来店日に指定して詳細ランキングが即座に更新されます
+          </span>
+        </div>
+      </div>
+
+      {/* 3. どの店に行くか？ 店舗ランキング (Prompt 32: 機種・台番ランキングの上に追加) */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3.5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-2">
+              <span className="p-1 rounded bg-amber-500/10 text-amber-600 border border-amber-500/20">
+                <Building2 className="w-4 h-4" />
+              </span>
+              <h3 className="text-sm sm:text-base font-black text-slate-900 tracking-tight">
+                どの店に行くか？ 店舗ランキング
+              </h3>
+              <span className="px-2 py-0.5 bg-slate-100 text-slate-700 font-bold text-2xs rounded-full">
+                来店日: {targetDate}
+              </span>
+            </div>
+            <p className="text-2xs text-slate-500">
+              各店舗の上位10台（信頼度が低い台を除く）の期待差枚平均の降順。特日周期・根拠日数・台番バックテスト判定を総合評価。
+            </p>
+          </div>
+
+          <div className="text-xs text-slate-400 font-medium">
+            指標: <span className="font-bold text-slate-700">{diffMetric === 'baseGames' ? `基準${formatNumber(baseGames)}G換算` : '実稼働差枚'}</span>
+          </div>
+        </div>
+
+        {/* 1-line disclaimer required by prompt 32 */}
+        <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-2xs text-slate-600 leading-relaxed flex items-center gap-2">
+          <span className="font-bold text-slate-700 shrink-0">※ 注記:</span>
+          <span>表示されている期待差枚は過去データに基づく縮小推計値（期待値）であり、当日の出玉や勝率・結果を保証するものではありません。</span>
+        </div>
+
+        {/* Store Rankings Table */}
+        <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-2xs">
+          <table className="w-full text-xs text-left">
+            <thead className="bg-slate-100/80 text-slate-600 text-[11px] border-b border-slate-200 uppercase">
+              <tr>
+                <th className="px-3 py-2.5 font-bold w-12 text-center">順位</th>
+                <th className="px-4 py-2.5 font-bold">店舗名</th>
+                <th className="px-3 py-2.5 text-center font-bold">来店日特日判定</th>
+                <th className="px-4 py-2.5 text-right font-bold">
+                  上位10台 期待差枚平均
+                </th>
+                <th className="px-3 py-2.5 text-center font-bold">評価日数</th>
+                <th className="px-4 py-2.5 text-center font-bold">バックテスト判定 / 実績リフト</th>
+                <th className="px-3 py-2.5 text-center font-bold">除外台数</th>
+                <th className="px-3 py-2.5 text-center font-bold w-24">操作</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {(!rankingResult.storeRankings || rankingResult.storeRankings.length === 0) ? (
+                <tr>
+                  <td colSpan={8} className="p-6 text-center text-slate-400">
+                    評価可能な店舗データがありません。
+                  </td>
+                </tr>
+              ) : (
+                rankingResult.storeRankings.map((st) => {
+                  const edgeInfo = edgeCache[st.storeId];
+                  const hasMach = stores.find((s) => s.id === st.storeId)?.dailyRecords?.some((r) => r.machines && r.machines.length > 0);
+                  const isTesting = testingStoreId === st.storeId;
+                  const storeObj = stores.find((s) => s.id === st.storeId);
+
+                  return (
+                    <tr
+                      key={st.storeId}
+                      className={`hover:bg-slate-50 transition-colors ${
+                        activeTargetStoreId === st.storeId ? 'bg-amber-50/30' : ''
+                      }`}
+                    >
+                      <td className="px-3 py-3 text-center font-black">
+                        <span
+                          className={`w-6 h-6 inline-flex items-center justify-center rounded-lg text-xs ${
+                            st.rank === 1
+                              ? 'bg-amber-500 text-slate-950 font-black'
+                              : st.rank === 2
+                              ? 'bg-slate-300 text-slate-900 font-bold'
+                              : st.rank === 3
+                              ? 'bg-amber-700 text-white font-bold'
+                              : 'text-slate-600'
+                          }`}
+                        >
+                          #{st.rank}
+                        </span>
+                      </td>
+
+                      <td className="px-4 py-3 font-bold text-slate-900">
+                        <div className="flex items-center gap-1.5">
+                          <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <span className="font-bold">{st.storeName}</span>
+                          <span className="text-[10px] text-slate-400 font-normal">
+                            ({st.rateExchange}枚交換)
+                          </span>
+                        </div>
+                      </td>
+
+                      <td className="px-3 py-3 text-center">
+                        {st.isSpecialDay ? (
+                          <span
+                            className="px-2 py-0.5 rounded-full text-2xs font-black bg-amber-100 text-amber-800 border border-amber-300 inline-flex items-center gap-1 shadow-2xs"
+                            title={st.specialDayReason}
+                          >
+                            <Sparkles className="w-3 h-3 text-amber-600" />
+                            {st.specialDayReason || '特日'}
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-2xs font-medium bg-slate-100 text-slate-600 border border-slate-200">
+                            通常日
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3 text-right font-mono font-black text-sm">
+                        <span className={st.topNAvgExpectedDiff >= 0 ? 'text-blue-600' : 'text-rose-600'}>
+                          {st.topNAvgExpectedDiff >= 0 ? `+${formatNumber(st.topNAvgExpectedDiff)}` : formatNumber(st.topNAvgExpectedDiff)}枚
+                        </span>
+                        {metricMode === 'yen' && st.expectedYenProfit !== undefined && (
+                          <div className="text-[11px] font-bold text-amber-700">
+                            ({st.expectedYenProfit >= 0 ? `+${formatYen(st.expectedYenProfit)}` : formatYen(st.expectedYenProfit)})
+                          </div>
+                        )}
+                        <div className="text-[10px] text-slate-400 font-normal">
+                          上位{st.evaluatedMachinesCount}台平均 ({diffMetric === 'baseGames' ? `基準${formatNumber(baseGames)}G` : '実稼働'})
+                        </div>
+                      </td>
+
+                      <td className="px-3 py-3 text-center font-mono text-slate-700 font-medium">
+                        {st.evaluationDays}日分
+                      </td>
+
+                      <td className="px-4 py-3 text-center">
+                        {edgeInfo ? (
+                          <div className="flex flex-col items-center gap-0.5">
+                            <span
+                              className={`px-2 py-0.5 rounded-md text-2xs font-bold border flex items-center gap-1 ${
+                                edgeInfo.hasEdge
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                  : 'bg-slate-100 text-slate-600 border-slate-300'
+                              }`}
+                              title={edgeInfo.verdictMessage}
+                            >
+                              {edgeInfo.hasEdge ? (
+                                <>
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  優位性あり
+                                </>
+                              ) : (
+                                <>
+                                  <HelpCircle className="w-3 h-3 text-slate-400" />
+                                  優位性なし
+                                </>
+                              )}
+                            </span>
+                            <span className="text-[10px] font-mono text-slate-600 font-bold">
+                              リフト: {edgeInfo.top20AvgLift >= 0 ? `+${edgeInfo.top20AvgLift}` : edgeInfo.top20AvgLift}枚
+                              <span className="text-slate-400 font-normal ml-0.5">
+                                [{edgeInfo.top20Ci95[0]}〜{edgeInfo.top20Ci95[1]}]
+                              </span>
+                            </span>
+                          </div>
+                        ) : hasMach && storeObj ? (
+                          <div className="flex flex-col items-center gap-1">
+                            <span className="px-2 py-0.5 rounded text-2xs font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                              未検証
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => runStoreEdgeTest(storeObj)}
+                              disabled={isTesting}
+                              className="px-2 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-bold border border-indigo-200 cursor-pointer disabled:opacity-50 flex items-center gap-0.5"
+                              title="この店舗の台番バックテストを実行"
+                            >
+                              {isTesting ? (
+                                <>
+                                  <RotateCw className="w-2.5 h-2.5 animate-spin" />
+                                  検証中
+                                </>
+                              ) : (
+                                <>
+                                  <Play className="w-2.5 h-2.5" />
+                                  検証
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 text-2xs">未検証</span>
+                        )}
+                      </td>
+
+                      <td className="px-3 py-3 text-center">
+                        {st.excludedLowConfidenceCount > 0 ? (
+                          <span
+                            className="px-2 py-0.5 rounded-full text-2xs font-medium bg-slate-100 text-slate-600 border border-slate-200"
+                            title="根拠日数が少なく信頼度「低」と判定されたため平均から除外された台数"
+                          >
+                            低信頼 {st.excludedLowConfidenceCount}台
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 text-2xs">0台</span>
+                        )}
+                      </td>
+
+                      <td className="px-3 py-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveTargetStoreId(st.storeId);
+                            setRankingView('targetList');
+                          }}
+                          className={`px-2.5 py-1 rounded-lg text-2xs font-bold border transition-colors cursor-pointer ${
+                            activeTargetStoreId === st.storeId
+                              ? 'bg-slate-900 text-white border-slate-900'
+                              : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+                          }`}
+                        >
+                          狙い台を見る
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* 4. Sub-tab View Switcher: 狙い台リスト (来店中) vs 狙う機種 vs 狙う台 */}
       {(() => {
         const activeStoreObj = stores.find((s) => s.id === activeTargetStoreId) || stores[0];
         const storeCandidates = rankingResult.storeMachineRankings?.[activeTargetStoreId] || [];

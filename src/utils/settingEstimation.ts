@@ -177,6 +177,9 @@ export interface ModelEstimationResult {
   calibration?: CalibrationResult;
   residualDistribution?: ResidualDistributionResult;
   warnings: string[];
+  bootstrapNonConvergedCount?: number;
+  bootstrapRepsEffective?: number;
+  bootstrapNote?: string;
 }
 
 /**
@@ -918,7 +921,24 @@ export function runEMEstimation(
 }
 
 /**
+ * ブロックブートストラップによる混合比率 π_s の 95% 信頼区間算出結果
+ */
+export interface BlockBootstrapResult extends Array<[number, number]> {
+  intervals: Array<[number, number]>;
+  nonConvergedCount: number;
+  convergedCount: number;
+  totalReps: number;
+  note: string;
+}
+
+/**
  * ブロックブートストラップによる混合比率 π_s の 95% 信頼区間算出
+ *
+ * 【プロンプト31仕様】
+ * 1. 各再標本の EM を、一様な初期値から、最大200反復・収束判定1e-6（点推定と同じ条件）で実行。
+ *    収束しなかった再標本は除外し、その件数を結果に含める。
+ * 2. 速度: 再標本ごとに対数尤度を計算し直さない。σ を点推定で固定し、尤度行列（記録×設定）を
+ *    最初に1回だけ作って、再標本では日ごとの索引で足し合わせる。
  */
 export function runBlockBootstrap(
   records: PreparedMachineRecord[],
@@ -933,68 +953,222 @@ export function runBlockBootstrap(
     poissonWeight?: number;
     useTDistribution?: boolean;
     tDistributionDf?: number;
+    gameWeightMode?: GameWeightMode;
+    maxIterations?: number;
+    convergenceTol?: number;
   } = {}
-): Array<[number, number]> {
+): BlockBootstrapResult {
   const K = spec.settings.length;
+  const M = records.length;
   const reps = options.replicates ?? 2000;
   const blockLen = options.blockLength ?? 7;
   const seed = options.seed ?? 42;
+  const maxIter = options.maxIterations ?? 200;
+  const tol = options.convergenceTol ?? 1e-6;
+  const usePoisson = options.usePoissonBonus ?? false;
+  const lambda = options.poissonWeight ?? 0.5;
+  const useT = options.useTDistribution ?? false;
+  const nu = options.tDistributionDf ?? 5;
+  const weightMode = options.gameWeightMode ?? 'raw';
   const rng = createSeededRandom(seed);
 
-  const dateMap = new Map<string, PreparedMachineRecord[]>();
-  for (const r of records) {
-    if (!dateMap.has(r.date)) {
-      dateMap.set(r.date, []);
+  const getEffGames = (g: number): number => {
+    const base = Math.max(1, g);
+    if (weightMode === 'cap3000') return Math.min(base, 3000);
+    if (weightMode === 'constant') return 3000;
+    return base;
+  };
+
+  const rates = spec.settings.map((s) => s.payoutRate);
+  const sigma2 = Math.max(100, pointSigma * pointSigma);
+
+  // t分布用の定数項
+  const tLogConst = useT
+    ? logGamma((nu + 1) / 2) - logGamma(nu / 2) - 0.5 * Math.log(Math.PI * nu)
+    : 0;
+
+  // 1. 尤度行列 A (M x K) を最初に1回だけ作成 (σ は点推定で固定)
+  const A = new Float64Array(M * K);
+  for (let i = 0; i < M; i++) {
+    const rec = records[i];
+    const effGames = getEffGames(rec.games);
+    const var_i = sigma2 / effGames;
+    const x = rec.payoutRate;
+    const rowOffset = i * K;
+    let maxLog = -Infinity;
+
+    for (let s = 0; s < K; s++) {
+      const diff = x - rates[s];
+      const sqDiff = diff * diff;
+      let logDensity = 0;
+
+      if (useT) {
+        const z2 = (effGames * sqDiff) / sigma2;
+        logDensity =
+          tLogConst -
+          0.5 * Math.log(var_i) -
+          ((nu + 1) / 2) * Math.log(1 + z2 / nu);
+      } else {
+        logDensity =
+          -0.5 * Math.log(2 * Math.PI) -
+          0.5 * Math.log(var_i) -
+          (0.5 * effGames * sqDiff) / sigma2;
+      }
+
+      if (usePoisson) {
+        let pLog = 0;
+        const st = spec.settings[s];
+        if (st.bbDenom && rec.bb !== undefined) {
+          const mu = rec.games / st.bbDenom;
+          if (mu > 0) {
+            pLog += rec.bb * Math.log(mu) - mu - logFactorial(rec.bb);
+          }
+        }
+        if (st.rbDenom && rec.rb !== undefined) {
+          const mu = rec.games / st.rbDenom;
+          if (mu > 0) {
+            pLog += rec.rb * Math.log(mu) - mu - logFactorial(rec.rb);
+          }
+        }
+        logDensity += pLog * lambda;
+      }
+
+      A[rowOffset + s] = logDensity;
+      if (logDensity > maxLog) maxLog = logDensity;
     }
-    dateMap.get(r.date)!.push(r);
+
+    // 数値安定性のためのSoftmaxシフト (最大値減算して指数化)
+    for (let s = 0; s < K; s++) {
+      const shifted = A[rowOffset + s] - maxLog;
+      A[rowOffset + s] = shifted < -700 ? 0 : Math.exp(shifted);
+    }
+  }
+
+  // 2. 日付ごとのレコード索引を作成
+  const dateMap = new Map<string, number[]>();
+  for (let i = 0; i < M; i++) {
+    const d = records[i].date;
+    let list = dateMap.get(d);
+    if (!list) {
+      list = [];
+      dateMap.set(d, list);
+    }
+    list.push(i);
   }
 
   const uniqueDates = Array.from(dateMap.keys()).sort();
   const T = uniqueDates.length;
 
   if (T === 0 || K === 0) {
-    return new Array(K).fill([0, 0]);
+    const empty = new Array(K).fill([0, 0]) as BlockBootstrapResult;
+    empty.intervals = new Array(K).fill([0, 0]);
+    empty.nonConvergedCount = 0;
+    empty.convergedCount = 0;
+    empty.totalReps = 0;
+    empty.note = 'σを固定した区間です。台数が少ないと実際より狭く出ることがあります';
+    return empty;
   }
 
+  const dateRecordIndices: number[][] = uniqueDates.map((d) => dateMap.get(d)!);
   const effectiveBlockLen = Math.min(blockLen, T);
   const numBlocks = T - effectiveBlockLen + 1;
   const piSamples: number[][] = Array.from({ length: K }, () => []);
-  const numBlocksToSample = Math.ceil(T / effectiveBlockLen);
+  let nonConvergedCount = 0;
+  let convergedCount = 0;
+
+  const dateWeights = new Int32Array(T);
+  const activeDates: number[] = [];
+  const pi = new Float64Array(K);
+  const nextPi = new Float64Array(K);
+  const sumGamma = new Float64Array(K);
+  const uniformPrior = 1 / K;
 
   for (let b = 0; b < reps; b++) {
-    const sampledDates: string[] = [];
-    for (let nb = 0; nb < numBlocksToSample; nb++) {
+    dateWeights.fill(0);
+    let sampledCount = 0;
+    while (sampledCount < T) {
       const startIdx = Math.floor(rng() * numBlocks);
-      for (let k = 0; k < effectiveBlockLen; k++) {
-        if (sampledDates.length < T) {
-          sampledDates.push(uniqueDates[startIdx + k]);
-        }
+      for (let k = 0; k < effectiveBlockLen && sampledCount < T; k++) {
+        dateWeights[startIdx + k]++;
+        sampledCount++;
       }
     }
 
-    const bRecords: PreparedMachineRecord[] = [];
-    for (const d of sampledDates) {
-      const list = dateMap.get(d);
-      if (list) {
-        for (const item of list) {
-          bRecords.push(item);
-        }
+    activeDates.length = 0;
+    let Mb = 0;
+    for (let d = 0; d < T; d++) {
+      const w = dateWeights[d];
+      if (w > 0) {
+        activeDates.push(d);
+        Mb += w * dateRecordIndices[d].length;
       }
     }
 
-    const emResult = runEMEstimation(bRecords, spec, {
-      initialPi: pointPi,
-      initialSigma: pointSigma,
-      maxIterations: 40,
-      convergenceTol: 1e-4,
-      usePoissonBonus: options.usePoissonBonus,
-      poissonWeight: options.poissonWeight,
-      useTDistribution: options.useTDistribution,
-      tDistributionDf: options.tDistributionDf,
-    });
+    if (Mb === 0) {
+      nonConvergedCount++;
+      continue;
+    }
 
-    for (let s = 0; s < K; s++) {
-      piSamples[s].push(emResult.pi[s]);
+    // 1. 各再標本の EM を一様な初期値から実行
+    pi.fill(uniformPrior);
+    let converged = false;
+
+    // 2. 最大200反復・収束判定1e-6 (点推定と同じ条件)
+    for (let iter = 0; iter < maxIter; iter++) {
+      sumGamma.fill(0);
+
+      // 日ごとの索引で尤度を足し合わせ
+      for (let ad = 0; ad < activeDates.length; ad++) {
+        const d = activeDates[ad];
+        const w = dateWeights[d];
+        const recList = dateRecordIndices[d];
+        const recLen = recList.length;
+
+        for (let r = 0; r < recLen; r++) {
+          const offset = recList[r] * K;
+          let denom = 0;
+          for (let s = 0; s < K; s++) {
+            denom += pi[s] * A[offset + s];
+          }
+          if (denom < 1e-15) denom = 1e-15;
+          const mult = w / denom;
+          for (let s = 0; s < K; s++) {
+            sumGamma[s] += pi[s] * A[offset + s] * mult;
+          }
+        }
+      }
+
+      // M-Step: π の更新
+      let piSum = 0;
+      for (let s = 0; s < K; s++) {
+        const val = Math.max(1e-12, sumGamma[s] / Mb);
+        nextPi[s] = val;
+        piSum += val;
+      }
+
+      const invPiSum = 1 / piSum;
+      let maxDelta = 0;
+      for (let s = 0; s < K; s++) {
+        nextPi[s] *= invPiSum;
+        const delta = Math.abs(nextPi[s] - pi[s]);
+        if (delta > maxDelta) maxDelta = delta;
+        pi[s] = nextPi[s];
+      }
+
+      if (maxDelta < tol) {
+        converged = true;
+        break;
+      }
+    }
+
+    if (converged) {
+      convergedCount++;
+      for (let s = 0; s < K; s++) {
+        piSamples[s].push(pi[s]);
+      }
+    } else {
+      // 収束しなかった再標本は除外
+      nonConvergedCount++;
     }
   }
 
@@ -1010,7 +1184,14 @@ export function runBlockBootstrap(
     intervals.push([arr[lowIdx], arr[highIdx]]);
   }
 
-  return intervals;
+  const result = intervals as BlockBootstrapResult;
+  result.intervals = intervals;
+  result.nonConvergedCount = nonConvergedCount;
+  result.convergedCount = convergedCount;
+  result.totalReps = reps;
+  result.note = 'σを固定した区間です。台数が少ないと実際より狭く出ることがあります';
+
+  return result;
 }
 
 /**
@@ -1619,8 +1800,8 @@ export function estimateModelSettingDistribution(
   }
 
   // 5. ブロックブートストラップによる 95% 区間算出
-  const intervals = options.pointEstimateOnly
-    ? spec.settings.map((_, idx) => [em.pi[idx], em.pi[idx]] as [number, number])
+  const bootstrapRes = options.pointEstimateOnly
+    ? null
     : runBlockBootstrap(prepared, spec, em.pi, em.sigma, {
         replicates: options.bootstrapReps,
         seed: options.bootstrapSeed,
@@ -1628,7 +1809,23 @@ export function estimateModelSettingDistribution(
         poissonWeight: options.poissonWeight,
         useTDistribution: options.useTDistribution,
         tDistributionDf: options.tDistributionDf,
+        gameWeightMode: options.gameWeightMode,
+        maxIterations: options.maxIterations,
+        convergenceTol: options.convergenceTol,
       });
+
+  const intervals = options.pointEstimateOnly || !bootstrapRes
+    ? spec.settings.map((_, idx) => [em.pi[idx], em.pi[idx]] as [number, number])
+    : bootstrapRes.intervals;
+
+  if (!options.pointEstimateOnly && bootstrapRes) {
+    warnings.push('※ 95%信頼区間はσを固定した区間です。台数が少ないと実際より狭く出ることがあります。');
+    if (bootstrapRes.nonConvergedCount > 0) {
+      warnings.push(
+        `ブートストラップ再標本のうち ${bootstrapRes.nonConvergedCount} 件が収束しなかったため除外しました。`
+      );
+    }
+  }
 
   const distribution: SettingDistItem[] = spec.settings.map((s, idx) => ({
     label: s.label,
@@ -1938,5 +2135,8 @@ export function estimateModelSettingDistribution(
     calibration,
     residualDistribution,
     warnings,
+    bootstrapNonConvergedCount: options.pointEstimateOnly ? 0 : bootstrapRes?.nonConvergedCount ?? 0,
+    bootstrapRepsEffective: options.pointEstimateOnly ? 0 : bootstrapRes?.convergedCount ?? 0,
+    bootstrapNote: 'σを固定した区間です。台数が少ないと実際より狭く出ることがあります',
   };
 }

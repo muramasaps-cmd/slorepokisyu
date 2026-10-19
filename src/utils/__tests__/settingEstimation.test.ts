@@ -619,4 +619,106 @@ describe('settingEstimation pure functions', () => {
       expect(res.warningMessage).toContain('出率だけでは分布は決められません');
     });
   });
+
+  describe('Prompt 31: 設定混合比率πのブートストラップ区間の検証', () => {
+    it('achieves >= 75% average 95% bootstrap coverage across settings on 30 synthetic datasets (60 days x 20 machines) and reports non-converged count', () => {
+      const truePi = [0.45, 0.30, 0.15, 0.10];
+      const cumPi = [truePi[0]];
+      for (let i = 1; i < truePi.length; i++) cumPi.push(cumPi[i - 1] + truePi[i]);
+
+      const sigma = 95.0; // 1G標準偏差換算 (% * sqrt(G))
+      const days = 60;
+      const machinesPerDay = 20;
+      const numTrials = 30;
+      const bootstrapReps = 300;
+
+      const settingCoverages = [0, 0, 0, 0];
+      let totalNonConverged = 0;
+      let nonConvergedReported = false;
+
+      for (let trial = 0; trial < numTrials; trial++) {
+        const rng = createSeededRandom(1000 + trial * 37);
+        const dailyRecords: DailyRecord[] = [];
+
+        for (let d = 0; d < days; d++) {
+          const dayMachines: DailyMachineRecord[] = [];
+          const dateStr = `2024-05-${String(d + 1).padStart(2, '0')}`;
+
+          for (let m = 0; m < machinesPerDay; m++) {
+            const u = rng();
+            let settingIdx = 0;
+            for (let s = 0; s < cumPi.length; s++) {
+              if (u <= cumPi[s]) {
+                settingIdx = s;
+                break;
+              }
+            }
+
+            const games = 4000 + Math.round(rng() * 2000); // 4000〜6000G
+            const meanPayout = MOCK_INCOMPLETE_SETTING_SPEC.settings[settingIdx].payoutRate;
+            const noise = sampleNormal(rng) * (sigma / Math.sqrt(games));
+            const observedPayout = meanPayout + noise;
+            const diff = Math.round((observedPayout / 100 - 1) * games * 3);
+
+            dayMachines.push({
+              machineNum: 101 + m,
+              modelName: MOCK_INCOMPLETE_SETTING_SPEC.modelName,
+              games,
+              diff,
+              payoutRate: observedPayout,
+            });
+          }
+
+          dailyRecords.push(
+            createMockDailyRecord({
+              date: dateStr,
+              day: d + 1,
+              dayOfWeek: '月',
+              avgGames: 5000,
+              totalMachines: machinesPerDay,
+              inCoins: 5000 * 3 * machinesPerDay,
+              outCoins: 5000 * 3 * machinesPerDay,
+              machines: dayMachines,
+            })
+          );
+        }
+
+        const res = estimateModelSettingDistribution(
+          MOCK_INCOMPLETE_SETTING_SPEC.modelName,
+          dailyRecords,
+          MOCK_INCOMPLETE_SETTING_SPEC,
+          {
+            minGames: 3000,
+            bootstrapReps,
+            bootstrapSeed: 42 + trial,
+          }
+        );
+
+        if (res.bootstrapNonConvergedCount !== undefined) {
+          nonConvergedReported = true;
+          totalNonConverged += res.bootstrapNonConvergedCount;
+        }
+
+        expect(res.bootstrapNote).toContain('σを固定した区間です');
+        expect(res.warnings.some((w) => w.includes('σを固定した区間'))).toBe(true);
+
+        for (let s = 0; s < 4; s++) {
+          const [low, high] = res.distribution[s].ci95;
+          if (truePi[s] >= low && truePi[s] <= high) {
+            settingCoverages[s]++;
+          }
+        }
+      }
+
+      // 収束しなかった再標本の件数が報告されること
+      expect(nonConvergedReported).toBe(true);
+      expect(typeof totalNonConverged).toBe('number');
+
+      const rates = settingCoverages.map((c) => c / numTrials);
+      const avgCoverage = rates.reduce((a, b) => a + b, 0) / 4;
+
+      // 95%区間が真の値を含む割合が、設定ごとの平均で75%以上になること（現行は約29〜64%）
+      expect(avgCoverage).toBeGreaterThanOrEqual(0.75);
+    }, 25000);
+  });
 });

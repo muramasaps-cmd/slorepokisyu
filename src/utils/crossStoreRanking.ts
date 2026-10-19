@@ -11,6 +11,14 @@ import {
 import { getMachineIsland, parseIslandConfig } from './islandUtils';
 import { getStoreRatesForModel } from './modelName';
 import { runMachineBacktest } from './backtestEngine';
+import { isDateSpecialDay } from './dataEngine';
+import {
+  StoreDateScanCell,
+  computeStoreDateScanCacheKey,
+  getMemoryScanCache,
+  setMemoryScanCache,
+  putScanCacheToIdb,
+} from './crossStoreScanCache';
 
 export type CrossMetricMode = 'diffCoins' | 'yen';
 
@@ -100,6 +108,34 @@ export interface ExcludedStoreInfo {
   reason: string;
 }
 
+export interface CrossStoreStoreRank {
+  rank: number;
+  storeId: string;
+  storeName: string;
+  topNAvgExpectedDiff: number; // 上位N台の期待差枚の平均（信頼度低を除く）
+  topN: number;
+  evaluatedMachinesCount: number; // 上位N台の計算に使われた台数
+  excludedLowConfidenceCount: number; // 除外した台数（低信頼など）
+  isSpecialDay: boolean; // 来店日がその店で特日か
+  specialDayReason?: string; // 特日の理由（例: '7のつく日' など）
+  evaluationDays: number; // 評価に使えた日数 (priorRecords.length)
+  hasBacktestEdge: '優位性あり' | '優位性なし' | '未検証';
+  actualLift: number | null; // 実績リフト (例: +120枚)
+  ci95?: [number, number] | null;
+  rateExchange: number;
+  rateLend: number;
+  expectedYenProfit?: number;
+}
+
+export interface CandidateDateScanResult {
+  dates: string[];
+  stores: Array<{ id: string; name: string }>;
+  grid: Record<string, Record<string, StoreDateScanCell>>; // storeId -> targetDate -> cell
+  topN: number;
+  diffMetric: 'actual' | 'baseGames';
+  baseGames: number;
+}
+
 export interface CrossStoreRankingResult {
   targetDate: string;
   metricMode: CrossMetricMode;
@@ -109,6 +145,7 @@ export interface CrossStoreRankingResult {
   modelRankings: CrossStoreModelRank[];
   machineRankings: CrossStoreMachineRank[];
   storeMachineRankings: Record<string, CrossStoreMachineRank[]>;
+  storeRankings?: CrossStoreStoreRank[];
   diffMetric?: 'actual' | 'baseGames';
   baseGames?: number;
   legacyCrossShrink?: boolean;
@@ -118,6 +155,7 @@ export interface CrossStoreRankingOptions {
   metricMode?: CrossMetricMode; // default 'diffCoins'
   topModelCount?: number; // default 20
   topMachineCount?: number; // default 20
+  topStoreMachineN?: number; // default 10 (店舗ランキングの上位N台)
   selectedStoreIds?: string[]; // if specified, filters to these store IDs
   includeLowConfidence?: boolean; // default false: exclude low confidence machines
   onProgress?: (progress: number, currentStore?: string) => void;
@@ -127,6 +165,16 @@ export interface CrossStoreRankingOptions {
   diffMetric?: 'actual' | 'baseGames';
   /** 30-4: 基準ゲーム数（既定値: 5000） */
   baseGames?: number;
+  backtestResults?: Record<
+    string,
+    {
+      hasEdge: boolean;
+      lift: number;
+      verdict?: string;
+      evaluatedDays?: number;
+      ci95?: [number, number];
+    }
+  >;
 }
 
 /**
@@ -149,6 +197,272 @@ export function convertCoinsToYen(
 }
 
 /**
+ * Calculates store metrics (top N machines expected diff average excluding low confidence)
+ * for a specific targetDate.
+ *
+ * CRITICAL: Strictly filters out records on or after targetDate (r.date < targetDate)
+ * to prevent any future data leakage.
+ */
+export function calculateStoreTargetMetrics(
+  store: StoreProfile,
+  targetDate: string,
+  options?: {
+    topN?: number;
+    diffMetric?: 'actual' | 'baseGames';
+    baseGames?: number;
+    legacyCrossShrink?: boolean;
+  }
+): StoreDateScanCell {
+  const topN = options?.topN ?? 10;
+  const diffMetric = options?.diffMetric || 'actual';
+  const baseGames = options?.baseGames ?? 5000;
+  const legacyCrossShrink = options?.legacyCrossShrink ?? false;
+
+  const records = store.dailyRecords || [];
+  // Strictly filter out any records on or after targetDate to prevent future leakage
+  const priorRecords = records.filter((r) => r.date < targetDate);
+  const storeEvalDays = priorRecords.length;
+
+  const isSpecial = isDateSpecialDay(targetDate, store.specialDayRules);
+  const specialDayReason = store.oldEventDays || (isSpecial ? '特日' : undefined);
+
+  if (storeEvalDays === 0) {
+    return {
+      storeId: store.id,
+      storeName: store.name,
+      targetDate,
+      topNAvgExpectedDiff: 0,
+      evaluatedMachinesCount: 0,
+      excludedLowConfidenceCount: 0,
+      isSpecialDay: isSpecial,
+      specialDayReason,
+      evaluationDays: 0,
+    };
+  }
+
+  const hasMachineData = priorRecords.some((r) => r.machines && r.machines.length > 0);
+  if (!hasMachineData) {
+    return {
+      storeId: store.id,
+      storeName: store.name,
+      targetDate,
+      topNAvgExpectedDiff: 0,
+      evaluatedMachinesCount: 0,
+      excludedLowConfidenceCount: 0,
+      isSpecialDay: isSpecial,
+      specialDayReason,
+      evaluationDays: storeEvalDays,
+    };
+  }
+
+  try {
+    const machineResult = calculateTargetMachineRanking(
+      targetDate,
+      priorRecords,
+      store.specialDayRules,
+      store.customMachineRankingWeights,
+      {
+        rankingWeights: store.customRankingWeights,
+        includeReusedMachines: store.includeReusedMachinesInStats,
+        aliasDictionary: store.modelAliasDictionary,
+        baseGames,
+      }
+    );
+
+    const isSpecialResult = Boolean(machineResult.isSpecialDay ?? isSpecial);
+
+    if (!machineResult || machineResult.rankings.length === 0) {
+      return {
+        storeId: store.id,
+        storeName: store.name,
+        targetDate,
+        topNAvgExpectedDiff: 0,
+        evaluatedMachinesCount: 0,
+        excludedLowConfidenceCount: 0,
+        isSpecialDay: isSpecialResult,
+        specialDayReason,
+        evaluationDays: storeEvalDays,
+      };
+    }
+
+    let lowConfidenceCount = 0;
+    const validExpectedDiffs: number[] = [];
+
+    for (const mach of machineResult.rankings) {
+      let machConfidence = mach.confidence;
+      if (storeEvalDays < 3) {
+        machConfidence = '低';
+      } else if (storeEvalDays < 7 && machConfidence === '高') {
+        machConfidence = '中';
+      }
+
+      if (machConfidence === '低') {
+        lowConfidenceCount++;
+        continue;
+      }
+
+      let rawExpectedDiff = 0;
+      if (diffMetric === 'baseGames') {
+        rawExpectedDiff =
+          mach.expectedDiffAtBaseGames ??
+          mach.stats.expectedDiffAtBaseGames ??
+          mach.stats.shrunkDiff;
+      } else {
+        rawExpectedDiff = mach.posteriorMean ?? mach.stats.shrunkDiff;
+      }
+
+      let expectedDiffCoins = 0;
+      const evidenceDays =
+        mach.cohortEvidenceDays > 0 ? mach.cohortEvidenceDays : mach.evidenceDays;
+      const evidenceWeight = evidenceDays / (evidenceDays + 3);
+      const storeWeight = Math.min(1.0, storeEvalDays / 15);
+
+      if (legacyCrossShrink) {
+        expectedDiffCoins = Math.round(rawExpectedDiff * evidenceWeight * storeWeight);
+      } else {
+        expectedDiffCoins = Math.round(rawExpectedDiff);
+      }
+
+      validExpectedDiffs.push(expectedDiffCoins);
+    }
+
+    // Sort valid machines descending by expected diff
+    validExpectedDiffs.sort((a, b) => b - a);
+    const topCandidates = validExpectedDiffs.slice(0, topN);
+    const topNAvgExpectedDiff = topCandidates.length > 0
+      ? Math.round(topCandidates.reduce((sum, v) => sum + v, 0) / topCandidates.length)
+      : 0;
+
+    return {
+      storeId: store.id,
+      storeName: store.name,
+      targetDate,
+      topNAvgExpectedDiff,
+      evaluatedMachinesCount: topCandidates.length,
+      excludedLowConfidenceCount: lowConfidenceCount,
+      isSpecialDay: isSpecialResult,
+      specialDayReason,
+      evaluationDays: storeEvalDays,
+    };
+  } catch (err) {
+    console.warn(`Failed to calculate target metrics for ${store.name} on ${targetDate}:`, err);
+    return {
+      storeId: store.id,
+      storeName: store.name,
+      targetDate,
+      topNAvgExpectedDiff: 0,
+      evaluatedMachinesCount: 0,
+      excludedLowConfidenceCount: 0,
+      isSpecialDay: isSpecial,
+      specialDayReason,
+      evaluationDays: storeEvalDays,
+    };
+  }
+}
+
+/**
+ * Generates array of consecutive YYYY-MM-DD date strings for candidate visit date scan.
+ */
+export function generateCandidateScanDates(startDateStr?: string, daysCount = 14): string[] {
+  let start: Date;
+  if (startDateStr) {
+    const parts = startDateStr.split('-').map(Number);
+    start = new Date(parts[0], parts[1] - 1, parts[2]);
+  } else {
+    start = new Date();
+    start.setDate(start.getDate() + 1);
+  }
+
+  const dates: string[] = [];
+  for (let i = 0; i < daysCount; i++) {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    dates.push(`${y}-${m}-${day}`);
+  }
+  return dates;
+}
+
+/**
+ * Scans candidate visit dates across multiple stores (Store × Date grid).
+ * Caches each cell using dual FNV-1a key with memory and IndexedDB backing.
+ */
+export function scanCandidateDates(
+  stores: StoreProfile[],
+  dates: string[],
+  options?: {
+    topN?: number;
+    diffMetric?: 'actual' | 'baseGames';
+    baseGames?: number;
+    legacyCrossShrink?: boolean;
+    onProgress?: (progress: number, currentDate?: string, currentStore?: string) => void;
+  }
+): CandidateDateScanResult {
+  const topN = options?.topN ?? 10;
+  const diffMetric = options?.diffMetric || 'actual';
+  const baseGames = options?.baseGames ?? 5000;
+  const legacyCrossShrink = options?.legacyCrossShrink ?? false;
+
+  const grid: Record<string, Record<string, StoreDateScanCell>> = {};
+  stores.forEach((s) => {
+    grid[s.id] = {};
+  });
+
+  const totalSteps = Math.max(1, dates.length * stores.length);
+  let currentStep = 0;
+
+  for (let dIdx = 0; dIdx < dates.length; dIdx++) {
+    const dStr = dates[dIdx];
+    for (let sIdx = 0; sIdx < stores.length; sIdx++) {
+      const store = stores[sIdx];
+      currentStep++;
+      if (options?.onProgress) {
+        const pct = Math.round((currentStep / totalSteps) * 100);
+        options.onProgress(pct, dStr, store.name);
+      }
+
+      const cacheKey = computeStoreDateScanCacheKey(
+        store.id,
+        dStr,
+        store.dailyRecords,
+        topN,
+        diffMetric,
+        baseGames,
+        store.customMachineRankingWeights,
+        store.specialDayRules,
+        store.modelAliasDictionary,
+        store.includeReusedMachinesInStats
+      );
+
+      let cell = getMemoryScanCache(cacheKey);
+      if (!cell) {
+        cell = calculateStoreTargetMetrics(store, dStr, {
+          topN,
+          diffMetric,
+          baseGames,
+          legacyCrossShrink,
+        });
+        setMemoryScanCache(cacheKey, cell);
+        putScanCacheToIdb(cacheKey, cell, store.id).catch(() => {});
+      }
+
+      grid[store.id][dStr] = cell;
+    }
+  }
+
+  return {
+    dates,
+    stores: stores.map((s) => ({ id: s.id, name: s.name })),
+    grid,
+    topN,
+    diffMetric,
+    baseGames,
+  };
+}
+
+/**
  * Calculates cross-store integrated rankings for models and individual machines.
  */
 export function calculateCrossStoreRanking(
@@ -159,6 +473,7 @@ export function calculateCrossStoreRanking(
   const metricMode = options?.metricMode || 'diffCoins';
   const topModelCount = options?.topModelCount || 20;
   const topMachineCount = options?.topMachineCount || 20;
+  const topStoreMachineN = options?.topStoreMachineN ?? 10;
   const filterStoreIds = options?.selectedStoreIds;
   const includeLowConfidence = options?.includeLowConfidence ?? false;
   const legacyCrossShrink = options?.legacyCrossShrink ?? false;
@@ -553,6 +868,65 @@ export function calculateCrossStoreRanking(
     });
   });
 
+  // Build store rankings (top N expected diff descending, excluding low-confidence machines)
+  const storeRankings: CrossStoreStoreRank[] = [];
+  for (const store of targetStores) {
+    const isExcluded = excludedStores.some((ex) => ex.storeId === store.id);
+    if (isExcluded) continue;
+
+    const cell = calculateStoreTargetMetrics(store, targetDate, {
+      topN: topStoreMachineN,
+      diffMetric,
+      baseGames,
+      legacyCrossShrink,
+    });
+
+    const bRes = options?.backtestResults?.[store.id];
+    let hasBacktestEdge: '優位性あり' | '優位性なし' | '未検証' = '未検証';
+    let actualLift: number | null = null;
+    let ci95: [number, number] | null = null;
+
+    if (bRes) {
+      hasBacktestEdge = bRes.hasEdge ? '優位性あり' : '優位性なし';
+      actualLift = bRes.lift;
+      ci95 = bRes.ci95 || null;
+    }
+
+    const rateLend = store.rateLend || 46;
+    const rateExchange = store.rateExchange || 52;
+    const expectedYen = convertCoinsToYen(cell.topNAvgExpectedDiff, rateLend, rateExchange);
+
+    storeRankings.push({
+      rank: 0,
+      storeId: store.id,
+      storeName: store.name,
+      topNAvgExpectedDiff: cell.topNAvgExpectedDiff,
+      topN: topStoreMachineN,
+      evaluatedMachinesCount: cell.evaluatedMachinesCount,
+      excludedLowConfidenceCount: cell.excludedLowConfidenceCount,
+      isSpecialDay: cell.isSpecialDay,
+      specialDayReason: cell.specialDayReason,
+      evaluationDays: cell.evaluationDays,
+      hasBacktestEdge,
+      actualLift,
+      ci95,
+      rateExchange,
+      rateLend,
+      expectedYenProfit: expectedYen,
+    });
+  }
+
+  // Sort store rankings descending by expected diff (or expected yen profit)
+  storeRankings.sort((a, b) => {
+    if (metricMode === 'yen') {
+      return (b.expectedYenProfit ?? 0) - (a.expectedYenProfit ?? 0);
+    }
+    return b.topNAvgExpectedDiff - a.topNAvgExpectedDiff;
+  });
+  storeRankings.forEach((s, idx) => {
+    s.rank = idx + 1;
+  });
+
   return {
     targetDate,
     metricMode,
@@ -562,6 +936,7 @@ export function calculateCrossStoreRanking(
     modelRankings: eligibleModels.slice(0, topModelCount),
     machineRankings: eligibleMachines.slice(0, topMachineCount),
     storeMachineRankings,
+    storeRankings,
     diffMetric,
     baseGames,
     legacyCrossShrink,

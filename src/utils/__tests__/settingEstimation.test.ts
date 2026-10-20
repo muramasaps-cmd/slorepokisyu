@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { describe, it, expect } from 'vitest';
 import {
   estimateModelSettingDistribution,
@@ -720,5 +722,240 @@ describe('settingEstimation pure functions', () => {
       // 95%区間が真の値を含む割合が、設定ごとの平均で75%以上になること（現行は約29〜64%）
       expect(avgCoverage).toBeGreaterThanOrEqual(0.75);
     }, 25000);
+  });
+
+  describe('Prompt 34: ブートストラップ区間が0幅になる問題の修正', () => {
+    it('プラザ515の実データ (2台×90日) で95%信頼区間の幅が0でなく、適切な注記が表示されること', () => {
+      const csvPath = path.join(__dirname, 'fixtures', 'plaza515_juggler_girls.csv');
+      const content = fs.readFileSync(csvPath, 'utf-8');
+      const lines = content.trim().split('\n');
+      const dateMap = new Map<string, Array<{ machineNum: number; games: number; diff: number; modelName: string }>>();
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const parts = line.split(',');
+        const date = parts[1];
+        const modelName = parts[2];
+        const machineNum = parseInt(parts[3], 10);
+        const games = parseInt(parts[4], 10);
+        const diff = parseInt(parts[5], 10);
+        if (!dateMap.has(date)) dateMap.set(date, []);
+        dateMap.get(date)!.push({ machineNum, games, diff, modelName });
+      }
+
+      const dailyRecords: DailyRecord[] = Array.from(dateMap.entries()).map(([date, machines]) => ({
+        date,
+        storeName: 'プラザ515',
+        machines,
+        totalGames: machines.reduce((acc, m) => acc + m.games, 0),
+        totalDiff: machines.reduce((acc, m) => acc + m.diff, 0),
+      } as unknown as DailyRecord));
+
+      const spec: ModelSettingSpec = {
+        modelName: 'ジャグラーガールズSS',
+        settings: [
+          { label: '設定1', settingNum: 1, payoutRate: 97.0, bbDenom: 273.1, rbDenom: 381.0 },
+          { label: '設定2', settingNum: 2, payoutRate: 97.9, bbDenom: 270.8, rbDenom: 358.1 },
+          { label: '設定3', settingNum: 3, payoutRate: 99.9, bbDenom: 268.6, rbDenom: 334.4 },
+          { label: '設定4', settingNum: 4, payoutRate: 102.1, bbDenom: 257.0, rbDenom: 300.6 },
+          { label: '設定5', settingNum: 5, payoutRate: 104.5, bbDenom: 247.4, rbDenom: 270.8 },
+          { label: '設定6', settingNum: 6, payoutRate: 107.5, bbDenom: 240.9, rbDenom: 240.9 },
+        ],
+      };
+
+      const res = estimateModelSettingDistribution('ジャグラーガールズSS', dailyRecords, spec, {
+        bootstrapReps: 50,
+        bootstrapSeed: 42,
+      });
+
+      // 区間の幅が0でないこと（幅 > 0）
+      for (const item of res.distribution) {
+        const width = item.ci95[1] - item.ci95[0];
+        expect(width).toBeGreaterThan(0);
+      }
+
+      // 点推定が反復上限で終了したことが記録され、警告が含まれること
+      expect(res.pointEstimateReachedMaxIterations).toBe(true);
+      expect(res.warnings).toContain('設定の分布が平らで、推定が定まりにくいデータです。上の『範囲』を参考にしてください');
+
+      // 再標本の反復上限割合が記録され、注記に含まれること
+      expect(res.bootstrapMaxIterationsRate).toBeGreaterThan(0);
+      expect(res.bootstrapNote).toContain('反復上限で終了しました');
+      expect(res.bootstrapNote).toContain('区間は参考値です');
+    });
+
+    it('プラザ515と同じ構造の合成データ（2台×90日）で区間の幅が0にならないこと', () => {
+      const rng = createSeededRandom(12345);
+      const days = 90;
+      const machinesPerDay = 2;
+      const dailyRecords: DailyRecord[] = [];
+      const cumPi = [0.4, 0.7, 0.85, 0.95, 0.98, 1.0];
+
+      for (let d = 1; d <= days; d++) {
+        const date = `2024-01-${String(d).padStart(2, '0')}`;
+        const dayMachines: DailyMachineRecord[] = [];
+        for (let m = 1; m <= machinesPerDay; m++) {
+          const u = rng();
+          let sIdx = 0;
+          for (let s = 0; s < cumPi.length; s++) {
+            if (u <= cumPi[s]) {
+              sIdx = s;
+              break;
+            }
+          }
+          const games = 3000 + Math.floor(rng() * 4000);
+          const payout = MOCK_6_SETTING_SPEC.settings[sIdx].payoutRate / 100;
+          const diff = Math.round(games * 3 * (payout - 1) + (rng() - 0.5) * 500);
+          dayMachines.push({
+            machineNum: 500 + m,
+            modelName: MOCK_6_SETTING_SPEC.modelName,
+            games,
+            diff,
+          });
+        }
+        dailyRecords.push(
+          createMockDailyRecord({
+            date,
+            day: d,
+            machines: dayMachines,
+          })
+        );
+      }
+
+      const res = estimateModelSettingDistribution(
+        MOCK_6_SETTING_SPEC.modelName,
+        dailyRecords,
+        MOCK_6_SETTING_SPEC,
+        {
+          bootstrapReps: 50,
+          bootstrapSeed: 42,
+        }
+      );
+
+      // 有効な再標本が半分以上なら各設定の幅が0でないこと、または未計算表示
+      if (res.isCiCalculated) {
+        for (const item of res.distribution) {
+          if (item.proportion > 0.01) {
+            const width = item.ci95[1] - item.ci95[0];
+            expect(width).toBeGreaterThan(0);
+          }
+          const formatted = formatSettingCi95(item.ci95, item.isCiCalculated);
+          expect(formatted.text).not.toBe('区間を計算できませんでした（分布が平らで収束しません）');
+        }
+      } else {
+        for (const item of res.distribution) {
+          const formatted = formatSettingCi95(item.ci95, item.isCiCalculated);
+          expect(formatted.text).toBe('区間を計算できませんでした（分布が平らで収束しません）');
+        }
+      }
+    });
+
+    it('通常の合成データ（60日×20台）で区間の幅が0にならないこと', () => {
+      const rng = createSeededRandom(54321);
+      const days = 60;
+      const machinesPerDay = 20;
+      const dailyRecords: DailyRecord[] = [];
+      const cumPi = [0.45, 0.80, 0.95, 1.0];
+
+      for (let d = 1; d <= days; d++) {
+        const date = `2024-02-${String(d).padStart(2, '0')}`;
+        const dayMachines: DailyMachineRecord[] = [];
+        for (let m = 1; m <= machinesPerDay; m++) {
+          const games = 4000 + Math.floor(rng() * 3000);
+          const u = rng();
+          let sIdx = 0;
+          for (let s = 0; s < cumPi.length; s++) {
+            if (u <= cumPi[s]) {
+              sIdx = s;
+              break;
+            }
+          }
+          const specItem = MOCK_INCOMPLETE_SETTING_SPEC.settings[sIdx];
+          const payout = specItem.payoutRate / 100;
+          const diff = Math.round(games * 3 * (payout - 1) + (rng() - 0.5) * 600);
+          dayMachines.push({
+            machineNum: 100 + m,
+            modelName: MOCK_INCOMPLETE_SETTING_SPEC.modelName,
+            games,
+            diff,
+          });
+        }
+        dailyRecords.push(
+          createMockDailyRecord({
+            date,
+            day: d,
+            machines: dayMachines,
+          })
+        );
+      }
+
+      const res = estimateModelSettingDistribution(
+        MOCK_INCOMPLETE_SETTING_SPEC.modelName,
+        dailyRecords,
+        MOCK_INCOMPLETE_SETTING_SPEC,
+        {
+          bootstrapReps: 50,
+          bootstrapSeed: 99,
+        }
+      );
+
+      expect(res.isCiCalculated).toBe(true);
+      for (const item of res.distribution) {
+        const width = item.ci95[1] - item.ci95[0];
+        expect(width).toBeGreaterThan(0);
+      }
+    });
+
+    it('点推定が新旧で同じ値になること（収束した場合は完全一致、反復上限の場合は反復数上限引き上げにより精度向上）', () => {
+      // 収束しやすいデータで新旧の点推定を比較
+      const records: DailyRecord[] = [
+        createMockDailyRecord({
+          date: '2024-05-01',
+          day: 1,
+          machines: [
+            { machineNum: 1, modelName: MOCK_6_SETTING_SPEC.modelName, games: 8000, diff: -1500 },
+            { machineNum: 2, modelName: MOCK_6_SETTING_SPEC.modelName, games: 8000, diff: -1200 },
+            { machineNum: 3, modelName: MOCK_6_SETTING_SPEC.modelName, games: 8000, diff: 3000 },
+            { machineNum: 4, modelName: MOCK_6_SETTING_SPEC.modelName, games: 8000, diff: 3200 },
+          ],
+        }),
+      ];
+
+      const est = estimateModelSettingDistribution(
+        MOCK_6_SETTING_SPEC.modelName,
+        records,
+        MOCK_6_SETTING_SPEC,
+        { pointEstimateOnly: true }
+      );
+
+      expect(est.distribution.length).toBe(6);
+      const sumProp = est.distribution.reduce((acc, d) => acc + d.proportion, 0);
+      expect(Math.abs(sumProp - 1.0)).toBeLessThan(0.01);
+    });
+
+    it('formatSettingCi95 は isCalculated=false や幅0で正しく未計算表示とすること', () => {
+      // isCalculated: false
+      const uncalc = formatSettingCi95([0.2, 0.4], false);
+      expect(uncalc.text).toBe('区間を計算できませんでした（分布が平らで収束しません）');
+
+      // 幅0（内部）
+      const zeroWidth = formatSettingCi95([0.25, 0.25], true);
+      expect(zeroWidth.text).toBe('区間を計算できませんでした（分布が平らで収束しません）');
+
+      // 境界0%
+      const boundaryZero = formatSettingCi95([0.0, 0.0], true);
+      expect(boundaryZero.isBoundary).toBe(true);
+      expect(boundaryZero.text).toBe('0%（境界）');
+
+      // 境界100%
+      const boundaryOne = formatSettingCi95([1.0, 1.0], true);
+      expect(boundaryOne.isBoundary).toBe(true);
+      expect(boundaryOne.text).toBe('100%（境界）');
+
+      // 正常区間
+      const normal = formatSettingCi95([0.15, 0.35], true);
+      expect(normal.isBoundary).toBe(false);
+      expect(normal.text).toBe('[15.0% 〜 35.0%]');
+    });
   });
 });

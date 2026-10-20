@@ -39,9 +39,9 @@ export interface EstimationOptions {
   useTDistribution?: boolean;
   /** t分布の自由度 (未指定時は残差から推定または既定 5) */
   tDistributionDf?: number;
-  /** EM最大反復回数 (既定 200) */
+  /** EM最大反復回数 (既定: 点推定 500, 再標本 200) */
   maxIterations?: number;
-  /** EM収束判定閾値 (既定 1e-6) */
+  /** EM収束判定閾値 (既定 1e-8: 対数尤度の相対変化) */
   convergenceTol?: number;
   /** ブートストラップ回数 (既定 2000) */
   bootstrapReps?: number;
@@ -78,6 +78,7 @@ export interface SettingDistItem {
   payoutRate: number;
   proportion: number; // 推定混合比率 π_s (0..1)
   ci95: [number, number]; // 95%信頼区間 [lower, upper]
+  isCiCalculated?: boolean; // false when valid reps < reps / 2 or width is 0
 }
 
 export interface ConditionComparisonItem {
@@ -167,6 +168,8 @@ export interface ModelEstimationResult {
   isLowDiscriminability: boolean;
   converged: boolean;
   iterations: number;
+  pointEstimateReachedMaxIterations?: boolean;
+  isCiCalculated?: boolean;
   distribution: SettingDistItem[];
   highSettingOverallRate: number; // %
   expectedSettingOverall: number;
@@ -178,6 +181,8 @@ export interface ModelEstimationResult {
   residualDistribution?: ResidualDistributionResult;
   warnings: string[];
   bootstrapNonConvergedCount?: number;
+  bootstrapMaxIterationsCount?: number;
+  bootstrapMaxIterationsRate?: number;
   bootstrapRepsEffective?: number;
   bootstrapNote?: string;
 }
@@ -353,13 +358,24 @@ export function checkSurvivorBiasWarning(
 }
 
 /**
- * 設定信頼区間の表示フォーマット (境界張り付き判定)
+ * 設定信頼区間の表示フォーマット (境界張り付き判定および未計算・0幅判定)
  */
-export function formatSettingCi95(ci95: [number, number]): {
+export function formatSettingCi95(
+  ci95: [number, number],
+  isCalculated: boolean = true
+): {
   text: string;
   isBoundary: boolean;
   boundaryNote?: string;
 } {
+  // プロンプト34: 有効な再標本が全体の半分未満、または未計算のときは区間を表示しない
+  if (!isCalculated) {
+    return {
+      text: '区間を計算できませんでした（分布が平らで収束しません）',
+      isBoundary: false,
+    };
+  }
+
   const lowPct = Number((ci95[0] * 100).toFixed(1));
   const highPct = Number((ci95[1] * 100).toFixed(1));
 
@@ -375,6 +391,13 @@ export function formatSettingCi95(ci95: [number, number]): {
       text: '100%（境界）',
       isBoundary: true,
       boundaryNote: '確実に100%という意味ではありません',
+    };
+  }
+  // 区間の幅が0になることを禁止する
+  if (lowPct === highPct) {
+    return {
+      text: '区間を計算できませんでした（分布が平らで収束しません）',
+      isBoundary: false,
     };
   }
   return {
@@ -712,11 +735,12 @@ export function runEMEstimation(
   posteriors: number[][]; // [recordIdx][settingIdx]
   converged: boolean;
   iterations: number;
+  reachedMaxIterations?: boolean;
 } {
   const K = spec.settings.length;
   const M = records.length;
-  const maxIter = options.maxIterations ?? 200;
-  const tol = options.convergenceTol ?? 1e-6;
+  const maxIter = options.maxIterations ?? 500;
+  const tol = options.convergenceTol ?? 1e-8;
   const usePoisson = options.usePoissonBonus ?? false;
   const lambda = options.poissonWeight ?? 0.5;
   const useT = options.useTDistribution ?? false;
@@ -737,6 +761,7 @@ export function runEMEstimation(
       posteriors: [],
       converged: true,
       iterations: 0,
+      reachedMaxIterations: false,
     };
   }
 
@@ -804,6 +829,7 @@ export function runEMEstimation(
 
   let converged = false;
   let iteration = 0;
+  let prevLogL = 0;
 
   // t分布用の定数項
   const tLogConst = useT
@@ -812,6 +838,7 @@ export function runEMEstimation(
 
   for (; iteration < maxIter; iteration++) {
     const sigma = Math.sqrt(sigma2);
+    let totalLogL = 0;
 
     // E-Step
     for (let i = 0; i < M; i++) {
@@ -849,16 +876,29 @@ export function runEMEstimation(
       }
 
       // 安定な Softmax 正規化
-      let logSum = 0;
+      let sumExp = 0;
       for (let s = 0; s < K; s++) {
-        logSum += Math.exp(logLik[s] - maxLog);
+        sumExp += Math.exp(logLik[s] - maxLog);
       }
-      logSum = maxLog + Math.log(logSum);
+      const logSum = maxLog + Math.log(sumExp);
+      totalLogL += logSum;
 
       for (let s = 0; s < K; s++) {
         responsibilities[i][s] = Math.exp(logLik[s] - logSum);
       }
     }
+
+    // 収束判定: 対数尤度の相対変化 (|ΔlogL| / |logL| < 1e-8)
+    if (iteration > 0) {
+      const deltaLogL = totalLogL - prevLogL;
+      const relChange = Math.abs(deltaLogL) / Math.max(1e-12, Math.abs(totalLogL));
+      if (relChange < tol) {
+        converged = true;
+        iteration++;
+        break;
+      }
+    }
+    prevLogL = totalLogL;
 
     // M-Step: π_s の更新
     const nextPi = new Array(K).fill(0);
@@ -893,22 +933,8 @@ export function runEMEstimation(
     }
     const nextSigma2 = Math.max(100, nextSigma2Denom > 0 ? nextSigma2Num / nextSigma2Denom : 100);
 
-    // 収束判定
-    let maxPiDelta = 0;
-    for (let s = 0; s < K; s++) {
-      const delta = Math.abs(nextPi[s] - pi[s]);
-      if (delta > maxPiDelta) maxPiDelta = delta;
-    }
-    const sigmaDelta = Math.abs(Math.sqrt(nextSigma2) - sigma);
-
     pi = nextPi;
     sigma2 = nextSigma2;
-
-    if (maxPiDelta < tol && sigmaDelta < 1e-4) {
-      converged = true;
-      iteration++;
-      break;
-    }
   }
 
   return {
@@ -917,6 +943,7 @@ export function runEMEstimation(
     posteriors: responsibilities,
     converged,
     iterations: iteration,
+    reachedMaxIterations: !converged,
   };
 }
 
@@ -927,18 +954,21 @@ export interface BlockBootstrapResult extends Array<[number, number]> {
   intervals: Array<[number, number]>;
   nonConvergedCount: number;
   convergedCount: number;
+  maxIterationsCount: number;
+  maxIterationsRate: number;
   totalReps: number;
   note: string;
+  isCalculated: boolean;
 }
 
 /**
  * ブロックブートストラップによる混合比率 π_s の 95% 信頼区間算出
  *
- * 【プロンプト31仕様】
- * 1. 各再標本の EM を、一様な初期値から、最大200反復・収束判定1e-6（点推定と同じ条件）で実行。
- *    収束しなかった再標本は除外し、その件数を結果に含める。
- * 2. 速度: 再標本ごとに対数尤度を計算し直さない。σ を点推定で固定し、尤度行列（記録×設定）を
- *    最初に1回だけ作って、再標本では日ごとの索引で足し合わせる。
+ * 【プロンプト34仕様】
+ * 1. 収束判定を対数尤度の相対変化 (|ΔlogL| / |logL| < 1e-8) に変更。最大反復は再標本で200。
+ *    反復上限で終了した再標本もその時点の値を使って区間に含め、上限に達した再標本の割合を記録する。
+ * 2. 有効な再標本が全体の半分未満のときは区間を計算不可とする（0幅の禁止）。
+ * 3. 速度: σ を点推定で固定し、尤度行列 A と各日の対数尤度基準和を事前に作成。
  */
 export function runBlockBootstrap(
   records: PreparedMachineRecord[],
@@ -964,7 +994,7 @@ export function runBlockBootstrap(
   const blockLen = options.blockLength ?? 7;
   const seed = options.seed ?? 42;
   const maxIter = options.maxIterations ?? 200;
-  const tol = options.convergenceTol ?? 1e-6;
+  const tol = options.convergenceTol ?? 1e-8;
   const usePoisson = options.usePoissonBonus ?? false;
   const lambda = options.poissonWeight ?? 0.5;
   const useT = options.useTDistribution ?? false;
@@ -987,8 +1017,10 @@ export function runBlockBootstrap(
     ? logGamma((nu + 1) / 2) - logGamma(nu / 2) - 0.5 * Math.log(Math.PI * nu)
     : 0;
 
-  // 1. 尤度行列 A (M x K) を最初に1回だけ作成 (σ は点推定で固定)
+  // 1. 尤度行列 A (M x K) および各レコードの maxLog を最初に1回だけ作成 (σ は点推定で固定)
   const A = new Float64Array(M * K);
+  const maxLogs = new Float64Array(M);
+
   for (let i = 0; i < M; i++) {
     const rec = records[i];
     const effGames = getEffGames(rec.games);
@@ -1037,6 +1069,8 @@ export function runBlockBootstrap(
       if (logDensity > maxLog) maxLog = logDensity;
     }
 
+    maxLogs[i] = maxLog;
+
     // 数値安定性のためのSoftmaxシフト (最大値減算して指数化)
     for (let s = 0; s < K; s++) {
       const shifted = A[rowOffset + s] - maxLog;
@@ -1064,16 +1098,31 @@ export function runBlockBootstrap(
     empty.intervals = new Array(K).fill([0, 0]);
     empty.nonConvergedCount = 0;
     empty.convergedCount = 0;
+    empty.maxIterationsCount = 0;
+    empty.maxIterationsRate = 0;
     empty.totalReps = 0;
     empty.note = 'σを固定した区間です。台数が少ないと実際より狭く出ることがあります';
+    empty.isCalculated = false;
     return empty;
   }
 
   const dateRecordIndices: number[][] = uniqueDates.map((d) => dateMap.get(d)!);
+
+  // 日ごとの maxLog 和を事前計算
+  const dayMaxLogSums = new Float64Array(T);
+  for (let d = 0; d < T; d++) {
+    let sum = 0;
+    const list = dateRecordIndices[d];
+    for (let j = 0; j < list.length; j++) {
+      sum += maxLogs[list[j]];
+    }
+    dayMaxLogSums[d] = sum;
+  }
+
   const effectiveBlockLen = Math.min(blockLen, T);
   const numBlocks = T - effectiveBlockLen + 1;
   const piSamples: number[][] = Array.from({ length: K }, () => []);
-  let nonConvergedCount = 0;
+  let maxIterationsCount = 0;
   let convergedCount = 0;
 
   const dateWeights = new Int32Array(T);
@@ -1096,26 +1145,31 @@ export function runBlockBootstrap(
 
     activeDates.length = 0;
     let Mb = 0;
+    let baseLogL = 0;
     for (let d = 0; d < T; d++) {
       const w = dateWeights[d];
       if (w > 0) {
         activeDates.push(d);
         Mb += w * dateRecordIndices[d].length;
+        baseLogL += w * dayMaxLogSums[d];
       }
     }
 
     if (Mb === 0) {
-      nonConvergedCount++;
+      maxIterationsCount++;
       continue;
     }
 
     // 1. 各再標本の EM を一様な初期値から実行
     pi.fill(uniformPrior);
     let converged = false;
+    let prevLogL = 0;
+    let iter = 0;
 
-    // 2. 最大200反復・収束判定1e-6 (点推定と同じ条件)
-    for (let iter = 0; iter < maxIter; iter++) {
+    // 2. 最大200反復・収束判定: 対数尤度の相対変化 (|ΔlogL| / |logL| < 1e-8)
+    for (; iter < maxIter; iter++) {
       sumGamma.fill(0);
+      let currentLogL = baseLogL;
 
       // 日ごとの索引で尤度を足し合わせ
       for (let ad = 0; ad < activeDates.length; ad++) {
@@ -1131,12 +1185,25 @@ export function runBlockBootstrap(
             denom += pi[s] * A[offset + s];
           }
           if (denom < 1e-15) denom = 1e-15;
+          currentLogL += w * Math.log(denom);
           const mult = w / denom;
           for (let s = 0; s < K; s++) {
             sumGamma[s] += pi[s] * A[offset + s] * mult;
           }
         }
       }
+
+      // 収束判定
+      if (iter > 0) {
+        const deltaLogL = currentLogL - prevLogL;
+        const relChange = Math.abs(deltaLogL) / Math.max(1e-12, Math.abs(currentLogL));
+        if (relChange < tol) {
+          converged = true;
+          iter++;
+          break;
+        }
+      }
+      prevLogL = currentLogL;
 
       // M-Step: π の更新
       let piSum = 0;
@@ -1147,36 +1214,43 @@ export function runBlockBootstrap(
       }
 
       const invPiSum = 1 / piSum;
-      let maxDelta = 0;
       for (let s = 0; s < K; s++) {
-        nextPi[s] *= invPiSum;
-        const delta = Math.abs(nextPi[s] - pi[s]);
-        if (delta > maxDelta) maxDelta = delta;
-        pi[s] = nextPi[s];
+        pi[s] = nextPi[s] * invPiSum;
       }
+    }
 
-      if (maxDelta < tol) {
-        converged = true;
+    // プロンプト34要件2: 収束しなかった再標本（反復上限で終了）も除外せず区間に含める
+    let isValidPi = true;
+    for (let s = 0; s < K; s++) {
+      if (!Number.isFinite(pi[s]) || pi[s] < 0) {
+        isValidPi = false;
         break;
+      }
+    }
+
+    if (isValidPi) {
+      for (let s = 0; s < K; s++) {
+        piSamples[s].push(pi[s]);
       }
     }
 
     if (converged) {
       convergedCount++;
-      for (let s = 0; s < K; s++) {
-        piSamples[s].push(pi[s]);
-      }
     } else {
-      // 収束しなかった再標本は除外
-      nonConvergedCount++;
+      maxIterationsCount++;
     }
   }
+
+  const validCount = piSamples[0]?.length ?? 0;
+  // プロンプト34要件3: 有効な再標本が全体の半分未満のときは区間を計算不可とする
+  const isEnoughReps = validCount >= Math.ceil(reps / 2);
+  const maxIterationsRate = reps > 0 ? maxIterationsCount / reps : 0;
 
   const intervals: Array<[number, number]> = [];
   for (let s = 0; s < K; s++) {
     const arr = piSamples[s].sort((a, b) => a - b);
-    if (arr.length === 0) {
-      intervals.push([pointPi[s], pointPi[s]]);
+    if (!isEnoughReps || arr.length === 0) {
+      intervals.push([0, 0]);
       continue;
     }
     const lowIdx = Math.max(0, Math.floor(arr.length * 0.025));
@@ -1184,12 +1258,31 @@ export function runBlockBootstrap(
     intervals.push([arr[lowIdx], arr[highIdx]]);
   }
 
+  // 区間の幅が0になることを禁止する
+  const hasNonZeroWidth = intervals.some((ci) => ci[1] > ci[0]);
+  const isCalculated = isEnoughReps && hasNonZeroWidth;
+
+  if (!isCalculated) {
+    for (let s = 0; s < K; s++) {
+      intervals[s] = [0, 0];
+    }
+  }
+
+  let note = 'σを固定した区間です。台数が少ないと実際より狭く出ることがあります';
+  if (maxIterationsRate > 0) {
+    const pct = Math.round(maxIterationsRate * 100);
+    note = `再標本の${pct}%が反復上限で終了しました。区間は参考値です`;
+  }
+
   const result = intervals as BlockBootstrapResult;
   result.intervals = intervals;
-  result.nonConvergedCount = nonConvergedCount;
+  result.nonConvergedCount = maxIterationsCount;
   result.convergedCount = convergedCount;
+  result.maxIterationsCount = maxIterationsCount;
+  result.maxIterationsRate = maxIterationsRate;
   result.totalReps = reps;
-  result.note = 'σを固定した区間です。台数が少ないと実際より狭く出ることがあります';
+  result.note = note;
+  result.isCalculated = isCalculated;
 
   return result;
 }
@@ -1773,13 +1866,15 @@ export function estimateModelSettingDistribution(
     poissonWeight: options.poissonWeight,
     useTDistribution: options.useTDistribution,
     tDistributionDf: options.tDistributionDf,
-    maxIterations: options.maxIterations,
-    convergenceTol: options.convergenceTol,
+    maxIterations: options.maxIterations ?? 500,
+    convergenceTol: options.convergenceTol ?? 1e-8,
   });
 
-  if (!em.converged) {
+  const pointEstimateReachedMaxIterations = !em.converged;
+
+  if (pointEstimateReachedMaxIterations) {
     warnings.push(
-      `EMアルゴリズムが指定反復回数（${options.maxIterations ?? 200}回）内で収束しませんでした（参考値として出力）。`
+      '設定の分布が平らで、推定が定まりにくいデータです。上の『範囲』を参考にしてください'
     );
   }
 
@@ -1810,20 +1905,26 @@ export function estimateModelSettingDistribution(
         useTDistribution: options.useTDistribution,
         tDistributionDf: options.tDistributionDf,
         gameWeightMode: options.gameWeightMode,
-        maxIterations: options.maxIterations,
-        convergenceTol: options.convergenceTol,
+        maxIterations: options.maxIterations ?? 200,
+        convergenceTol: options.convergenceTol ?? 1e-8,
       });
 
+  const isCiCalculated = options.pointEstimateOnly
+    ? false
+    : bootstrapRes?.isCalculated ?? false;
+
   const intervals = options.pointEstimateOnly || !bootstrapRes
-    ? spec.settings.map((_, idx) => [em.pi[idx], em.pi[idx]] as [number, number])
+    ? spec.settings.map(() => [0, 0] as [number, number])
     : bootstrapRes.intervals;
 
+  let bootstrapNote = 'σを固定した区間です。台数が少ないと実際より狭く出ることがあります';
   if (!options.pointEstimateOnly && bootstrapRes) {
     warnings.push('※ 95%信頼区間はσを固定した区間です。台数が少ないと実際より狭く出ることがあります。');
-    if (bootstrapRes.nonConvergedCount > 0) {
-      warnings.push(
-        `ブートストラップ再標本のうち ${bootstrapRes.nonConvergedCount} 件が収束しなかったため除外しました。`
-      );
+    if (bootstrapRes.maxIterationsRate > 0) {
+      const pct = Math.round(bootstrapRes.maxIterationsRate * 100);
+      const ptNote = pointEstimateReachedMaxIterations ? '点推定も反復上限で終了しました。' : '';
+      bootstrapNote = `再標本の${pct}%が反復上限で終了しました。${ptNote}区間は参考値です。`;
+      warnings.push(bootstrapNote);
     }
   }
 
@@ -1833,6 +1934,7 @@ export function estimateModelSettingDistribution(
     payoutRate: s.payoutRate,
     proportion: Number(em.pi[idx].toFixed(4)),
     ci95: [Number(intervals[idx][0].toFixed(4)), Number(intervals[idx][1].toFixed(4))],
+    isCiCalculated,
   }));
 
   // 6. 各台×日の事後確率 & 集計
@@ -2125,6 +2227,8 @@ export function estimateModelSettingDistribution(
     isLowDiscriminability,
     converged: em.converged,
     iterations: em.iterations,
+    pointEstimateReachedMaxIterations,
+    isCiCalculated,
     distribution,
     highSettingOverallRate,
     expectedSettingOverall,
@@ -2136,7 +2240,9 @@ export function estimateModelSettingDistribution(
     residualDistribution,
     warnings,
     bootstrapNonConvergedCount: options.pointEstimateOnly ? 0 : bootstrapRes?.nonConvergedCount ?? 0,
+    bootstrapMaxIterationsCount: options.pointEstimateOnly ? 0 : bootstrapRes?.maxIterationsCount ?? 0,
+    bootstrapMaxIterationsRate: options.pointEstimateOnly ? 0 : bootstrapRes?.maxIterationsRate ?? 0,
     bootstrapRepsEffective: options.pointEstimateOnly ? 0 : bootstrapRes?.convergedCount ?? 0,
-    bootstrapNote: 'σを固定した区間です。台数が少ないと実際より狭く出ることがあります',
+    bootstrapNote,
   };
 }

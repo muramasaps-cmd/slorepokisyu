@@ -1840,7 +1840,7 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart
                     data={estimationResult.distribution.map((d) => {
-                      const ciInfo = formatSettingCi95(d.ci95);
+                      const ciInfo = formatSettingCi95(d.ci95, d.isCiCalculated);
                       return {
                         label: `${d.label} (${d.payoutRate}%)`,
                         shortLabel: d.label,
@@ -1893,7 +1893,7 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
                       const estMachines = (
                         d.proportion * estimationResult.evaluatedRecords
                       ).toFixed(1);
-                      const ciInfo = formatSettingCi95(d.ci95);
+                      const ciInfo = formatSettingCi95(d.ci95, d.isCiCalculated);
                       return (
                         <tr key={d.label} className="hover:bg-slate-50/70">
                           <td className="py-2 px-3 font-sans font-bold text-slate-900 flex items-center gap-1.5">
@@ -1928,14 +1928,19 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
                     })}
                   </tbody>
                 </table>
-                <p className="text-[11px] text-slate-500 mt-2 px-1">
-                  ※ σを固定した区間です。台数が少ないと実際より狭く出ることがあります。
-                  {estimationResult.bootstrapNonConvergedCount !== undefined && estimationResult.bootstrapNonConvergedCount > 0 && (
-                    <span className="text-amber-600 ml-1.5 font-medium">
-                      （未収束再標本: {estimationResult.bootstrapNonConvergedCount}件除外）
-                    </span>
+                <div className="text-[11px] text-slate-500 mt-2 px-1 space-y-1">
+                  <div>※ σを固定した区間です。台数が少ないと実際より狭く出ることがあります。</div>
+                  {estimationResult.bootstrapNote && (
+                    <div className="text-amber-700 font-medium">
+                      ※ {estimationResult.bootstrapNote}
+                    </div>
                   )}
-                </p>
+                  {estimationResult.pointEstimateReachedMaxIterations && (
+                    <div className="text-amber-800 font-medium">
+                      ※ 設定の分布が平らで、推定が定まりにくいデータです。上の『範囲』を参考にしてください。
+                    </div>
+                  )}
+                </div>
               </div>
             </details>
           </div>

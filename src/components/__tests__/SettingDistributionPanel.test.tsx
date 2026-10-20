@@ -209,4 +209,79 @@ describe('SettingDistributionPanel Component', () => {
       '設定の分布グラフ（EM推定）は参考値です。上の出率ベースの範囲を主にご覧ください'
     );
   });
+
+  it('Prompt 36: renders only the main display by default, with all 5 detail sections closed and having 1-line summaries', () => {
+    const html = renderToString(
+      <SettingDistributionPanel
+        dailyRecords={mockDailyRecords}
+        selectedModelName="マイジャグラーV"
+      />
+    );
+    const cleanHtml = html.replace(/<!--.*?-->/g, '');
+
+    // 1. Main display elements are present
+    expect(cleanHtml).toContain('出率ベース設定範囲');
+    expect(cleanHtml).toContain('平均設定相当（主推定）');
+    expect(cleanHtml).toContain('全体出率 (IN加重)');
+    expect(cleanHtml).toContain('平均設定相当');
+    expect(cleanHtml).toContain('高設定(設定4+)の割合の範囲');
+    expect(cleanHtml).toContain('観測データ規模');
+    expect(cleanHtml).toContain('出率からの統計的な推定です。実際の設定を示すものではありません。回転数が少ない台は判別力が低くなります。');
+
+    // 2. All 5 foldables exist and none of them have the 'open' attribute
+    const detailsMatches = html.match(/<details\b[^>]*>/g) || [];
+    expect(detailsMatches.length).toBe(5);
+    for (const d of detailsMatches) {
+      expect(d).not.toContain('open');
+    }
+
+    // 3. Each foldable has a 1-line summary in its summary tag
+    expect(cleanHtml).toContain('仕様テーブルの登録・編集とJSONインポート:');
+    expect(cleanHtml).toContain('マイジャグラーV（6段階仕様 登録済み）');
+
+    expect(cleanHtml).toContain('EM推定（参考）と感度分析:');
+    expect(cleanHtml).toContain('推定平均設定');
+
+    expect(cleanHtml).toContain('日別推移:');
+    expect(cleanHtml).toContain('日間のデータ推移・期間別内訳・台別移動出率');
+
+    expect(cleanHtml).toContain('条件別の比較:');
+
+    expect(cleanHtml).toContain('台番別サマリー:');
+    expect(cleanHtml).toContain('個別実績と推定設定');
+
+    // 4. Long descriptions have been moved to HelpTooltips (? icons with cursor-help)
+    expect(cleanHtml).toContain('cursor-help');
+  });
+
+  it('Prompt 36: aggregates warnings into a single "データの注意" banner at the top with max 3 lines and expand button', () => {
+    const originalEstimate = settingEstimation.estimateModelSettingDistribution;
+    vi.spyOn(settingEstimation, 'estimateModelSettingDistribution').mockImplementation((...args) => {
+      const realResult = originalEstimate(...args);
+      return {
+        ...realResult,
+        converged: false,
+        pointEstimateReachedMaxIterations: true,
+        warnings: [
+          '設定の分布が平らで、推定が定まりにくいデータです。上の『範囲』を参考にしてください',
+          'テスト用非EM警告メッセージ1',
+        ],
+      };
+    });
+
+    const html = renderToString(
+      <SettingDistributionPanel
+        dailyRecords={mockDailyRecords}
+        selectedModelName="マイジャグラーV"
+      />
+    );
+    const cleanHtml = html.replace(/<!--.*?-->/g, '');
+
+    // Warnings are gathered in the top "データの注意" banner
+    expect(cleanHtml).toContain('データの注意（4件）');
+    // Since there are 4 alerts (>3), the top 3 are shown and "他1件を表示" appears
+    expect(cleanHtml).toContain('他1件を表示');
+    expect(cleanHtml).toContain('設定の分布グラフ（EM推定）は参考値です。上の出率ベースの範囲を主にご覧ください');
+  });
 });
+

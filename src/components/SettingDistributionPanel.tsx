@@ -83,7 +83,17 @@ import {
   Clock,
   TrendingUp,
   Cpu,
+  HelpCircle,
 } from 'lucide-react';
+
+const HelpTooltip: React.FC<{ text: string }> = ({ text }) => (
+  <span className="relative group inline-flex items-center text-slate-400 hover:text-slate-600 cursor-help ml-1 align-middle">
+    <HelpCircle className="w-3.5 h-3.5" />
+    <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover:block z-30 w-64 p-2 bg-slate-900 text-white text-[11px] font-normal leading-relaxed rounded-lg shadow-lg border border-slate-700 whitespace-normal text-left">
+      {text}
+    </span>
+  </span>
+);
 
 interface SettingDistributionPanelProps {
   dailyRecords: DailyRecord[];
@@ -647,9 +657,83 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
     );
   }, [estimationResult]);
 
+  const [isAlertsExpanded, setIsAlertsExpanded] = useState<boolean>(false);
+
+  const allAlerts = useMemo(() => {
+    const list: Array<{ id: string; type: 'warning' | 'info'; text: string }> = [];
+
+    // 1. EM unstable alert
+    if (isEmUnstable) {
+      list.push({
+        id: 'em-unstable',
+        type: 'info',
+        text: '設定の分布グラフ（EM推定）は参考値です。上の出率ベースの範囲を主にご覧ください',
+      });
+    }
+
+    // 2. Survivor bias
+    if (minGames > 0 || survivorBias.shouldWarn) {
+      list.push({
+        id: 'survivor-bias',
+        type: 'warning',
+        text: `回転数で絞ると、負けた台日が除かれて高設定側に偏ります。（除外台日: ${estimationResult?.excludedCount ?? 0}台日 / 全体の${((survivorBias?.excludedRatio ?? 0) * 100).toFixed(1)}%）`,
+      });
+    }
+
+    // 3. Rotation dependency
+    if (rotationDependency.isDependent) {
+      list.push({
+        id: 'rotation-dep',
+        type: 'warning',
+        text: `回転数が結果に依存しています（勝つ台ほど回ります）。出率だけの推定は高設定側に偏ります。（Spearman相関: ${rotationDependency.spearmanCorr !== null ? (rotationDependency.spearmanCorr >= 0 ? '+' : '') + rotationDependency.spearmanCorr.toFixed(2) : ''}）`,
+      });
+    }
+
+    // 4. Sensitivity wide spread
+    if (!isSensitivityCalculating && sensitivityResult?.isHighSensitivity) {
+      list.push({
+        id: 'high-sensitivity',
+        type: 'warning',
+        text: `条件によって結果が大きく変わります。この機種の設定分布は、参考程度にしてください。（変動幅: ${sensitivityResult.rateSpread}ポイント）`,
+      });
+    }
+
+    // 5. Data volume notes
+    if (dataVolumeWarnings.warnings.length > 0) {
+      for (const [idx, w] of dataVolumeWarnings.warnings.entries()) {
+        list.push({
+          id: `vol-${idx}`,
+          type: 'info',
+          text: `${w.title}: ${w.message}`,
+        });
+      }
+    }
+
+    // 6. Non-EM warnings
+    for (const [idx, w] of nonEmWarnings.entries()) {
+      list.push({
+        id: `non-em-${idx}`,
+        type: 'warning',
+        text: w,
+      });
+    }
+
+    return list;
+  }, [
+    isEmUnstable,
+    minGames,
+    survivorBias,
+    estimationResult,
+    rotationDependency,
+    isSensitivityCalculating,
+    sensitivityResult,
+    dataVolumeWarnings,
+    nonEmWarnings,
+  ]);
+
   return (
     <div className="space-y-4">
-      {/* 1. 機種選択 & 仕様テーブル管理ヘッダー */}
+      {/* 1. 機種選択ヘッダー */}
       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2">
@@ -657,48 +741,14 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
               <Target className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-slate-900 text-sm sm:text-base flex items-center gap-2">
-                Aタイプ 設定値分布推定 (EM法・仕様テーブル連動)
-                <span className="text-[11px] font-normal text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+              <h3 className="font-bold text-slate-900 text-sm sm:text-base flex items-center gap-1">
+                <span>Aタイプ 設定値分布推定</span>
+                <HelpTooltip text="完全3枚掛け（BET 3）前提の観測出率と登録仕様値から設定分布を統計的に推定します。" />
+                <span className="text-[11px] font-normal text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full ml-1">
                   統計モデリング
                 </span>
               </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                完全3枚掛け（BET 3）前提の観測出率と登録仕様値から、EM法により設定混合比率と各台の事後確率を推定
-              </p>
             </div>
-          </div>
-
-          <div className="flex items-center gap-2 self-start sm:self-auto">
-            <button
-              type="button"
-              onClick={() => setIsPasteJsonModalOpen(true)}
-              className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 transition-colors cursor-pointer flex items-center gap-1.5"
-              title="JSONテキスト直接貼り付けまたは複数機種一括インポート"
-            >
-              <Upload className="w-3.5 h-3.5 text-emerald-700" />
-              <span>JSON一括取り込み</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleOpenEditSpec}
-              className="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 transition-colors cursor-pointer flex items-center gap-1.5"
-            >
-              <Settings2 className="w-3.5 h-3.5 text-slate-600" />
-              <span>{currentSpec ? '仕様テーブル確認・編集' : '仕様テーブルを登録'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
-              className={`p-1.5 rounded-lg text-xs font-bold border transition-colors cursor-pointer ${
-                showAdvancedOptions
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                  : 'bg-white hover:bg-slate-50 text-slate-600 border-slate-300'
-              }`}
-              title="推定オプション設定"
-            >
-              <SlidersHorizontal className="w-4 h-4" />
-            </button>
           </div>
         </div>
 
@@ -741,1533 +791,1235 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
             ※ 取り込みデータ内に Aタイプ (ノーマル機/ジャグラー系) の機種が見つかりませんでした。
           </div>
         )}
-
-        {/* 5. 常時表示の注意文 (プロンプト必須要件) */}
-        <div className="p-2.5 bg-amber-50/70 border border-amber-200/80 rounded-lg flex items-start gap-2 text-xs text-amber-900">
-          <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-          <div className="leading-relaxed">
-            <span className="font-bold">【統計的推定に関する注意事項】</span>
-            <span>
-              出率からの統計的な推定です。実際の設定を示すものではありません。回転数が少ない台は判別力が低くなります。
-            </span>
-          </div>
-        </div>
-
-        {/* 詳細オプションドロワー */}
-        {showAdvancedOptions && (
-          <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-3">
-            <div className="font-bold text-slate-800 flex items-center gap-1.5">
-              <Sliders className="w-3.5 h-3.5 text-emerald-600" />
-              <span>推定パラメータ詳細設定</span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <label className="block text-slate-600 mb-1 font-medium">
-                  最小回転数閾値 (既定 0G: 全台日)
-                </label>
-                <div className="flex items-center gap-1">
-                  <input
-                    type="number"
-                    min={0}
-                    max={8000}
-                    step={500}
-                    value={inputMinGames}
-                    onChange={(e) => setInputMinGames(e.target.value)}
-                    onBlur={handleApplyInput}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') handleApplyInput();
-                    }}
-                    className="w-24 px-2 py-1 bg-white border border-slate-300 rounded font-mono font-bold text-slate-900"
-                  />
-                  <span className="text-slate-500">G以上のみ対象</span>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-600 mb-1 font-medium">高設定判定閾値</label>
-                <select
-                  value={highThreshold}
-                  onChange={(e) => setHighThreshold(parseInt(e.target.value, 10))}
-                  className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-slate-900 font-bold"
-                >
-                  <option value={4}>設定4以上 (既定)</option>
-                  <option value={5}>設定5以上</option>
-                  <option value={6}>設定6のみ</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-slate-600 mb-1 font-medium">出率算出基準</label>
-                <label className="flex items-center gap-2 cursor-pointer mt-1 text-slate-800">
-                  <input
-                    type="checkbox"
-                    checked={useRecordedPayout}
-                    onChange={(e) => setUseRecordedPayout(e.target.checked)}
-                    className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                  />
-                  <span>データ記載の出率を使用</span>
-                </label>
-                <p className="text-[10px] text-slate-400 mt-0.5">
-                  OFF時は 3枚掛け固定 (games×3 + diff) / (games×3) ×100
-                </p>
-              </div>
-            </div>
-
-            {hasBonusData && (
-              <div className="pt-2 border-t border-slate-200/80 flex flex-wrap items-center gap-4">
-                <label className="flex items-center gap-2 cursor-pointer text-slate-800">
-                  <input
-                    type="checkbox"
-                    checked={usePoissonBonus}
-                    onChange={(e) => setUsePoissonBonus(e.target.checked)}
-                    className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                  />
-                  <span className="font-bold">ボーナス回数ポアソン尤度を加味 (任意オプション)</span>
-                </label>
-
-                {usePoissonBonus && (
-                  <div className="flex items-center gap-2 text-slate-700">
-                    <span>尤度割引重み λ:</span>
-                    <input
-                      type="number"
-                      min={0.1}
-                      max={1.0}
-                      step={0.1}
-                      value={poissonWeight}
-                      onChange={(e) => setPoissonWeight(parseFloat(e.target.value) || 0.5)}
-                      className="w-16 px-1.5 py-0.5 bg-white border border-slate-300 rounded font-mono font-bold"
-                    />
-                    <span className="text-[11px] text-slate-400">(既定 0.5)</span>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
-      {/* 2. 仕様テーブル未登録時の案内ビュー */}
-      {!currentSpec ? (
-        <div className="bg-white p-6 sm:p-8 rounded-xl border border-slate-200 text-center space-y-4 shadow-2xs">
-          <div className="w-12 h-12 bg-amber-100 text-amber-700 rounded-full flex items-center justify-center mx-auto">
-            <AlertTriangle className="w-6 h-6" />
-          </div>
-          <div className="max-w-md mx-auto space-y-1.5">
-            <h4 className="text-base font-bold text-slate-900">
-              「{activeModelName || '選択機種'}」の仕様値が未登録です
-            </h4>
-            <p className="text-xs text-slate-600 leading-relaxed">
-              設定ごとの機械割などの仕様値はコード内に事前登録されていないため、仕様テーブルに機械割（出玉率%）を登録することで、EM法による推定分布を表示できます。
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
-            <button
-              type="button"
-              onClick={() => handleOpenCreateSpec(activeModelName)}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg transition-colors cursor-pointer flex items-center gap-2 shadow-2xs"
-            >
-              <Plus className="w-4 h-4" />
-              <span>「{activeModelName}」の仕様値を登録する</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsPasteJsonModalOpen(true)}
-              className="px-4 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-bold text-xs rounded-lg transition-colors cursor-pointer flex items-center gap-2 border border-emerald-300 shadow-2xs"
-            >
-              <FileText className="w-4 h-4 text-emerald-700" />
-              <span>JSONを貼り付けて取り込む（複数機種対応）</span>
-            </button>
-            <label className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-lg transition-colors cursor-pointer flex items-center gap-2 border border-slate-300">
-              <Upload className="w-4 h-4 text-slate-600" />
-              <span>ファイル選択 (複数可)</span>
-              <input
-                type="file"
-                accept=".json"
-                multiple
-                onChange={(e) => {
-                  handleImportJsonFiles(e.target.files);
-                  e.target.value = '';
-                }}
-                className="hidden"
-              />
-            </label>
-          </div>
-        </div>
-      ) : (
-        /* 3. 仕様テーブル登録済みの推定結果ビュー */
-        <div className="space-y-4">
-          {/* 最小回転数フィルター & 回転数重みコントロールバー */}
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-              {/* 最小回転数セレクター & プリセット */}
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                  <Sliders className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>最小回転数:</span>
-                </span>
-
-                {/* プリセットボタン */}
-                <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 gap-0.5">
-                  {PRESET_MIN_GAMES.map((p) => {
-                    const isSelected = minGames === p.value;
-                    return (
-                      <button
-                        key={p.value}
-                        type="button"
-                        onClick={() => handleSelectPreset(p.value)}
-                        className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
-                          isSelected
-                            ? 'bg-emerald-600 text-white shadow-2xs'
-                            : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-                        }`}
-                      >
-                        {p.label}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* 手動入力 (Enter / blur で適用) */}
-                <div className="flex items-center gap-1 text-xs">
-                  <input
-                    type="number"
-                    min={0}
-                    step={500}
-                    value={inputMinGames}
-                    onChange={(e) => setInputMinGames(e.target.value)}
-                    onBlur={handleApplyInput}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') handleApplyInput();
-                    }}
-                    className="w-20 px-2 py-1 bg-white border border-slate-300 rounded font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    placeholder="0"
-                    title="数値を入力しEnterまたは枠外クリックで適用"
-                  />
-                  <span className="text-slate-600">G以上</span>
-                  <span className="text-[11px] text-slate-400 font-sans ml-0.5">
-                    (既定 0G: 全台日)
-                  </span>
-                </div>
-              </div>
-
-              {/* 回転数重み付けセレクター */}
-              <div className="flex items-center gap-1.5 text-xs">
-                <span className="font-bold text-slate-700">回転数の重み:</span>
-                <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 gap-0.5">
-                  {[
-                    { value: 'raw' as GameWeightMode, label: 'そのまま' },
-                    { value: 'cap3000' as GameWeightMode, label: '上限3,000G' },
-                    { value: 'constant' as GameWeightMode, label: '一定' },
-                  ].map((w) => {
-                    const isSelected = gameWeightMode === w.value;
-                    return (
-                      <button
-                        key={w.value}
-                        type="button"
-                        onClick={() => setGameWeightMode(w.value)}
-                        className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
-                          isSelected
-                            ? 'bg-indigo-600 text-white shadow-2xs'
-                            : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-                        }`}
-                      >
-                        {w.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* 条件別感度比較へのショートカットボタン */}
+      {/* 2. データの注意 (集約バナー: 最大3行、それ以上は他◯件で展開) */}
+      {allAlerts.length > 0 && (
+        <div className="p-3 bg-amber-50/80 border border-amber-200/90 rounded-xl space-y-2 text-xs text-amber-950 shadow-2xs">
+          <div className="flex items-center justify-between font-bold text-amber-900 pb-1 border-b border-amber-200/60">
+            <div className="flex items-center gap-1.5">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>データの注意（{allAlerts.length}件）</span>
+            </div>
+            {allAlerts.length > 3 && (
               <button
                 type="button"
-                onClick={() => {
-                  const el = document.getElementById('sensitivity-table');
-                  el?.scrollIntoView({ behavior: 'smooth' });
-                }}
-                className="px-2.5 py-1 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-all cursor-pointer flex items-center gap-1 ml-auto"
-                title="最小回転数や重み付けの違いによる推定感度を比較"
+                onClick={() => setIsAlertsExpanded(!isAlertsExpanded)}
+                className="text-[11px] font-bold text-amber-800 hover:text-amber-950 underline cursor-pointer"
               >
-                <Scale className="w-3.5 h-3.5 text-emerald-600" />
-                <span>条件を変えて比べる</span>
+                {isAlertsExpanded ? '折りたたむ' : `他${allAlerts.length - 3}件を表示`}
               </button>
+            )}
+          </div>
+          <ul className="space-y-1.5 leading-relaxed">
+            {(isAlertsExpanded ? allAlerts : allAlerts.slice(0, 3)).map((item) => (
+              <li key={item.id} className="flex items-start gap-1.5">
+                <span className="text-amber-600 font-bold shrink-0">・</span>
+                <span>{item.text}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* 3. 主表示 (出率ベースの設定範囲・平均設定相当・高設定の範囲、4つの数値カードと範囲バー、1行の注意文) */}
+      {!currentSpec ? (
+        <div className="bg-white p-6 rounded-xl border border-slate-200 text-center space-y-3 shadow-2xs">
+          <div className="w-10 h-10 bg-amber-100 text-amber-700 rounded-full flex items-center justify-center mx-auto">
+            <AlertTriangle className="w-5 h-5" />
+          </div>
+          <div className="max-w-md mx-auto space-y-1">
+            <h4 className="text-sm font-bold text-slate-900">
+              「{activeModelName || '選択機種'}」の仕様値が未登録です
+            </h4>
+            <p className="text-xs text-slate-600">
+              下の「仕様テーブルの登録・編集とJSONインポート」から仕様値を登録すると、出率ベースの範囲やEM推定を算出できます。
+            </p>
+          </div>
+        </div>
+      ) : rangeEstimationResult ? (
+        <div className="bg-white p-4 sm:p-5 rounded-xl border border-slate-200 shadow-2xs space-y-4">
+          {/* ヘッダー & 複数機種まとめ推定ボタン */}
+          <div className="flex flex-wrap items-center justify-between gap-2.5 pb-2 border-b border-slate-100">
+            <div>
+              <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1">
+                <Target className="w-4 h-4 text-emerald-600" />
+                <span>出率ベース設定範囲 & 平均設定相当（主推定）</span>
+                <HelpTooltip text="全台日のプレイ量加重出率と公表機械割テーブルから、偏りなく設定範囲と平均設定相当を算出します。" />
+              </h4>
             </div>
 
-            {/* 絞り込み結果サマリー & 出率 (IN加重) */}
-            <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-bold text-slate-800">
-                  使用 {estimationResult.evaluatedRecords}台日 / 全 {estimationResult.totalRecords}台日
-                  {estimationResult.excludedCount > 0 ? (
-                    <span className="text-amber-700 ml-1 font-normal">
-                      （除外 {estimationResult.excludedCount}台日）
-                    </span>
-                  ) : (
-                    <span className="text-emerald-700 ml-1 font-normal">
-                      （全台日を使用）
-                    </span>
-                  )}
-                </span>
-                <span className="text-slate-300">|</span>
-                <span className="text-slate-600">
-                  実台数: <strong className="text-slate-900 font-mono">{uniqueMachineCount}台</strong>
-                  {modelMachineNums.length > 0 && (
-                    <span className="text-[11px] text-slate-400 font-sans ml-1">
-                      ({modelMachineNums.slice(0, 6).map((n) => `#${n}`).join(', ')}{modelMachineNums.length > 6 ? '…' : ''})
-                    </span>
-                  )}
-                </span>
-                <span className="text-slate-300">|</span>
-                <div className="flex items-center gap-2">
-                  <span className="text-slate-600">
-                    全体出率 (IN加重):{' '}
-                    <strong className="text-slate-900 font-mono">
-                      {overallPayoutRate.toFixed(1)}%
-                    </strong>
-                  </span>
-                  <span className="text-slate-400">→</span>
-                  <span className="text-slate-600">
-                    絞り後出率 (IN加重):{' '}
-                    <strong className="text-slate-900 font-mono">
-                      {filteredPayoutRate.toFixed(1)}%
-                    </strong>
-                  </span>
-                  {minGames > 0 && (
-                    <span
-                      className={`font-mono font-bold text-[11px] ${
-                        survivorBias.payoutDiff > 0
-                          ? 'text-rose-600'
-                          : survivorBias.payoutDiff < 0
-                          ? 'text-emerald-600'
-                          : 'text-slate-500'
-                      }`}
-                    >
-                      ({survivorBias.payoutDiff > 0 ? `+${survivorBias.payoutDiff}` : survivorBias.payoutDiff}pt)
-                    </span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* サバイバーシップ（負けやめ）バイアス警告 (minGames > 0 または 出率差1pt以上/除外率20%以上) */}
-            {(minGames > 0 || survivorBias.shouldWarn) && (
-              <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2 text-xs text-amber-900">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <div className="leading-relaxed">
-                  <span className="font-bold">
-                    回転数で絞ると、負けた台日が除かれて高設定側に偏ります。
-                  </span>
-                  <span className="text-[11px] text-amber-800 block mt-0.5">
-                    （除外台日: {estimationResult.excludedCount}台日 / 全体の{(survivorBias.excludedRatio * 100).toFixed(1)}%, 除外後出率(IN加重): {filteredPayoutRate.toFixed(1)}% [全体比 {survivorBias.payoutDiff > 0 ? `+${survivorBias.payoutDiff}` : survivorBias.payoutDiff}pt]）
-                  </span>
-                </div>
-              </div>
+            {availableSpecsForStore.length > 1 && (
+              <button
+                type="button"
+                onClick={() => setIsMultiModelModalOpen(true)}
+                className="px-3 py-1.5 text-xs font-bold bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-300 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
+              >
+                <Boxes className="w-3.5 h-3.5 text-emerald-600" />
+                <span>同じ店の複数機種をまとめて推定 ({availableSpecsForStore.length}機種)</span>
+              </button>
             )}
           </div>
 
-          {/* KPI サマリーバー */}
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
-            <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-100">
-              <span className="text-slate-500 block text-[11px]">推定全体平均設定</span>
-              <span className="text-base font-black text-emerald-700 mt-0.5 block font-mono">
-                設定 {estimationResult.expectedSettingOverall}
-              </span>
-            </div>
-
-            <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-100">
-              <span className="text-slate-500 block text-[11px]">高設定(設定{highThreshold}+)比率</span>
-              <span className="text-base font-black text-indigo-700 mt-0.5 block font-mono">
-                {estimationResult.highSettingOverallRate}%
-              </span>
-            </div>
-
-            <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-100">
-              <span className="text-slate-500 block text-[11px]">使用台日数 / 全台日数</span>
-              <div className="mt-0.5 flex items-baseline gap-1">
-                <span className="text-base font-black text-slate-900 font-mono">
-                  {estimationResult.evaluatedRecords}
-                </span>
-                <span className="text-[11px] text-slate-500">
-                  / {estimationResult.totalRecords}台日
+          {/* 4つの主要KPIカード */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+            {/* 1. 全体出率 (IN加重) */}
+            <div className="p-3 bg-gradient-to-br from-emerald-50/80 to-teal-50/50 rounded-xl border border-emerald-200/80 shadow-2xs">
+              <span className="text-[11px] text-emerald-800 font-bold block">全体出率 (IN加重)</span>
+              <div className="mt-1 flex items-baseline gap-1">
+                <span className="text-xl font-black text-emerald-800 font-mono">
+                  {rangeEstimationResult.overallPayoutRate.toFixed(2)}%
                 </span>
               </div>
-              {estimationResult.excludedCount > 0 && (
-                <span className="text-[10px] text-amber-600 block mt-0.5">
-                  ({estimationResult.excludedCount}台日 &lt;{minGames}G除外)
+              <div className="text-[10px] text-emerald-700 font-mono mt-0.5">
+                95%区間: [{rangeEstimationResult.payoutCi95[0].toFixed(2)}% 〜 {rangeEstimationResult.payoutCi95[1].toFixed(2)}%]
+              </div>
+              <span className="text-[9px] text-emerald-600/80 block mt-0.5">※全台日使用 (足切りなし)</span>
+            </div>
+
+            {/* 2. 平均設定相当 */}
+            <div className="p-3 bg-gradient-to-br from-indigo-50/80 to-blue-50/50 rounded-xl border border-indigo-200/80 shadow-2xs">
+              <span className="text-[11px] text-indigo-800 font-bold block">平均設定相当</span>
+              <div className="mt-1 flex items-baseline gap-1">
+                <span className="text-xl font-black text-indigo-800 font-mono">
+                  設定 {rangeEstimationResult.settingEquivalent.toFixed(2)}
                 </span>
-              )}
+              </div>
+              <div className="text-[10px] text-indigo-700 font-mono mt-0.5">
+                95%区間: [設定 {rangeEstimationResult.settingCi95[0].toFixed(2)} 〜 設定 {rangeEstimationResult.settingCi95[1].toFixed(2)}]
+              </div>
+              <span className="text-[9px] text-indigo-600/80 block mt-0.5">※公表機械割テーブルから線形補間</span>
             </div>
 
-            <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-100">
-              <span className="text-slate-500 block text-[11px]">平均回転数</span>
-              <span className="text-base font-black text-slate-900 mt-0.5 block font-mono">
-                {estimationResult.meanGames.toLocaleString()} G
+            {/* 3. 高設定(H以上)割合の範囲 */}
+            <div className="p-3 bg-gradient-to-br from-amber-50/80 to-orange-50/50 rounded-xl border border-amber-200/80 shadow-2xs">
+              <span className="text-[11px] text-amber-900 font-bold block">
+                高設定(設定{highThreshold}+)の割合の範囲
               </span>
-            </div>
-
-            <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-100">
-              <span className="text-slate-500 block text-[11px]">推定 σ (分散係数)</span>
-              <span className="text-base font-black text-slate-800 mt-0.5 block font-mono">
-                {estimationResult.sigma}
-              </span>
-            </div>
-
-            <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-100">
-              <span className="text-slate-500 block text-[11px]">判別力指標 D</span>
-              <div className="mt-0.5 flex items-center gap-1.5">
-                <span className="text-base font-black text-slate-900 font-mono">
-                  {estimationResult.discriminability}
+              <div className="mt-1 flex items-baseline gap-1">
+                <span className="text-xl font-black text-amber-900 font-mono">
+                  {rangeEstimationResult.pointRange.minRate}% 〜 {rangeEstimationResult.pointRange.maxRate}%
                 </span>
-                {estimationResult.isLowDiscriminability ? (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-amber-100 text-amber-800">
-                    参考値
-                  </span>
-                ) : (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-emerald-100 text-emerald-800">
-                    良好
-                  </span>
-                )}
+              </div>
+              <div className="text-[10px] text-amber-800 font-mono mt-0.5">
+                出率95%区間加味: {rangeEstimationResult.ciRange.minRate}% 〜 {rangeEstimationResult.ciRange.maxRate}%
+              </div>
+              <span className="text-[9px] text-amber-700/80 block mt-0.5">※理論的に取りうる上下限</span>
+            </div>
+
+            {/* 4. 観測データ規模 */}
+            <div className="p-3 bg-gradient-to-br from-slate-50 to-gray-50 rounded-xl border border-slate-200 shadow-2xs">
+              <span className="text-[11px] text-slate-700 font-bold block">観測データ規模</span>
+              <div className="mt-1 flex items-baseline gap-1">
+                <span className="text-lg font-black text-slate-900 font-mono">
+                  {rangeEstimationResult.uniqueMachineCount}台
+                </span>
+                <span className="text-slate-400 font-mono">/</span>
+                <span className="text-sm font-bold text-slate-700 font-mono">
+                  {rangeEstimationResult.totalMachineDays}台日
+                </span>
+              </div>
+              <div className="text-[10px] text-slate-600 font-mono mt-0.5">
+                総G数: {rangeEstimationResult.totalGames.toLocaleString()} G
+              </div>
+              <div className="text-[10px] font-mono font-bold mt-0.5 text-slate-700">
+                総差枚: {rangeEstimationResult.totalDiff >= 0 ? `+${rangeEstimationResult.totalDiff.toLocaleString()}` : rangeEstimationResult.totalDiff.toLocaleString()}枚
               </div>
             </div>
           </div>
 
-          {/* 警告メッセージ表示 (EM推定が不安定なときだけ、最上部に1行の案内を情報の色で表示) */}
-          {isEmUnstable && (
-            <div className="p-2.5 bg-sky-50 border border-sky-200 rounded-lg flex items-center gap-2 text-xs text-sky-900">
-              <Info className="w-4 h-4 text-sky-600 shrink-0" />
-              <span>設定の分布グラフ（EM推定）は参考値です。上の出率ベースの範囲を主にご覧ください</span>
+          {/* 横棒の範囲グラフ */}
+          <div className="p-4 bg-slate-50/50 border border-slate-200 rounded-xl space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h5 className="font-bold text-slate-900 text-xs flex items-center gap-1">
+                  <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>高設定（設定{highThreshold}以上）の割合の範囲</span>
+                  <HelpTooltip text="出率だけでは高設定割合を1点に確定できないため、理論的に取りうる範囲で表示しています。濃い帯は点推定出率での範囲、薄い背景帯は出率の95%信頼区間を加味した範囲です。" />
+                </h5>
+              </div>
+              <div className="text-[11px] font-mono text-right">
+                <span className="text-slate-500">点推定範囲: </span>
+                <strong className="text-emerald-700 font-black">
+                  {rangeEstimationResult.pointRange.minRate}% 〜 {rangeEstimationResult.pointRange.maxRate}%
+                </strong>
+              </div>
             </div>
-          )}
 
-          {nonEmWarnings.length > 0 && (
-            <div className="space-y-1.5">
-              {nonEmWarnings.map((warn, wIdx) => (
+            {/* 横棒範囲バー */}
+            <div className="space-y-1.5 pt-1">
+              <div className="relative h-8 bg-slate-100 rounded-lg overflow-hidden border border-slate-200">
+                {/* 出率95%区間を加味した範囲 */}
                 <div
-                  key={wIdx}
-                  className="px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 flex items-center gap-2"
+                  className="absolute top-0 bottom-0 bg-emerald-100/70 border-x border-emerald-300 transition-all duration-300"
+                  style={{
+                    left: `${Math.max(0, rangeEstimationResult.ciRange.minRate)}%`,
+                    width: `${Math.max(1, rangeEstimationResult.ciRange.maxRate - rangeEstimationResult.ciRange.minRate)}%`,
+                  }}
+                  title={`出率95%区間加味: ${rangeEstimationResult.ciRange.minRate}% 〜 ${rangeEstimationResult.ciRange.maxRate}%`}
+                />
+
+                {/* 点推定出率での範囲 */}
+                <div
+                  className="absolute top-1 bottom-1 bg-gradient-to-r from-emerald-500 to-teal-600 rounded-md shadow-xs transition-all duration-300 flex items-center justify-between px-2 text-white text-[10px] font-mono font-bold"
+                  style={{
+                    left: `${Math.max(0, rangeEstimationResult.pointRange.minRate)}%`,
+                    width: `${Math.max(2, rangeEstimationResult.pointRange.maxRate - rangeEstimationResult.pointRange.minRate)}%`,
+                  }}
+                  title={`点推定範囲: ${rangeEstimationResult.pointRange.minRate}% 〜 ${rangeEstimationResult.pointRange.maxRate}%`}
                 >
-                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>{warn}</span>
+                  <span>{rangeEstimationResult.pointRange.minRate}%</span>
+                  <span>{rangeEstimationResult.pointRange.maxRate}%</span>
                 </div>
-              ))}
+              </div>
+
+              {/* 軸目盛り */}
+              <div className="flex justify-between text-[10px] font-mono text-slate-400 px-0.5">
+                <span>0%</span>
+                <span>25%</span>
+                <span>50%</span>
+                <span>75%</span>
+                <span>100%</span>
+              </div>
             </div>
-          )}
-
-          {/* タブ切り替えバー */}
-          <div className="flex border-b border-slate-200 gap-1 text-xs">
-            <button
-              type="button"
-              onClick={() => setActiveTab('distribution')}
-              className={`pb-2.5 px-3.5 font-bold border-b-2 transition-all cursor-pointer flex items-center gap-1.5 ${
-                activeTab === 'distribution'
-                  ? 'border-emerald-600 text-emerald-700'
-                  : 'border-transparent text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              <BarChart3 className="w-3.5 h-3.5" />
-              <span>設定の推定分布 (95%区間)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveTab('trends')}
-              className={`pb-2.5 px-3.5 font-bold border-b-2 transition-all cursor-pointer flex items-center gap-1.5 ${
-                activeTab === 'trends'
-                  ? 'border-emerald-600 text-emerald-700'
-                  : 'border-transparent text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              <Calendar className="w-3.5 h-3.5" />
-              <span>日別推移 (100%積み上げ)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveTab('conditions')}
-              className={`pb-2.5 px-3.5 font-bold border-b-2 transition-all cursor-pointer flex items-center gap-1.5 ${
-                activeTab === 'conditions'
-                  ? 'border-emerald-600 text-emerald-700'
-                  : 'border-transparent text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              <Target className="w-3.5 h-3.5" />
-              <span>条件別の比較 (特日・曜日・末尾)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveTab('machines')}
-              className={`pb-2.5 px-3.5 font-bold border-b-2 transition-all cursor-pointer flex items-center gap-1.5 ${
-                activeTab === 'machines'
-                  ? 'border-emerald-600 text-emerald-700'
-                  : 'border-transparent text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              <Hash className="w-3.5 h-3.5" />
-              <span>台番別サマリーテーブル ({sortedMachineSummaries.length}台)</span>
-            </button>
           </div>
 
-          {/* タブ 1: 設定の推定分布 (95%信頼区間棒グラフ) */}
-          {activeTab === 'distribution' && (
-            <div className="bg-white p-4 sm:p-5 rounded-xl border border-slate-200 shadow-2xs space-y-4">
-              {/* 4. データ量・形式に関する情報案内 */}
-              {dataVolumeWarnings.warnings.length > 0 && (
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5 text-xs text-slate-800">
-                  <div className="font-bold flex items-center gap-1.5 text-slate-900">
-                    <Info className="w-4 h-4 text-sky-600 shrink-0" />
-                    <span>データ量・設置台数に関するご案内 ({dataVolumeWarnings.warnings.length}件)</span>
-                  </div>
-                  <ul className="list-disc list-inside space-y-1 text-slate-700 text-[11px] leading-relaxed">
-                    {dataVolumeWarnings.warnings.map((w, idx) => (
-                      <li key={idx}>
-                        <strong>{w.title}:</strong> {w.message}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+          {/* 1行の注意文 (プロンプト36要件1) */}
+          <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg flex items-center gap-2 text-xs text-slate-600">
+            <Info className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>出率からの統計的な推定です。実際の設定を示すものではありません。回転数が少ない台は判別力が低くなります。</span>
+          </div>
+        </div>
+      ) : null}
 
-              {/* 【新しい主表示: 出率のみで計算できるもの】 */}
-              {rangeEstimationResult && (
-                <div className="space-y-4">
-                  {/* ヘッダー & 複数機種まとめ推定ボタン */}
-                  <div className="flex flex-wrap items-center justify-between gap-2.5 pb-2 border-b border-slate-100">
-                    <div>
-                      <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
-                        <Target className="w-4 h-4 text-emerald-600" />
-                        <span>出率ベース設定範囲 & 平均設定相当（主推定）</span>
-                      </h4>
-                      <p className="text-[11px] text-slate-500 mt-0.5">
-                        全台日のプレイ量加重出率と公表機械割テーブルから、偏りなく設定範囲と平均設定相当を算出
-                      </p>
-                    </div>
-
-                    {availableSpecsForStore.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => setIsMultiModelModalOpen(true)}
-                        className="px-3 py-1.5 text-xs font-bold bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-300 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
-                      >
-                        <Boxes className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>同じ店の複数機種をまとめて推定 ({availableSpecsForStore.length}機種)</span>
-                      </button>
-                    )}
-                  </div>
-
-                  {/* 4つの主要KPIカード */}
-                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-                    {/* 1. 全体出率 (IN加重) */}
-                    <div className="p-3 bg-gradient-to-br from-emerald-50/80 to-teal-50/50 rounded-xl border border-emerald-200/80 shadow-2xs">
-                      <span className="text-[11px] text-emerald-800 font-bold block">全体出率 (IN加重)</span>
-                      <div className="mt-1 flex items-baseline gap-1">
-                        <span className="text-xl font-black text-emerald-800 font-mono">
-                          {rangeEstimationResult.overallPayoutRate.toFixed(2)}%
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-emerald-700 font-mono mt-0.5">
-                        95%区間: [{rangeEstimationResult.payoutCi95[0].toFixed(2)}% 〜 {rangeEstimationResult.payoutCi95[1].toFixed(2)}%]
-                      </div>
-                      <span className="text-[9px] text-emerald-600/80 block mt-0.5">※全台日使用 (足切りなし)</span>
-                    </div>
-
-                    {/* 2. 平均設定相当 */}
-                    <div className="p-3 bg-gradient-to-br from-indigo-50/80 to-blue-50/50 rounded-xl border border-indigo-200/80 shadow-2xs">
-                      <span className="text-[11px] text-indigo-800 font-bold block">平均設定相当</span>
-                      <div className="mt-1 flex items-baseline gap-1">
-                        <span className="text-xl font-black text-indigo-800 font-mono">
-                          設定 {rangeEstimationResult.settingEquivalent.toFixed(2)}
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-indigo-700 font-mono mt-0.5">
-                        95%区間: [設定 {rangeEstimationResult.settingCi95[0].toFixed(2)} 〜 設定 {rangeEstimationResult.settingCi95[1].toFixed(2)}]
-                      </div>
-                      <span className="text-[9px] text-indigo-600/80 block mt-0.5">※公表機械割テーブルから線形補間</span>
-                    </div>
-
-                    {/* 3. 高設定(H以上)割合の範囲 */}
-                    <div className="p-3 bg-gradient-to-br from-amber-50/80 to-orange-50/50 rounded-xl border border-amber-200/80 shadow-2xs">
-                      <span className="text-[11px] text-amber-900 font-bold block">
-                        高設定(設定{highThreshold}+)の割合の範囲
-                      </span>
-                      <div className="mt-1 flex items-baseline gap-1">
-                        <span className="text-xl font-black text-amber-900 font-mono">
-                          {rangeEstimationResult.pointRange.minRate}% 〜 {rangeEstimationResult.pointRange.maxRate}%
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-amber-800 font-mono mt-0.5">
-                        出率95%区間加味: {rangeEstimationResult.ciRange.minRate}% 〜 {rangeEstimationResult.ciRange.maxRate}%
-                      </div>
-                      <span className="text-[9px] text-amber-700/80 block mt-0.5">※理論的に取りうる上下限</span>
-                    </div>
-
-                    {/* 4. 観測データ規模 */}
-                    <div className="p-3 bg-gradient-to-br from-slate-50 to-gray-50 rounded-xl border border-slate-200 shadow-2xs">
-                      <span className="text-[11px] text-slate-700 font-bold block">観測データ規模</span>
-                      <div className="mt-1 flex items-baseline gap-1">
-                        <span className="text-lg font-black text-slate-900 font-mono">
-                          {rangeEstimationResult.uniqueMachineCount}台
-                        </span>
-                        <span className="text-slate-400 font-mono">/</span>
-                        <span className="text-sm font-bold text-slate-700 font-mono">
-                          {rangeEstimationResult.totalMachineDays}台日
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-slate-600 font-mono mt-0.5">
-                        総G数: {rangeEstimationResult.totalGames.toLocaleString()} G
-                      </div>
-                      <div className="text-[10px] font-mono font-bold mt-0.5 text-slate-700">
-                        総差枚: {rangeEstimationResult.totalDiff >= 0 ? `+${rangeEstimationResult.totalDiff.toLocaleString()}` : rangeEstimationResult.totalDiff.toLocaleString()}枚
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Requirement 12 注意文 */}
-                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-700 flex items-start gap-2">
-                    <Info className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                    <span className="leading-relaxed">
-                      全体出率は、打った量で重み付けしているため、設定の良い台ほど長く打たれる分、やや高設定寄りに出ます。
-                    </span>
-                  </div>
-
-                  {/* Requirement 6 横棒の範囲グラフ */}
-                  <div className="p-4 bg-white border border-slate-200 rounded-xl shadow-2xs space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <h5 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
-                          <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>高設定（設定{highThreshold}以上）の割合の範囲</span>
-                        </h5>
-                        <p className="text-[11px] text-slate-500 mt-0.5">
-                          出率だけでは、高設定の割合を1つの値に決められません（範囲で表示）
-                        </p>
-                      </div>
-                      <div className="text-[11px] font-mono text-right">
-                        <span className="text-slate-500">点推定での理論範囲: </span>
-                        <strong className="text-emerald-700 font-black">
-                          {rangeEstimationResult.pointRange.minRate}% 〜 {rangeEstimationResult.pointRange.maxRate}%
-                        </strong>
-                      </div>
-                    </div>
-
-                    {/* 横棒範囲バー */}
-                    <div className="space-y-1.5 pt-1">
-                      <div className="relative h-8 bg-slate-100 rounded-lg overflow-hidden border border-slate-200">
-                        {/* 出率95%区間を加味した範囲 (背景の薄い帯) */}
-                        <div
-                          className="absolute top-0 bottom-0 bg-emerald-100/70 border-x border-emerald-300 transition-all duration-300"
-                          style={{
-                            left: `${Math.max(0, rangeEstimationResult.ciRange.minRate)}%`,
-                            width: `${Math.max(1, rangeEstimationResult.ciRange.maxRate - rangeEstimationResult.ciRange.minRate)}%`,
-                          }}
-                          title={`出率95%区間加味: ${rangeEstimationResult.ciRange.minRate}% 〜 ${rangeEstimationResult.ciRange.maxRate}%`}
-                        />
-
-                        {/* 点推定出率での範囲 (前面の濃い帯) */}
-                        <div
-                          className="absolute top-1 bottom-1 bg-gradient-to-r from-emerald-500 to-teal-600 rounded-md shadow-xs transition-all duration-300 flex items-center justify-between px-2 text-white text-[10px] font-mono font-bold"
-                          style={{
-                            left: `${Math.max(0, rangeEstimationResult.pointRange.minRate)}%`,
-                            width: `${Math.max(2, rangeEstimationResult.pointRange.maxRate - rangeEstimationResult.pointRange.minRate)}%`,
-                          }}
-                          title={`点推定範囲: ${rangeEstimationResult.pointRange.minRate}% 〜 ${rangeEstimationResult.pointRange.maxRate}%`}
-                        >
-                          <span>{rangeEstimationResult.pointRange.minRate}%</span>
-                          <span>{rangeEstimationResult.pointRange.maxRate}%</span>
-                        </div>
-                      </div>
-
-                      {/* 軸目盛り */}
-                      <div className="flex justify-between text-[10px] font-mono text-slate-400 px-0.5">
-                        <span>0%</span>
-                        <span>25%</span>
-                        <span>50%</span>
-                        <span>75%</span>
-                        <span>100%</span>
-                      </div>
-                    </div>
-
-                    <div className="text-[11px] text-slate-500 space-y-0.5 pt-1">
-                      <div>
-                        ・<span className="font-bold text-slate-700">濃い緑の帯:</span> 点推定出率 ({rangeEstimationResult.overallPayoutRate.toFixed(2)}%) に基づく理論範囲（{rangeEstimationResult.pointRange.minRate}% 〜 {rangeEstimationResult.pointRange.maxRate}%）
-                      </div>
-                      <div>
-                        ・<span className="font-bold text-slate-700">薄い緑の背景帯:</span> 出率の95%信頼区間（{rangeEstimationResult.payoutCi95[0].toFixed(2)}%〜{rangeEstimationResult.payoutCi95[1].toFixed(2)}%）まで加味した範囲（{rangeEstimationResult.ciRange.minRate}% 〜 {rangeEstimationResult.ciRange.maxRate}%）
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Requirement 8 区間の幅の見通し */}
-                  <div className="p-3.5 bg-emerald-50/70 border border-emerald-200/80 rounded-xl text-xs text-emerald-950 flex items-start gap-2.5">
-                    <Clock className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-                    <div className="space-y-0.5 leading-relaxed">
-                      <span className="font-bold text-emerald-900">区間の幅（推定精度）の見通し:</span>
-                      <p className="text-[11px] text-emerald-800">
-                        区間の幅を半分にするには、総G数があと <strong>{(rangeEstimationResult.additionalGamesForHalfCi / 10000).toFixed(1)}万G</strong>（約 <strong>{rangeEstimationResult.additionalDaysForHalfCi}日分</strong>）必要です。
-                      </p>
-                      <span className="text-[10px] text-emerald-700/80 block">
-                        ※ 統計誤差が総G数の平方根に反比例するため、精度を2倍（区間幅を半分）にするには現在の4倍のプレイ量が必要です。
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Requirement 7 期間別の表示テーブル */}
-                  <div className="p-3.5 bg-white border border-slate-200 rounded-xl shadow-2xs space-y-2.5 text-xs">
-                    <div className="flex items-center justify-between">
-                      <h5 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
-                        <Calendar className="w-3.5 h-3.5 text-indigo-600" />
-                        <span>期間別の推定内訳 (全体・直近30日・月別)</span>
-                      </h5>
-                      <span className="text-[11px] text-slate-400 font-sans">
-                        ※ 台日が少ない期間は区間が広くなります
-                      </span>
-                    </div>
-
-                    <div className="overflow-x-auto border border-slate-200 rounded-lg">
-                      <table className="w-full text-xs text-left">
-                        <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
-                          <tr>
-                            <th className="py-2 px-3">期間</th>
-                            <th className="py-2 px-2.5 text-right">台日数 / 総G数</th>
-                            <th className="py-2 px-3 text-right">全体出率 (95%区間)</th>
-                            <th className="py-2 px-3 text-right">平均設定相当 (95%区間)</th>
-                            <th className="py-2 px-3 text-center">高設定割合の範囲</th>
-                            <th className="py-2 px-3 text-center">精度状況</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 font-mono">
-                          {rangeEstimationResult.periodBreakdowns.map((p) => (
-                            <tr key={p.periodKey} className="hover:bg-slate-50/70">
-                              <td className="py-2 px-3 font-sans font-bold text-slate-800">
-                                {p.periodLabel}
-                              </td>
-                              <td className="py-2 px-2.5 text-right text-slate-700 font-sans">
-                                <span className="font-bold font-mono">{p.machineDays}台日</span>
-                                <span className="text-[10px] text-slate-400 block font-mono">
-                                  {p.totalGames.toLocaleString()}G
-                                </span>
-                              </td>
-                              <td className="py-2 px-3 text-right">
-                                <span className="font-bold text-slate-900 font-mono">
-                                  {p.payoutRate.toFixed(2)}%
-                                </span>
-                                <span className="text-[10px] text-slate-500 block font-mono">
-                                  [{p.payoutCi95[0].toFixed(2)}% 〜 {p.payoutCi95[1].toFixed(2)}%]
-                                </span>
-                              </td>
-                              <td className="py-2 px-3 text-right">
-                                <span className="font-bold text-indigo-700 font-mono">
-                                  設定 {p.settingEquivalent.toFixed(2)}
-                                </span>
-                                <span className="text-[10px] text-slate-500 block font-mono">
-                                  [設定 {p.settingCi95[0].toFixed(2)} 〜 {p.settingCi95[1].toFixed(2)}]
-                                </span>
-                              </td>
-                              <td className="py-2 px-3 text-center">
-                                <span className="font-bold text-amber-800 font-mono">
-                                  {p.pointRange.minRate}% 〜 {p.pointRange.maxRate}%
-                                </span>
-                                <span className="text-[10px] text-slate-400 block font-sans">
-                                  (95%加味: {p.ciRange.minRate}% 〜 {p.ciRange.maxRate}%)
-                                </span>
-                              </td>
-                              <td className="py-2 px-3 text-center font-sans">
-                                {p.isWideCi ? (
-                                  <span className="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-bold">
-                                    区間広め (台日少)
-                                  </span>
-                                ) : (
-                                  <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded font-bold">
-                                    良好
-                                  </span>
-                                )}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-
-                  {/* Requirement 7 台別移動出率推移 (固定高さ h-72 の囲み) */}
-                  {rangeEstimationResult.rollingTrends7d.length > 0 && (
-                    <div className="p-3.5 bg-white border border-slate-200 rounded-xl shadow-2xs space-y-2.5 text-xs">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <h5 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
-                            <TrendingUp className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>台別の移動IN加重出率推移 ({rollingTrendMode === '7d' ? '7日' : '30日'}移動)</span>
-                          </h5>
-                          <p className="text-[11px] text-slate-500 mt-0.5">
-                            各台の稼働推移と、機種公表機械割（破線）を同時にプロット
-                          </p>
-                        </div>
-
-                        <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 gap-0.5 text-xs">
-                          <button
-                            type="button"
-                            onClick={() => setRollingTrendMode('7d')}
-                            className={`px-2.5 py-0.5 rounded text-xs font-bold transition-all cursor-pointer ${
-                              rollingTrendMode === '7d'
-                                ? 'bg-emerald-600 text-white shadow-2xs'
-                                : 'text-slate-600 hover:text-slate-900'
-                            }`}
-                          >
-                            7日移動平均
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setRollingTrendMode('30d')}
-                            className={`px-2.5 py-0.5 rounded text-xs font-bold transition-all cursor-pointer ${
-                              rollingTrendMode === '30d'
-                                ? 'bg-emerald-600 text-white shadow-2xs'
-                                : 'text-slate-600 hover:text-slate-900'
-                            }`}
-                          >
-                            30日移動平均
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* 固定高さ h-72 の囲み */}
-                      <div className="h-72 w-full border border-slate-100 rounded-lg p-2 bg-slate-50/30">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <LineChart
-                            data={
-                              rollingTrendMode === '7d'
-                                ? rangeEstimationResult.rollingTrends7d
-                                : rangeEstimationResult.rollingTrends30d
-                            }
-                            margin={{ top: 10, right: 25, left: -5, bottom: 10 }}
-                          >
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                            <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#64748b' }} minTickGap={25} />
-                            <YAxis
-                              unit="%"
-                              domain={['auto', 'auto']}
-                              tick={{ fontSize: 10, fill: '#64748b' }}
-                            />
-                            <Tooltip
-                              formatter={(val: any, name: any) => [`${val}%`, String(name).replace('machine_', '#')]}
-                            />
-                            <Legend
-                              formatter={(val: any) => String(val).replace('machine_', '#')}
-                              wrapperStyle={{ fontSize: 11 }}
-                            />
-
-                            {/* 設定ごとの公表機械割の水平基準線 */}
-                            {currentSpec.settings.map((s, idx) => (
-                              <ReferenceLine
-                                key={s.label}
-                                y={s.payoutRate}
-                                stroke={SETTING_COLORS[s.label] || '#94a3b8'}
-                                strokeDasharray="4 4"
-                                strokeWidth={1}
-                                label={{
-                                  value: `${s.label} (${s.payoutRate}%)`,
-                                  position: idx % 2 === 0 ? 'insideRight' : 'insideLeft',
-                                  fill: SETTING_COLORS[s.label] || '#64748b',
-                                  fontSize: 9,
-                                }}
-                              />
-                            ))}
-
-                            {/* 各台の折れ線 */}
-                            {rangeEstimationResult.machineNums.map((mNum, idx) => (
-                              <Line
-                                key={mNum}
-                                type="monotone"
-                                dataKey={`machine_${mNum}`}
-                                name={`#${mNum}`}
-                                stroke={MACHINE_LINE_COLORS[idx % MACHINE_LINE_COLORS.length]}
-                                strokeWidth={2}
-                                dot={false}
-                                connectNulls
-                              />
-                            ))}
-                          </LineChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* 【Requirement 11: 既存EM推定を参考（モデル推定）として折りたたみ表示】 */}
-              <details className="border border-slate-200 rounded-xl bg-slate-50/50 p-4 transition-all space-y-4">
-                <summary className="font-bold text-slate-800 text-xs cursor-pointer flex items-center justify-between select-none">
-                  <div className="flex items-center gap-2">
-                    <Cpu className="w-4 h-4 text-slate-600" />
-                    <span>参考（モデル推定: EMアルゴリズムによる設定混合比率 π）</span>
-                  </div>
-                  <span className="text-[11px] text-slate-500 font-normal">
-                    クリックで開閉
-                  </span>
-                </summary>
-
-              {/* 5. 回転数と出率の依存の診断 */}
-              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5 text-xs">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="font-bold text-slate-800 flex items-center gap-1.5">
-                    <BarChart3 className="w-3.5 h-3.5 text-indigo-600" />
-                    <span>回転数と出率の依存診断 (区間別出率 & Spearman相関)</span>
-                  </div>
-                  <div className="text-[11px] font-mono">
-                    <span className="text-slate-500">回転数×出率相関 (Spearman): </span>
-                    <strong
-                      className={`text-xs ${
-                        rotationDependency.isDependent
-                          ? 'text-rose-600 font-black'
-                          : 'text-slate-800 font-bold'
-                      }`}
-                    >
-                      {rotationDependency.spearmanCorr !== null
-                        ? `${rotationDependency.spearmanCorr >= 0 ? '+' : ''}${rotationDependency.spearmanCorr.toFixed(2)}`
-                        : 'データ不足'}
-                    </strong>
-                  </div>
-                </div>
-
-                {rotationDependency.isDependent && (
-                  <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-900 text-xs flex items-start gap-2 font-bold leading-relaxed">
-                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                    <div>
-                      <span>回転数が結果に依存しています（勝つ台ほど回ります）。出率だけの推定は高設定側に偏ります。</span>
-                      <span className="text-[11px] text-rose-700 block font-normal mt-0.5">
-                        （Spearman相関係数: {rotationDependency.spearmanCorr !== null ? (rotationDependency.spearmanCorr >= 0 ? '+' : '') + rotationDependency.spearmanCorr.toFixed(2) : ''} ≧ 0.2）
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {/* 区間別テーブル */}
-                <div className="overflow-x-auto border border-slate-200 rounded-lg bg-white">
-                  <table className="w-full text-xs text-left">
-                    <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
-                      <tr>
-                        <th className="py-1.5 px-3">回転数区間</th>
-                        <th className="py-1.5 px-2.5 text-right">台日数</th>
-                        <th className="py-1.5 px-2.5 text-right">構成比</th>
-                        <th className="py-1.5 px-3 text-right">出率 (IN加重)</th>
-                        <th className="py-1.5 px-3 text-right">平均差枚</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 font-mono">
-                      {rotationDependency.intervals.map((inv) => (
-                        <tr key={inv.label} className="hover:bg-slate-50/80">
-                          <td className="py-1.5 px-3 font-sans font-bold text-slate-800">
-                            {inv.label}
-                          </td>
-                          <td className="py-1.5 px-2.5 text-right text-slate-700">
-                            {inv.count} 台日
-                          </td>
-                          <td className="py-1.5 px-2.5 text-right text-slate-500">
-                            {inv.ratio}%
-                          </td>
-                          <td
-                            className={`py-1.5 px-3 text-right font-black ${
-                              inv.count === 0
-                                ? 'text-slate-400'
-                                : inv.inWeightedPayoutRate >= 102
-                                ? 'text-rose-600'
-                                : inv.inWeightedPayoutRate <= 97
-                                ? 'text-blue-600'
-                                : 'text-slate-900'
-                            }`}
-                          >
-                            {inv.count > 0 ? `${inv.inWeightedPayoutRate.toFixed(1)}%` : '-'}
-                          </td>
-                          <td
-                            className={`py-1.5 px-3 text-right ${
-                              inv.count > 0 && inv.totalDiff > 0 ? 'text-blue-600 font-bold' : 'text-slate-600'
-                            }`}
-                          >
-                            {inv.count > 0 ? `${Math.round(inv.totalDiff / inv.count)}枚` : '-'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+      {/* 4. 「詳細」の折りたたみ群（既定はすべて閉じる） */}
+      <div className="space-y-3">
+        {/* 詳細 1: 仕様テーブルの登録・編集とJSONインポート */}
+        <details className="border border-slate-200 rounded-xl bg-white p-4 group transition-all" data-testid="foldable-specs">
+          <summary className="font-bold text-slate-800 text-xs sm:text-sm cursor-pointer flex items-center justify-between select-none list-none">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Settings2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span className="font-bold">仕様テーブルの登録・編集とJSONインポート:</span>
+              <span className="text-xs font-normal text-slate-600">
+                {currentSpec
+                  ? `${currentSpec.modelName}（${currentSpec.settings.length}段階仕様 登録済み）`
+                  : '未登録（仕様値の登録が必要です）'}
+              </span>
+            </div>
+            <span className="text-xs text-slate-400 group-open:hidden shrink-0 ml-2">詳細を開く ▼</span>
+          </summary>
+          <div className="mt-4 pt-3 border-t border-slate-100 space-y-3 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-xs font-bold text-slate-800">
+                {currentSpec ? `機種: ${currentSpec.modelName}` : '仕様テーブル未登録'}
               </div>
-
-              {/* 2. 感度分析（条件比較）テーブル: 標準表示（常時表示） */}
-              {(sensitivityResult || isSensitivityCalculating) && (
-                <div id="sensitivity-table" className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5 text-xs">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <h5 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
-                        <Scale className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>条件別 感度分析（標準表示: 回転数 × 重み 15条件）</span>
-                        {isSensitivityCalculating && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 animate-pulse">
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                            <span>計算中（{sensitivityProgress ?? 0}/15条件）</span>
-                          </span>
-                        )}
-                      </h5>
-                      <p className="text-[11px] text-slate-500 mt-0.5">
-                        最小回転数（0〜5,000G）と回転数重み（そのまま / 上限3,000G / 一定）による高設定(4+)比率の変動
-                      </p>
-                    </div>
-                    {sensitivityResult && (
-                      <div className="text-[11px]">
-                        <span className="text-slate-500">高設定比率の変動幅: </span>
-                        <strong
-                          className={`font-mono font-black text-xs ${
-                            sensitivityResult.isHighSensitivity ? 'text-rose-600' : 'text-emerald-700'
-                          }`}
-                        >
-                          {sensitivityResult.rateSpread}ポイント
-                        </strong>
-                        <span className="text-slate-400 font-sans ml-1">
-                          ({sensitivityResult.minHighSettingRate}% 〜 {sensitivityResult.maxHighSettingRate}%)
-                        </span>
-                      </div>
-                    )}
-                  </div>
-
-                  {sensitivityResult ? (
-                    <div className="overflow-x-auto border border-slate-200 rounded-lg bg-white">
-                      <table className="w-full text-xs text-left">
-                        <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
-                          <tr>
-                            <th className="py-2 px-3">条件 (最小G数)</th>
-                            <th className="py-2 px-2.5 text-right">使用台日数</th>
-                            <th className="py-2 px-2.5 text-right">除外台日数</th>
-                            <th className="py-2 px-2.5 text-right">出率 (IN加重)</th>
-                            <th className="py-2 px-3 text-right bg-indigo-50/50 text-indigo-900">
-                              重み: そのまま
-                            </th>
-                            <th className="py-2 px-3 text-right bg-blue-50/50 text-blue-900">
-                              重み: 上限3,000G
-                            </th>
-                            <th className="py-2 px-3 text-right bg-teal-50/50 text-teal-900">
-                              重み: 一定
-                            </th>
-                            <th className="py-2 px-2 text-center w-20">適用</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 font-mono">
-                          {sensitivityResult.rows.map((row) => {
-                            const isCurrent = minGames === row.minGames;
-                            return (
-                              <tr
-                                key={row.minGames}
-                                className={`hover:bg-slate-50/80 transition-colors ${
-                                  isCurrent ? 'bg-emerald-50/70 font-bold' : ''
-                                }`}
-                              >
-                                <td className="py-2 px-3 font-sans font-bold text-slate-900">
-                                  <span className="flex items-center gap-1">
-                                    {isCurrent && (
-                                      <Check className="w-3 h-3 text-emerald-600 shrink-0" />
-                                    )}
-                                    <span>{row.label}</span>
-                                  </span>
-                                </td>
-                                <td className="py-2 px-2.5 text-right text-slate-700">
-                                  {row.evaluatedRecords} 台日
-                                </td>
-                                <td className="py-2 px-2.5 text-right text-slate-500">
-                                  {row.excludedCount} 台日
-                                </td>
-                                <td className="py-2 px-2.5 text-right font-black text-slate-900">
-                                  {row.inWeightedPayoutRate.toFixed(1)}%
-                                </td>
-                                <td className="py-2 px-3 text-right font-black text-indigo-700 bg-indigo-50/20">
-                                  {row.rateRaw.toFixed(1)}%
-                                </td>
-                                <td className="py-2 px-3 text-right font-black text-blue-700 bg-blue-50/20">
-                                  {row.rateCap3000.toFixed(1)}%
-                                </td>
-                                <td className="py-2 px-3 text-right font-black text-teal-700 bg-teal-50/20">
-                                  {row.rateConstant.toFixed(1)}%
-                                </td>
-                                <td className="py-2 px-2 text-center font-sans">
-                                  <button
-                                    type="button"
-                                    disabled={isCurrent}
-                                    onClick={() => handleSelectPreset(row.minGames)}
-                                    className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
-                                      isCurrent
-                                        ? 'bg-emerald-100 text-emerald-800 cursor-default'
-                                        : 'bg-slate-100 hover:bg-emerald-600 hover:text-white text-slate-700 border border-slate-300'
-                                    }`}
-                                  >
-                                    {isCurrent ? '選択中' : '選択'}
-                                  </button>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <div className="p-5 bg-white border border-slate-200 rounded-lg text-center space-y-2">
-                      <div className="flex items-center justify-center gap-2 text-slate-700 font-bold">
-                        <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
-                        <span>感度分析を計算中（{sensitivityProgress ?? 0}/15条件）</span>
-                      </div>
-                      <div className="w-48 mx-auto bg-slate-200 rounded-full h-1.5 overflow-hidden">
-                        <div
-                          className="bg-emerald-500 h-1.5 rounded-full transition-all duration-150"
-                          style={{ width: `${Math.round(((sensitivityProgress ?? 0) / 15) * 100)}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {/* 高設定比率の最大と最小の差が30ポイント以上のときの警告 */}
-                  {!isSensitivityCalculating && sensitivityResult?.isHighSensitivity && (
-                    <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg flex items-start gap-2 text-xs text-rose-900">
-                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                      <div className="leading-relaxed">
-                        <span className="font-bold">
-                          条件によって結果が大きく変わります。この機種の設定分布は、参考程度にしてください。
-                        </span>
-                        <span className="text-[11px] text-rose-700 block mt-0.5">
-                          （高設定比率の最小: {sensitivityResult.minHighSettingRate}% 〜 最大: {sensitivityResult.maxHighSettingRate}%、変動幅: {sensitivityResult.rateSpread}ポイント）
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* 3. 推定の安定性の判定: 30pt以上の場合はグラフを薄く表示し推定不可警告 */}
-              {!isSensitivityCalculating && sensitivityResult?.isHighSensitivity && (
-                <div className="p-3.5 bg-rose-50 border-2 border-rose-300 rounded-xl space-y-1.5 text-xs text-rose-900">
-                  <div className="flex items-center gap-2 font-black text-sm text-rose-900">
-                    <AlertTriangle className="w-4.5 h-4.5 text-rose-600 shrink-0" />
-                    <span>このデータでは設定の分布を推定できません（条件によって結果が大きく変わります）</span>
-                  </div>
-                  <p className="text-[11px] text-rose-800 leading-relaxed">
-                    回転数足切り条件（0G〜5,000G）や重み付け方式によって、高設定(設定{highThreshold}+)の比率が
-                    <strong> {sensitivityResult.minHighSettingRate}% 〜 {sensitivityResult.maxHighSettingRate}% </strong>
-                    （変動幅 <strong>{sensitivityResult.rateSpread}ポイント</strong> ≧ 30pt）と極端に変動しています。
-                    回転数と出率に強い相関があるため、特定条件での断定的な分布は算出できません。下のグラフは参考として薄く表示しています。
-                  </p>
-                </div>
-              )}
-
-              {/* EM推定の警告（設定の分布が平ら…／σを固定した区間です…／再標本の◯%が反復上限で終了…） */}
-              {emWarnings.length > 0 && (
-                <div className="space-y-1.5">
-                  {emWarnings.map((warn, wIdx) => (
-                    <div
-                      key={wIdx}
-                      className="px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 flex items-center gap-2"
-                    >
-                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                      <span>{warn}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="font-bold text-slate-900 text-sm">
-                    設定混合比率 π の推定値と95%ブートストラップ区間
-                  </h4>
-                  <p className="text-[11px] text-slate-500 mt-0.5">
-                    日単位ブロックブートストラップ（ブロック長7日、{BOOTSTRAP_REPS}回）による95%信頼区間。※ σを固定した区間です。台数が少ないと実際より狭く出ることがあります。
-                  </p>
-                </div>
-                <span className="text-[11px] font-mono bg-slate-100 text-slate-700 px-2.5 py-1 rounded-lg">
-                  適用スペック: {currentSpec.modelName} (
-                  {currentSpec.source ? `出典: ${currentSpec.source}` : 'カスタム登録'})
-                </span>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleOpenEditSpec}
+                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 transition-colors cursor-pointer flex items-center gap-1.5"
+                >
+                  <Settings2 className="w-3.5 h-3.5 text-slate-600" />
+                  <span>{currentSpec ? '仕様テーブル確認・編集' : '仕様テーブルを登録'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsPasteJsonModalOpen(true)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 transition-colors cursor-pointer flex items-center gap-1.5"
+                  title="JSONテキスト直接貼り付けまたは複数機種一括インポート"
+                >
+                  <Upload className="w-3.5 h-3.5 text-emerald-700" />
+                  <span>JSON一括取り込み</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportJson}
+                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 transition-colors cursor-pointer flex items-center gap-1.5"
+                >
+                  <Download className="w-3.5 h-3.5 text-slate-600" />
+                  <span>JSONエクスポート</span>
+                </button>
               </div>
+            </div>
 
-              {/* 棒グラフ (感度30pt以上の場合は薄く表示) */}
-              <div
-                className={`h-64 w-full transition-opacity ${
-                  !isSensitivityCalculating && sensitivityResult?.isHighSensitivity
-                    ? 'opacity-30 grayscale pointer-events-none select-none relative'
-                    : ''
-                }`}
-              >
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={estimationResult.distribution.map((d) => {
-                      const ciInfo = formatSettingCi95(d.ci95, d.isCiCalculated);
-                      return {
-                        label: `${d.label} (${d.payoutRate}%)`,
-                        shortLabel: d.label,
-                        ratioPct: Number((d.proportion * 100).toFixed(1)),
-                        ciText: ciInfo.text,
-                        payoutRate: d.payoutRate,
-                      };
-                    })}
-                    margin={{ top: 15, right: 20, left: 0, bottom: 20 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="shortLabel" tick={{ fontSize: 12, fill: '#475569' }} />
-                    <YAxis
-                      unit="%"
-                      domain={[0, 'auto']}
-                      tick={{ fontSize: 11, fill: '#64748b' }}
-                    />
-                    <Tooltip
-                      formatter={(val: any, _name: any, item: any) => [
-                        `${val}% (95%区間: ${item.payload.ciText})`,
-                        `推定比率 [機械割 ${item.payload.payoutRate}%]`,
-                      ]}
-                    />
-                    <Bar dataKey="ratioPct" name="推定比率" radius={[4, 4, 0, 0]}>
-                      {estimationResult.distribution.map((d, index) => (
-                        <Cell
-                          key={`cell-${index}`}
-                          fill={SETTING_COLORS[d.label] || DEFAULT_FALLBACK_COLORS[index % 8]}
-                        />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-
-              {/* 設定別詳細表 */}
-              <div className="overflow-x-auto">
+            {currentSpec ? (
+              <div className="overflow-x-auto border border-slate-200 rounded-lg">
                 <table className="w-full text-xs text-left">
                   <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
                     <tr>
                       <th className="py-2 px-3">設定</th>
-                      <th className="py-2 px-3 text-right">公表機械割</th>
-                      <th className="py-2 px-3 text-right">推定混合比率 (π)</th>
-                      <th className="py-2 px-3 text-center">95% 信頼区間</th>
-                      <th className="py-2 px-3 text-right">推定台日数換算</th>
+                      <th className="py-2 px-3 text-right">公表機械割（出率%）</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 font-mono">
-                    {estimationResult.distribution.map((d) => {
-                      const estMachines = (
-                        d.proportion * estimationResult.evaluatedRecords
-                      ).toFixed(1);
-                      const ciInfo = formatSettingCi95(d.ci95, d.isCiCalculated);
-                      return (
-                        <tr key={d.label} className="hover:bg-slate-50/70">
-                          <td className="py-2 px-3 font-sans font-bold text-slate-900 flex items-center gap-1.5">
-                            <span
-                              className="w-2.5 h-2.5 rounded-full inline-block"
-                              style={{
-                                backgroundColor:
-                                  SETTING_COLORS[d.label] || DEFAULT_FALLBACK_COLORS[0],
-                              }}
-                            />
-                            <span>{d.label}</span>
-                          </td>
-                          <td className="py-2 px-3 text-right text-slate-800">
-                            {d.payoutRate.toFixed(1)}%
-                          </td>
-                          <td className="py-2 px-3 text-right font-black text-emerald-700">
-                            {(d.proportion * 100).toFixed(1)}%
-                          </td>
-                          <td className="py-2 px-3 text-center text-slate-500">
-                            <div>{ciInfo.text}</div>
-                            {ciInfo.isBoundary && ciInfo.boundaryNote && (
-                              <div className="text-[10px] text-slate-400 font-sans mt-0.5">
-                                ※ {ciInfo.boundaryNote}
-                              </div>
-                            )}
-                          </td>
-                          <td className="py-2 px-3 text-right text-slate-700">
-                            約 {estMachines} 台日
-                          </td>
-                        </tr>
-                      );
-                    })}
+                    {currentSpec.settings.map((s) => (
+                      <tr key={s.label} className="hover:bg-slate-50">
+                        <td className="py-2 px-3 font-sans font-bold text-slate-900">{s.label}</td>
+                        <td className="py-2 px-3 text-right font-bold text-slate-800">{s.payoutRate}%</td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
-                <div className="text-[11px] text-slate-500 mt-2 px-1 space-y-1">
-                  <div>※ σを固定した区間です。台数が少ないと実際より狭く出ることがあります。</div>
-                  {estimationResult.bootstrapNote && (
-                    <div className="text-amber-700 font-medium">
-                      ※ {estimationResult.bootstrapNote}
-                    </div>
-                  )}
-                  {estimationResult.pointEstimateReachedMaxIterations && (
-                    <div className="text-amber-800 font-medium">
-                      ※ 設定の分布が平らで、推定が定まりにくいデータです。上の『範囲』を参考にしてください。
-                    </div>
-                  )}
-                </div>
               </div>
-            </details>
+            ) : (
+              <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs">
+                仕様値が登録されていません。上記ボタンから登録してください。
+              </div>
+            )}
           </div>
-        )}
+        </details>
 
-          {/* タブ 2: 日別推移 (100%積み上げ棒グラフ) */}
-          {activeTab === 'trends' && (
-            <div className="bg-white p-4 sm:p-5 rounded-xl border border-slate-200 shadow-2xs space-y-4">
-              <div>
-                <h4 className="font-bold text-slate-900 text-sm">
-                  日別 推定設定分布の推移 (100%積み上げ)
-                </h4>
-                <p className="text-[11px] text-slate-500 mt-0.5">
-                  各営業日の対象台における設定別事後確率の積み上げ構成比
-                </p>
+        {/* 詳細 2: EM推定（参考）と感度分析 */}
+        <details className="border border-slate-200 rounded-xl bg-white p-4 group transition-all" data-testid="foldable-em">
+          <summary className="font-bold text-slate-800 text-xs sm:text-sm cursor-pointer flex items-center justify-between select-none list-none">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Cpu className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span className="font-bold">EM推定（参考）と感度分析:</span>
+              <span className="text-xs font-normal text-slate-600">
+                {isEmUnstable
+                  ? '推定は不安定です（参考値）'
+                  : `推定平均設定 ${estimationResult.expectedSettingOverall} / 高設定(${highThreshold}+)比率 ${estimationResult.highSettingOverallRate}%（安定）`}
+              </span>
+            </div>
+            <span className="text-xs text-slate-400 group-open:hidden shrink-0 ml-2">詳細を開く ▼</span>
+          </summary>
+          <div className="mt-4 pt-3 border-t border-slate-100 space-y-4 text-xs">
+            {/* 最小回転数フィルター & 回転数重みコントロールバー */}
+            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                {/* 最小回転数セレクター & プリセット */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <Sliders className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>最小回転数:</span>
+                  </span>
+
+                  <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 gap-0.5">
+                    {PRESET_MIN_GAMES.map((p) => {
+                      const isSelected = minGames === p.value;
+                      return (
+                        <button
+                          key={p.value}
+                          type="button"
+                          onClick={() => handleSelectPreset(p.value)}
+                          className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                            isSelected
+                              ? 'bg-emerald-600 text-white shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                          }`}
+                        >
+                          {p.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex items-center gap-1 text-xs">
+                    <input
+                      type="number"
+                      min={0}
+                      step={500}
+                      value={inputMinGames}
+                      onChange={(e) => setInputMinGames(e.target.value)}
+                      onBlur={handleApplyInput}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleApplyInput();
+                      }}
+                      className="w-20 px-2 py-1 bg-white border border-slate-300 rounded font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      placeholder="0"
+                      title="数値を入力しEnterまたは枠外クリックで適用"
+                    />
+                    <span className="text-slate-600">G以上</span>
+                    <span className="text-[11px] text-slate-400 font-sans ml-0.5">
+                      (既定 0G: 全台日)
+                    </span>
+                  </div>
+                </div>
+
+                {/* 回転数重み付けセレクター */}
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="font-bold text-slate-700">回転数の重み:</span>
+                  <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 gap-0.5">
+                    {[
+                      { value: 'raw' as GameWeightMode, label: 'そのまま' },
+                      { value: 'cap3000' as GameWeightMode, label: '上限3,000G' },
+                      { value: 'constant' as GameWeightMode, label: '一定' },
+                    ].map((w) => {
+                      const isSelected = gameWeightMode === w.value;
+                      return (
+                        <button
+                          key={w.value}
+                          type="button"
+                          onClick={() => setGameWeightMode(w.value)}
+                          className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                            isSelected
+                              ? 'bg-indigo-600 text-white shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                          }`}
+                        >
+                          {w.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 条件別感度比較へのショートカットボタン */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = document.getElementById('sensitivity-table');
+                    el?.scrollIntoView({ behavior: 'smooth' });
+                  }}
+                  className="px-2.5 py-1 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-all cursor-pointer flex items-center gap-1 ml-auto"
+                  title="最小回転数や重み付けの違いによる推定感度を比較"
+                >
+                  <Scale className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>条件を変えて比べる</span>
+                </button>
               </div>
 
-              {estimationResult.dailyTrends.length > 0 ? (
-                <div className="h-72 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={estimationResult.dailyTrends.map((dt) => {
-                        const row: Record<string, any> = {
-                          date: dt.date.slice(5),
-                          fullDate: dt.date,
-                          dayOfWeek: dt.dayOfWeek,
-                          isSpecialDay: dt.isSpecialDay,
-                          avgPayout: dt.avgPayoutRate,
-                        };
-                        for (const s of currentSpec.settings) {
-                          row[s.label] = Number(((dt.distribution[s.label] || 0) * 100).toFixed(1));
-                        }
-                        return row;
-                      })}
-                      margin={{ top: 15, right: 10, left: 0, bottom: 20 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                      <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#475569' }} />
-                      <YAxis
-                        unit="%"
-                        domain={[0, 100]}
-                        tick={{ fontSize: 11, fill: '#64748b' }}
-                      />
-                      <Tooltip
-                        formatter={(val: any, name: any) => [`${val}%`, name]}
-                        labelFormatter={(lbl: any, payload: any) => {
-                          const p = payload?.[0]?.payload;
-                          if (!p) return lbl;
-                          return `${p.fullDate} (${p.dayOfWeek}) ${
-                            p.isSpecialDay ? '★特日' : ''
-                          } / 実績出率: ${p.avgPayout}%`;
-                        }}
-                      />
-                      <Legend />
-                      {currentSpec.settings.map((s, sIdx) => (
-                        <Bar
-                          key={s.label}
-                          dataKey={s.label}
-                          stackId="a"
-                          fill={SETTING_COLORS[s.label] || DEFAULT_FALLBACK_COLORS[sIdx % 8]}
+              {/* 絞り込み結果サマリー & 出率 (IN加重) */}
+              <div className="pt-2 border-t border-slate-200/60 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-bold text-slate-800">
+                    使用 {estimationResult.evaluatedRecords}台日 / 全 {estimationResult.totalRecords}台日
+                    {estimationResult.excludedCount > 0 ? (
+                      <span className="text-amber-700 ml-1 font-normal">
+                        （除外 {estimationResult.excludedCount}台日）
+                      </span>
+                    ) : (
+                      <span className="text-emerald-700 ml-1 font-normal">
+                        （全台日を使用）
+                      </span>
+                    )}
+                  </span>
+                  <span className="text-slate-300">|</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-600">
+                      全体出率 (IN加重):{' '}
+                      <strong className="text-slate-900 font-mono">
+                        {overallPayoutRate.toFixed(1)}%
+                      </strong>
+                    </span>
+                    <span className="text-slate-400">→</span>
+                    <span className="text-slate-600">
+                      絞り後出率 (IN加重):{' '}
+                      <strong className="text-slate-900 font-mono">
+                        {filteredPayoutRate.toFixed(1)}%
+                      </strong>
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
+                  className={`px-2 py-0.5 rounded text-[11px] font-bold border transition-colors cursor-pointer flex items-center gap-1 ${
+                    showAdvancedOptions
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                      : 'bg-white hover:bg-slate-100 text-slate-600 border-slate-300'
+                  }`}
+                  title="推定パラメータ詳細設定"
+                >
+                  <SlidersHorizontal className="w-3 h-3" />
+                  <span>詳細オプション</span>
+                </button>
+              </div>
+
+              {/* 詳細オプションドロワー */}
+              {showAdvancedOptions && (
+                <div className="p-3 bg-white border border-slate-200 rounded-lg text-xs space-y-3 mt-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-slate-600 mb-1 font-medium">高設定判定閾値</label>
+                      <select
+                        value={highThreshold}
+                        onChange={(e) => setHighThreshold(parseInt(e.target.value, 10))}
+                        className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-slate-900 font-bold"
+                      >
+                        <option value={4}>設定4以上 (既定)</option>
+                        <option value={5}>設定5以上</option>
+                        <option value={6}>設定6のみ</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-600 mb-1 font-medium">出率算出基準</label>
+                      <label className="flex items-center gap-2 cursor-pointer mt-1 text-slate-800">
+                        <input
+                          type="checkbox"
+                          checked={useRecordedPayout}
+                          onChange={(e) => setUseRecordedPayout(e.target.checked)}
+                          className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                         />
-                      ))}
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              ) : (
-                <div className="p-8 text-center text-xs text-slate-500">
-                  日別データがありません。
+                        <span>データ記載の出率を使用</span>
+                      </label>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
-          )}
 
-          {/* タブ 3: 条件別の比較 (特日・曜日・末尾) */}
-          {activeTab === 'conditions' && (
-            <div className="bg-white p-4 sm:p-5 rounded-xl border border-slate-200 shadow-2xs space-y-4">
-              <div>
-                <h4 className="font-bold text-slate-900 text-sm">
-                  条件別 高設定（設定{highThreshold}以上）推定比率の比較と有意差判定
-                </h4>
-                <p className="text-[11px] text-slate-500 mt-0.5">
-                  特日・通常日、曜日別、台番号末尾別の高設定投入傾向と統計的有意性検定（2標本割合Z検定）
-                </p>
-              </div>
-
-              {estimationResult.conditionComparisons.length > 0 ? (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs text-left">
-                    <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
-                      <tr>
-                        <th className="py-2.5 px-3">分析軸 / 条件</th>
-                        <th className="py-2.5 px-3 text-right">根拠台数</th>
-                        <th className="py-2.5 px-3 text-right">設定{highThreshold}+ 比率</th>
-                        <th className="py-2.5 px-3 text-right">対照群比率</th>
-                        <th className="py-2.5 px-3 text-right">差分</th>
-                        <th className="py-2.5 px-3 text-center">統計的有意性判定</th>
-                        <th className="py-2.5 px-3 text-right">p値</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 font-mono">
-                      {estimationResult.conditionComparisons.map((c, idx) => {
-                        return (
-                          <tr key={idx} className="hover:bg-slate-50/70">
-                            <td className="py-2.5 px-3 font-sans font-bold text-slate-900">
-                              <span className="text-[10px] text-slate-500 font-normal block">
-                                {c.conditionType === 'special_day'
-                                  ? 'イベント日比較'
-                                  : c.conditionType === 'day_of_week'
-                                  ? '曜日別傾向'
-                                  : '台番号末尾'}
-                              </span>
-                              <span>{c.categoryLabel}</span>
-                            </td>
-                            <td className="py-2.5 px-3 text-right text-slate-700">
-                              {c.machineDaysCount} 台
-                            </td>
-                            <td className="py-2.5 px-3 text-right font-black text-indigo-700">
-                              {c.highSettingRate}%
-                            </td>
-                            <td className="py-2.5 px-3 text-right text-slate-500">
-                              {c.baselineRate}%
-                            </td>
-                            <td className="py-2.5 px-3 text-right font-bold">
-                              <span
-                                className={
-                                  c.diffRate > 0
-                                    ? 'text-emerald-600'
-                                    : c.diffRate < 0
-                                    ? 'text-rose-600'
-                                    : 'text-slate-500'
-                                }
-                              >
-                                {c.diffRate > 0 ? `+${c.diffRate}` : c.diffRate}%
-                              </span>
-                            </td>
-                            <td className="py-2.5 px-3 text-center">
-                              {c.isSignificant ? (
-                                <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-bold bg-blue-100 text-blue-800 border border-blue-200">
-                                  <CheckCircle2 className="w-3 h-3 text-blue-600" />
-                                  <span>{c.significanceLabel}</span>
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-medium bg-slate-100 text-slate-600">
-                                  <span>{c.significanceLabel}</span>
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-2.5 px-3 text-right text-slate-400">
-                              p = {c.pValue}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="p-8 text-center text-xs text-slate-500">
-                  条件別比較を行うのに十分なデータがありません。
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* タブ 4: 台番テーブル */}
-          {activeTab === 'machines' && (
-            <div className="bg-white p-4 sm:p-5 rounded-xl border border-slate-200 shadow-2xs space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div>
-                  <h4 className="font-bold text-slate-900 text-sm">
-                    台番号ごとの推定平均設定・高設定確率一覧
-                  </h4>
-                  <p className="text-[11px] text-slate-500 mt-0.5">
-                    台ごとの稼働日数、実績出率、最尤設定および設定{highThreshold}以上の期待確率
-                  </p>
-                </div>
-                <span className="text-xs text-slate-500">
-                  ヘッダークリックで昇順/降順ソート
+            {/* KPI サマリーバー */}
+            <div className="bg-slate-50/50 p-3.5 rounded-xl border border-slate-200 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 text-xs">
+              <div className="p-2 bg-white rounded-lg border border-slate-100 shadow-2xs">
+                <span className="text-slate-500 block text-[11px]">推定全体平均設定</span>
+                <span className="text-base font-black text-emerald-700 mt-0.5 block font-mono">
+                  設定 {estimationResult.expectedSettingOverall}
                 </span>
               </div>
 
-              <div className="overflow-x-auto">
+              <div className="p-2 bg-white rounded-lg border border-slate-100 shadow-2xs">
+                <span className="text-slate-500 block text-[11px]">高設定(設定{highThreshold}+)比率</span>
+                <span className="text-base font-black text-indigo-700 mt-0.5 block font-mono">
+                  {estimationResult.highSettingOverallRate}%
+                </span>
+              </div>
+
+              <div className="p-2 bg-white rounded-lg border border-slate-100 shadow-2xs">
+                <span className="text-slate-500 block text-[11px]">使用台日数 / 全台日数</span>
+                <div className="mt-0.5 flex items-baseline gap-1">
+                  <span className="text-base font-black text-slate-900 font-mono">
+                    {estimationResult.evaluatedRecords}
+                  </span>
+                  <span className="text-[11px] text-slate-500 font-mono">
+                    / {estimationResult.totalRecords}台日
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-2 bg-white rounded-lg border border-slate-100 shadow-2xs">
+                <span className="text-slate-500 block text-[11px]">平均回転数</span>
+                <span className="text-base font-black text-slate-900 mt-0.5 block font-mono">
+                  {estimationResult.meanGames.toLocaleString()} G
+                </span>
+              </div>
+
+              <div className="p-2 bg-white rounded-lg border border-slate-100 shadow-2xs">
+                <span className="text-slate-500 block text-[11px]">推定 σ (分散係数)</span>
+                <span className="text-base font-black text-slate-800 mt-0.5 block font-mono">
+                  {estimationResult.sigma}
+                </span>
+              </div>
+
+              <div className="p-2 bg-white rounded-lg border border-slate-100 shadow-2xs">
+                <span className="text-slate-500 block text-[11px]">判別力指標 D</span>
+                <div className="mt-0.5 flex items-center gap-1.5">
+                  <span className="text-base font-black text-slate-900 font-mono">
+                    {estimationResult.discriminability}
+                  </span>
+                  {estimationResult.isLowDiscriminability ? (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-amber-100 text-amber-800">
+                      参考値
+                    </span>
+                  ) : (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-emerald-100 text-emerald-800">
+                      良好
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* EM推定の警告（設定の分布が平ら…／σを固定した区間です…／再標本の◯%が反復上限で終了…） */}
+            {emWarnings.length > 0 && (
+              <div className="space-y-1.5">
+                {emWarnings.map((warn, wIdx) => (
+                  <div
+                    key={wIdx}
+                    className="px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 flex items-center gap-2"
+                  >
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>{warn}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* 見出し */}
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1">
+                  <span>設定混合比率 π の推定値と95%ブートストラップ区間</span>
+                  <HelpTooltip text="日単位ブロックブートストラップ（ブロック長7日、500回）による95%信頼区間です。σを固定した区間のため、台数が少ないと実際より狭く出ることがあります。" />
+                </h4>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  日単位ブロックブートストラップ（ブロック長7日、{BOOTSTRAP_REPS}回）による95%信頼区間。※ σを固定した区間です。台数が少ないと実際より狭く出ることがあります。
+                </p>
+              </div>
+              {currentSpec && (
+                <span className="text-[11px] font-mono bg-slate-100 text-slate-700 px-2.5 py-1 rounded-lg">
+                  適用スペック: {currentSpec.modelName} (
+                  {currentSpec.source ? `出典: ${currentSpec.source}` : 'カスタム登録'})
+                </span>
+              )}
+            </div>
+
+            {/* 棒グラフ */}
+            <div
+              className={`h-64 w-full transition-opacity ${
+                !isSensitivityCalculating && sensitivityResult?.isHighSensitivity
+                  ? 'opacity-30 grayscale pointer-events-none select-none relative'
+                  : ''
+              }`}
+            >
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={estimationResult.distribution.map((d) => {
+                    const ciInfo = formatSettingCi95(d.ci95, d.isCiCalculated);
+                    return {
+                      label: `${d.label} (${d.payoutRate}%)`,
+                      shortLabel: d.label,
+                      ratioPct: Number((d.proportion * 100).toFixed(1)),
+                      ciText: ciInfo.text,
+                      payoutRate: d.payoutRate,
+                    };
+                  })}
+                  margin={{ top: 15, right: 20, left: 0, bottom: 20 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="shortLabel" tick={{ fontSize: 12, fill: '#475569' }} />
+                  <YAxis
+                    unit="%"
+                    domain={[0, 'auto']}
+                    tick={{ fontSize: 11, fill: '#64748b' }}
+                  />
+                  <Tooltip
+                    formatter={(val: any, _name: any, item: any) => [
+                      `${val}% (95%区間: ${item.payload.ciText})`,
+                      `推定比率 [機械割 ${item.payload.payoutRate}%]`,
+                    ]}
+                  />
+                  <Bar dataKey="ratioPct" name="推定比率" radius={[4, 4, 0, 0]}>
+                    {estimationResult.distribution.map((d, index) => (
+                      <Cell
+                        key={`cell-${index}`}
+                        fill={SETTING_COLORS[d.label] || DEFAULT_FALLBACK_COLORS[index % 8]}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* 設定別詳細表 */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
+                  <tr>
+                    <th className="py-2 px-3">設定</th>
+                    <th className="py-2 px-3 text-right">公表機械割</th>
+                    <th className="py-2 px-3 text-right">推定混合比率 (π)</th>
+                    <th className="py-2 px-3 text-center">95% 信頼区間</th>
+                    <th className="py-2 px-3 text-right">推定台日数換算</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-mono">
+                  {estimationResult.distribution.map((d) => {
+                    const estMachines = (
+                      d.proportion * estimationResult.evaluatedRecords
+                    ).toFixed(1);
+                    const ciInfo = formatSettingCi95(d.ci95, d.isCiCalculated);
+                    return (
+                      <tr key={d.label} className="hover:bg-slate-50/70">
+                        <td className="py-2 px-3 font-sans font-bold text-slate-900 flex items-center gap-1.5">
+                          <span
+                            className="w-2.5 h-2.5 rounded-full inline-block"
+                            style={{
+                              backgroundColor:
+                                SETTING_COLORS[d.label] || DEFAULT_FALLBACK_COLORS[0],
+                            }}
+                          />
+                          <span>{d.label}</span>
+                        </td>
+                        <td className="py-2 px-3 text-right text-slate-800">
+                          {d.payoutRate.toFixed(1)}%
+                        </td>
+                        <td className="py-2 px-3 text-right font-black text-emerald-700">
+                          {(d.proportion * 100).toFixed(1)}%
+                        </td>
+                        <td className="py-2 px-3 text-center text-slate-500">
+                          <div>{ciInfo.text}</div>
+                          {ciInfo.isBoundary && ciInfo.boundaryNote && (
+                            <div className="text-[10px] text-slate-400 font-sans mt-0.5">
+                              ※ {ciInfo.boundaryNote}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-2 px-3 text-right text-slate-700">
+                          約 {estMachines} 台日
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <div className="text-[11px] text-slate-500 mt-2 px-1 space-y-1">
+                <div>※ σを固定した区間です。台数が少ないと実際より狭く出ることがあります。</div>
+                {estimationResult.bootstrapNote && (
+                  <div className="text-amber-700 font-medium">
+                    ※ {estimationResult.bootstrapNote}
+                  </div>
+                )}
+                {estimationResult.pointEstimateReachedMaxIterations && (
+                  <div className="text-amber-800 font-medium">
+                    ※ 設定の分布が平らで、推定が定まりにくいデータです。上の『範囲』を参考にしてください。
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 回転数と出率の依存の診断 */}
+            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                  <BarChart3 className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>回転数と出率の依存診断 (区間別出率 & Spearman相関)</span>
+                  <HelpTooltip text="勝つ台ほど長く打たれ回転数が増加するバイアスを、Spearmanの順位相関係数で診断します。" />
+                </div>
+                <div className="text-[11px] font-mono">
+                  <span className="text-slate-500">Spearman相関: </span>
+                  <strong
+                    className={`text-xs ${
+                      rotationDependency.isDependent
+                        ? 'text-rose-600 font-black'
+                        : 'text-slate-800 font-bold'
+                    }`}
+                  >
+                    {rotationDependency.spearmanCorr !== null
+                      ? `${rotationDependency.spearmanCorr >= 0 ? '+' : ''}${rotationDependency.spearmanCorr.toFixed(2)}`
+                      : 'データ不足'}
+                  </strong>
+                </div>
+              </div>
+
+              {/* 区間別テーブル */}
+              <div className="overflow-x-auto border border-slate-200 rounded-lg bg-white">
                 <table className="w-full text-xs text-left">
-                  <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200 select-none cursor-pointer">
+                  <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
                     <tr>
-                      <th
-                        className="py-2 px-3"
-                        onClick={() => {
-                          setTableSortField('machineNum');
-                          setTableSortAsc(!tableSortAsc);
-                        }}
-                      >
-                        台番号
-                      </th>
-                      <th
-                        className="py-2 px-3 text-right"
-                        onClick={() => {
-                          setTableSortField('daysCount');
-                          setTableSortAsc(!tableSortAsc);
-                        }}
-                      >
-                        根拠日数
-                      </th>
-                      <th
-                        className="py-2 px-3 text-right"
-                        onClick={() => {
-                          setTableSortField('avgGames');
-                          setTableSortAsc(!tableSortAsc);
-                        }}
-                      >
-                        平均G数
-                      </th>
-                      <th
-                        className="py-2 px-3 text-right"
-                        onClick={() => {
-                          setTableSortField('avgPayoutRate');
-                          setTableSortAsc(!tableSortAsc);
-                        }}
-                      >
-                        実績出率
-                      </th>
-                      <th
-                        className="py-2 px-3 text-center"
-                      >
-                        最尤設定
-                      </th>
-                      <th
-                        className="py-2 px-3 text-right"
-                        onClick={() => {
-                          setTableSortField('expectedSetting');
-                          setTableSortAsc(!tableSortAsc);
-                        }}
-                      >
-                        推定平均設定
-                      </th>
-                      <th
-                        className="py-2 px-3 text-right"
-                        onClick={() => {
-                          setTableSortField('highSettingProb');
-                          setTableSortAsc(!tableSortAsc);
-                        }}
-                      >
-                        設定{highThreshold}+ 確率
-                      </th>
+                      <th className="py-1.5 px-3">回転数区間</th>
+                      <th className="py-1.5 px-2.5 text-right">台日数</th>
+                      <th className="py-1.5 px-2.5 text-right">構成比</th>
+                      <th className="py-1.5 px-3 text-right">出率 (IN加重)</th>
+                      <th className="py-1.5 px-3 text-right">平均差枚</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 font-mono">
-                    {sortedMachineSummaries.map((m) => {
-                      const highProbPct = Number((m.highSettingProb * 100).toFixed(1));
-                      return (
-                        <tr key={m.machineNum} className="hover:bg-slate-50">
-                          <td className="py-2 px-3 font-bold text-slate-900">
-                            #{m.machineNum}
+                    {rotationDependency.intervals.map((inv) => (
+                      <tr key={inv.label} className="hover:bg-slate-50/80">
+                        <td className="py-1.5 px-3 font-sans font-bold text-slate-800">
+                          {inv.label}
+                        </td>
+                        <td className="py-1.5 px-2.5 text-right text-slate-700">
+                          {inv.count} 台日
+                        </td>
+                        <td className="py-1.5 px-2.5 text-right text-slate-500">
+                          {inv.ratio}%
+                        </td>
+                        <td
+                          className={`py-1.5 px-3 text-right font-black ${
+                            inv.count === 0
+                              ? 'text-slate-400'
+                              : inv.inWeightedPayoutRate >= 102
+                              ? 'text-rose-600'
+                              : inv.inWeightedPayoutRate <= 97
+                              ? 'text-blue-600'
+                              : 'text-slate-900'
+                          }`}
+                        >
+                          {inv.count > 0 ? `${inv.inWeightedPayoutRate.toFixed(1)}%` : '-'}
+                        </td>
+                        <td
+                          className={`py-1.5 px-3 text-right ${
+                            inv.count > 0 && inv.totalDiff > 0 ? 'text-blue-600 font-bold' : 'text-slate-600'
+                          }`}
+                        >
+                          {inv.count > 0 ? `${Math.round(inv.totalDiff / inv.count)}枚` : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* 感度分析（条件比較）テーブル */}
+            {(sensitivityResult || isSensitivityCalculating) && (
+              <div id="sensitivity-table" className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h5 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                      <Scale className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>条件別 感度分析（回転数 × 重み 15条件）</span>
+                      <HelpTooltip text="最小回転数（0〜5,000G）と回転数重み（そのまま/上限3,000G/一定）の15条件による高設定比率の変動幅を検証します。" />
+                      {isSensitivityCalculating && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 animate-pulse">
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                          <span>計算中（{sensitivityProgress ?? 0}/15条件）</span>
+                        </span>
+                      )}
+                    </h5>
+                  </div>
+                  {sensitivityResult && (
+                    <div className="text-[11px]">
+                      <span className="text-slate-500">高設定比率の変動幅: </span>
+                      <strong
+                        className={`font-mono font-black text-xs ${
+                          sensitivityResult.isHighSensitivity ? 'text-rose-600' : 'text-emerald-700'
+                        }`}
+                      >
+                        {sensitivityResult.rateSpread}ポイント
+                      </strong>
+                      <span className="text-slate-400 font-sans ml-1">
+                        ({sensitivityResult.minHighSettingRate}% 〜 {sensitivityResult.maxHighSettingRate}%)
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {sensitivityResult ? (
+                  <div className="overflow-x-auto border border-slate-200 rounded-lg bg-white">
+                    <table className="w-full text-xs text-left">
+                      <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
+                        <tr>
+                          <th className="py-2 px-3">条件 (最小G数)</th>
+                          <th className="py-2 px-2.5 text-right">使用台日数</th>
+                          <th className="py-2 px-2.5 text-right">除外台日数</th>
+                          <th className="py-2 px-2.5 text-right">出率 (IN加重)</th>
+                          <th className="py-2 px-3 text-right bg-indigo-50/50 text-indigo-900">
+                            重み: そのまま
+                          </th>
+                          <th className="py-2 px-3 text-right bg-blue-50/50 text-blue-900">
+                            重み: 上限3,000G
+                          </th>
+                          <th className="py-2 px-3 text-right bg-teal-50/50 text-teal-900">
+                            重み: 一定
+                          </th>
+                          <th className="py-2 px-2 text-center w-20">適用</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-mono">
+                        {sensitivityResult.rows.map((row) => {
+                          const isCurrent = minGames === row.minGames;
+                          return (
+                            <tr
+                              key={row.minGames}
+                              className={`hover:bg-slate-50/80 transition-colors ${
+                                isCurrent ? 'bg-emerald-50/70 font-bold' : ''
+                              }`}
+                            >
+                              <td className="py-2 px-3 font-sans font-bold text-slate-900">
+                                <span className="flex items-center gap-1">
+                                  {isCurrent && (
+                                    <Check className="w-3 h-3 text-emerald-600 shrink-0" />
+                                  )}
+                                  <span>{row.label}</span>
+                                </span>
+                              </td>
+                              <td className="py-2 px-2.5 text-right text-slate-700">
+                                {row.evaluatedRecords} 台日
+                              </td>
+                              <td className="py-2 px-2.5 text-right text-slate-500">
+                                {row.excludedCount} 台日
+                              </td>
+                              <td className="py-2 px-2.5 text-right font-black text-slate-900">
+                                {row.inWeightedPayoutRate.toFixed(1)}%
+                              </td>
+                              <td className="py-2 px-3 text-right font-black text-indigo-700 bg-indigo-50/20">
+                                {row.rateRaw.toFixed(1)}%
+                              </td>
+                              <td className="py-2 px-3 text-right font-black text-blue-700 bg-blue-50/20">
+                                {row.rateCap3000.toFixed(1)}%
+                              </td>
+                              <td className="py-2 px-3 text-right font-black text-teal-700 bg-teal-50/20">
+                                {row.rateConstant.toFixed(1)}%
+                              </td>
+                              <td className="py-2 px-2 text-center font-sans">
+                                <button
+                                  type="button"
+                                  disabled={isCurrent}
+                                  onClick={() => handleSelectPreset(row.minGames)}
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                                    isCurrent
+                                      ? 'bg-emerald-100 text-emerald-800 cursor-default'
+                                      : 'bg-slate-100 hover:bg-emerald-600 hover:text-white text-slate-700 border border-slate-300'
+                                  }`}
+                                >
+                                  {isCurrent ? '選択中' : '選択'}
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </div>
+        </details>
+
+        {/* 詳細 3: 日別推移 */}
+        <details className="border border-slate-200 rounded-xl bg-white p-4 group transition-all" data-testid="foldable-trends">
+          <summary className="font-bold text-slate-800 text-xs sm:text-sm cursor-pointer flex items-center justify-between select-none list-none">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Calendar className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span className="font-bold">日別推移:</span>
+              <span className="text-xs font-normal text-slate-600">
+                {estimationResult.dailyTrends.length > 0
+                  ? `${estimationResult.dailyTrends.length}日間のデータ推移・期間別内訳・台別移動出率`
+                  : '推移データなし'}
+              </span>
+            </div>
+            <span className="text-xs text-slate-400 group-open:hidden shrink-0 ml-2">詳細を開く ▼</span>
+          </summary>
+          <div className="mt-4 pt-3 border-t border-slate-100 space-y-4 text-xs">
+            {/* 日別 推定設定分布の推移 (100%積み上げ) */}
+            <div>
+              <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1">
+                <span>日別 推定設定分布の推移 (100%積み上げ)</span>
+                <HelpTooltip text="各営業日の対象台における設定別事後確率の100%積み上げ構成比です。" />
+              </h4>
+            </div>
+
+            {estimationResult.dailyTrends.length > 0 ? (
+              <div className="h-72 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={estimationResult.dailyTrends.map((dt) => {
+                      const row: Record<string, any> = {
+                        date: dt.date.slice(5),
+                        fullDate: dt.date,
+                        dayOfWeek: dt.dayOfWeek,
+                        isSpecialDay: dt.isSpecialDay,
+                        avgPayout: dt.avgPayoutRate,
+                      };
+                      if (currentSpec) {
+                        for (const s of currentSpec.settings) {
+                          row[s.label] = Number(((dt.distribution[s.label] || 0) * 100).toFixed(1));
+                        }
+                      }
+                      return row;
+                    })}
+                    margin={{ top: 15, right: 10, left: 0, bottom: 20 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#475569' }} />
+                    <YAxis
+                      unit="%"
+                      domain={[0, 100]}
+                      tick={{ fontSize: 11, fill: '#64748b' }}
+                    />
+                    <Tooltip
+                      formatter={(val: any, name: any) => [`${val}%`, name]}
+                      labelFormatter={(lbl: any, payload: any) => {
+                        const p = payload?.[0]?.payload;
+                        if (!p) return lbl;
+                        return `${p.fullDate} (${p.dayOfWeek}) ${
+                          p.isSpecialDay ? '★特日' : ''
+                        } / 実績出率: ${p.avgPayout}%`;
+                      }}
+                    />
+                    <Legend />
+                    {currentSpec?.settings.map((s, sIdx) => (
+                      <Bar
+                        key={s.label}
+                        dataKey={s.label}
+                        stackId="a"
+                        fill={SETTING_COLORS[s.label] || DEFAULT_FALLBACK_COLORS[sIdx % 8]}
+                      />
+                    ))}
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div className="p-8 text-center text-xs text-slate-500">
+                日別データがありません。
+              </div>
+            )}
+
+            {/* 期間別の推定内訳テーブル */}
+            {rangeEstimationResult && (
+              <div className="p-3.5 bg-slate-50/50 border border-slate-200 rounded-xl space-y-2.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <h5 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>期間別の推定内訳 (全体・直近30日・月別)</span>
+                    <HelpTooltip text="期間別のIN加重出率と平均設定相当の内訳です。台日が少ない期間は区間が広くなります。" />
+                  </h5>
+                </div>
+
+                <div className="overflow-x-auto border border-slate-200 rounded-lg bg-white">
+                  <table className="w-full text-xs text-left">
+                    <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
+                      <tr>
+                        <th className="py-2 px-3">期間</th>
+                        <th className="py-2 px-2.5 text-right">台日数 / 総G数</th>
+                        <th className="py-2 px-3 text-right">全体出率 (95%区間)</th>
+                        <th className="py-2 px-3 text-right">平均設定相当 (95%区間)</th>
+                        <th className="py-2 px-3 text-center">高設定割合の範囲</th>
+                        <th className="py-2 px-3 text-center">精度状況</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 font-mono">
+                      {rangeEstimationResult.periodBreakdowns.map((p) => (
+                        <tr key={p.periodKey} className="hover:bg-slate-50/70">
+                          <td className="py-2 px-3 font-sans font-bold text-slate-800">
+                            {p.periodLabel}
                           </td>
-                          <td className="py-2 px-3 text-right text-slate-700">
-                            {m.daysCount} 日
-                          </td>
-                          <td className="py-2 px-3 text-right text-slate-700">
-                            {m.avgGames.toLocaleString()} G
-                          </td>
-                          <td className="py-2 px-3 text-right font-black text-slate-900">
-                            {m.avgPayoutRate}%
-                          </td>
-                          <td className="py-2 px-3 text-center">
-                            <span className="text-[11px] px-2 py-0.5 rounded font-bold bg-slate-100 text-slate-800">
-                              {m.mostLikelySetting}
+                          <td className="py-2 px-2.5 text-right text-slate-700 font-sans">
+                            <span className="font-bold font-mono">{p.machineDays}台日</span>
+                            <span className="text-[10px] text-slate-400 block font-mono">
+                              {p.totalGames.toLocaleString()}G
                             </span>
                           </td>
-                          <td className="py-2 px-3 text-right font-black text-emerald-700">
-                            設定 {m.expectedSetting}
+                          <td className="py-2 px-3 text-right">
+                            <span className="font-bold text-slate-900 font-mono">
+                              {p.payoutRate.toFixed(2)}%
+                            </span>
+                            <span className="text-[10px] text-slate-500 block font-mono">
+                              [{p.payoutCi95[0].toFixed(2)}% 〜 {p.payoutCi95[1].toFixed(2)}%]
+                            </span>
                           </td>
-                          <td className="py-2 px-3 text-right font-black text-indigo-700">
-                            {highProbPct}%
+                          <td className="py-2 px-3 text-right">
+                            <span className="font-bold text-indigo-700 font-mono">
+                              設定 {p.settingEquivalent.toFixed(2)}
+                            </span>
+                            <span className="text-[10px] text-slate-500 block font-mono">
+                              [設定 {p.settingCi95[0].toFixed(2)} 〜 {p.settingCi95[1].toFixed(2)}]
+                            </span>
+                          </td>
+                          <td className="py-2 px-3 text-center">
+                            <span className="font-bold text-amber-800 font-mono">
+                              {p.pointRange.minRate}% 〜 {p.pointRange.maxRate}%
+                            </span>
+                            <span className="text-[10px] text-slate-400 block font-sans">
+                              (95%加味: {p.ciRange.minRate}% 〜 {p.ciRange.maxRate}%)
+                            </span>
+                          </td>
+                          <td className="py-2 px-3 text-center font-sans">
+                            {p.isWideCi ? (
+                              <span className="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-bold">
+                                区間広め (台日少)
+                              </span>
+                            ) : (
+                              <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded font-bold">
+                                良好
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* 区間の幅の見通し */}
+            {rangeEstimationResult && (
+              <div className="p-3.5 bg-emerald-50/70 border border-emerald-200/80 rounded-xl text-xs text-emerald-950 flex items-start gap-2.5">
+                <Clock className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                <div className="space-y-0.5 leading-relaxed">
+                  <span className="font-bold text-emerald-900">区間の幅（推定精度）の見通し:</span>
+                  <p className="text-[11px] text-emerald-800">
+                    区間の幅を半分にするには、総G数があと <strong>{(rangeEstimationResult.additionalGamesForHalfCi / 10000).toFixed(1)}万G</strong>（約 <strong>{rangeEstimationResult.additionalDaysForHalfCi}日分</strong>）必要です。
+                  </p>
+                  <span className="text-[10px] text-emerald-700/80 block">
+                    ※ 統計誤差が総G数の平方根に反比例するため、精度を2倍（区間幅を半分）にするには現在の4倍のプレイ量が必要です。
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* 台別移動出率推移 (固定高さ h-72 の囲み) */}
+            {rangeEstimationResult && rangeEstimationResult.rollingTrends7d.length > 0 && currentSpec && (
+              <div className="p-3.5 bg-slate-50/50 border border-slate-200 rounded-xl space-y-2.5 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h5 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                      <TrendingUp className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>台別の移動IN加重出率推移 ({rollingTrendMode === '7d' ? '7日' : '30日'}移動)</span>
+                      <HelpTooltip text="各台の稼働推移と、機種公表機械割（破線）を同時にプロットした折れ線グラフです。" />
+                    </h5>
+                  </div>
+
+                  <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 gap-0.5 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setRollingTrendMode('7d')}
+                      className={`px-2.5 py-0.5 rounded text-xs font-bold transition-all cursor-pointer ${
+                        rollingTrendMode === '7d'
+                          ? 'bg-emerald-600 text-white shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      7日移動平均
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRollingTrendMode('30d')}
+                      className={`px-2.5 py-0.5 rounded text-xs font-bold transition-all cursor-pointer ${
+                        rollingTrendMode === '30d'
+                          ? 'bg-emerald-600 text-white shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      30日移動平均
+                    </button>
+                  </div>
+                </div>
+
+                <div className="h-72 w-full border border-slate-200 rounded-lg p-2 bg-white">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart
+                      data={
+                        rollingTrendMode === '7d'
+                          ? rangeEstimationResult.rollingTrends7d
+                          : rangeEstimationResult.rollingTrends30d
+                      }
+                      margin={{ top: 10, right: 25, left: -5, bottom: 10 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                      <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#64748b' }} minTickGap={25} />
+                      <YAxis
+                        unit="%"
+                        domain={['auto', 'auto']}
+                        tick={{ fontSize: 10, fill: '#64748b' }}
+                      />
+                      <Tooltip
+                        formatter={(val: any, name: any) => [`${val}%`, String(name).replace('machine_', '#')]}
+                      />
+                      <Legend
+                        formatter={(val: any) => String(val).replace('machine_', '#')}
+                        wrapperStyle={{ fontSize: 11 }}
+                      />
+
+                      {currentSpec.settings.map((s, idx) => (
+                        <ReferenceLine
+                          key={s.label}
+                          y={s.payoutRate}
+                          stroke={SETTING_COLORS[s.label] || '#94a3b8'}
+                          strokeDasharray="4 4"
+                          strokeWidth={1}
+                          label={{
+                            value: `${s.label} (${s.payoutRate}%)`,
+                            position: idx % 2 === 0 ? 'insideRight' : 'insideLeft',
+                            fill: SETTING_COLORS[s.label] || '#64748b',
+                            fontSize: 9,
+                          }}
+                        />
+                      ))}
+
+                      {rangeEstimationResult.machineNums.map((mNum, idx) => (
+                        <Line
+                          key={mNum}
+                          type="monotone"
+                          dataKey={`machine_${mNum}`}
+                          name={`#${mNum}`}
+                          stroke={MACHINE_LINE_COLORS[idx % MACHINE_LINE_COLORS.length]}
+                          strokeWidth={2}
+                          dot={false}
+                          connectNulls
+                        />
+                      ))}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+          </div>
+        </details>
+
+        {/* 詳細 4: 条件別の比較 */}
+        <details className="border border-slate-200 rounded-xl bg-white p-4 group transition-all" data-testid="foldable-conditions">
+          <summary className="font-bold text-slate-800 text-xs sm:text-sm cursor-pointer flex items-center justify-between select-none list-none">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Target className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span className="font-bold">条件別の比較:</span>
+              <span className="text-xs font-normal text-slate-600">
+                {estimationResult.conditionComparisons.length > 0
+                  ? `特日・曜日・末尾別の比較（有意差 ${estimationResult.conditionComparisons.filter((c) => c.isSignificant).length}件）`
+                  : '十分な比較データがありません'}
+              </span>
+            </div>
+            <span className="text-xs text-slate-400 group-open:hidden shrink-0 ml-2">詳細を開く ▼</span>
+          </summary>
+          <div className="mt-4 pt-3 border-t border-slate-100 space-y-4 text-xs">
+            <div>
+              <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1">
+                <span>条件別 高設定（設定{highThreshold}以上）推定比率の比較と有意差判定</span>
+                <HelpTooltip text="特日・通常日、曜日別、台番号末尾別の高設定投入傾向と統計的有意性検定（2標本割合Z検定）です。" />
+              </h4>
+            </div>
+
+            {estimationResult.conditionComparisons.length > 0 ? (
+              <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
+                    <tr>
+                      <th className="py-2.5 px-3">分析軸 / 条件</th>
+                      <th className="py-2.5 px-3 text-right">根拠台数</th>
+                      <th className="py-2.5 px-3 text-right">設定{highThreshold}+ 比率</th>
+                      <th className="py-2.5 px-3 text-right">対照群比率</th>
+                      <th className="py-2.5 px-3 text-right">差分</th>
+                      <th className="py-2.5 px-3 text-center">統計的有意性判定</th>
+                      <th className="py-2.5 px-3 text-right">p値</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-mono">
+                    {estimationResult.conditionComparisons.map((c, idx) => {
+                      return (
+                        <tr key={idx} className="hover:bg-slate-50/70">
+                          <td className="py-2.5 px-3 font-sans font-bold text-slate-900">
+                            <span className="text-[10px] text-slate-500 font-normal block">
+                              {c.conditionType === 'special_day'
+                                ? 'イベント日比較'
+                                : c.conditionType === 'day_of_week'
+                                ? '曜日別傾向'
+                                : '台番号末尾'}
+                            </span>
+                            <span>{c.categoryLabel}</span>
+                          </td>
+                          <td className="py-2.5 px-3 text-right text-slate-700">
+                            {c.machineDaysCount} 台
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-black text-indigo-700">
+                            {c.highSettingRate}%
+                          </td>
+                          <td className="py-2.5 px-3 text-right text-slate-500">
+                            {c.baselineRate}%
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-bold">
+                            <span
+                              className={
+                                c.diffRate > 0
+                                  ? 'text-emerald-600'
+                                  : c.diffRate < 0
+                                  ? 'text-rose-600'
+                                  : 'text-slate-500'
+                              }
+                            >
+                              {c.diffRate > 0 ? `+${c.diffRate}` : c.diffRate}%
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-center">
+                            {c.isSignificant ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-bold bg-blue-100 text-blue-800 border border-blue-200">
+                                <CheckCircle2 className="w-3 h-3 text-blue-600" />
+                                <span>{c.significanceLabel}</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-medium bg-slate-100 text-slate-600">
+                                <span>{c.significanceLabel}</span>
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 text-right text-slate-400">
+                            p = {c.pValue}
                           </td>
                         </tr>
                       );
@@ -2275,10 +2027,143 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
                   </tbody>
                 </table>
               </div>
+            ) : (
+              <div className="p-8 text-center text-xs text-slate-500">
+                条件別比較を行うのに十分なデータがありません。
+              </div>
+            )}
+          </div>
+        </details>
+
+        {/* 詳細 5: 台番別サマリー */}
+        <details className="border border-slate-200 rounded-xl bg-white p-4 group transition-all" data-testid="foldable-machines">
+          <summary className="font-bold text-slate-800 text-xs sm:text-sm cursor-pointer flex items-center justify-between select-none list-none">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Hash className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span className="font-bold">台番別サマリー:</span>
+              <span className="text-xs font-normal text-slate-600">
+                {sortedMachineSummaries.length > 0
+                  ? `全${sortedMachineSummaries.length}台の個別実績と推定設定`
+                  : '台別データなし'}
+              </span>
             </div>
-          )}
-        </div>
-      )}
+            <span className="text-xs text-slate-400 group-open:hidden shrink-0 ml-2">詳細を開く ▼</span>
+          </summary>
+          <div className="mt-4 pt-3 border-t border-slate-100 space-y-4 text-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1">
+                  <span>台番号ごとの推定平均設定・高設定確率一覧</span>
+                  <HelpTooltip text="台ごとの稼働日数、実績出率、最尤設定および高設定の期待確率です。" />
+                </h4>
+              </div>
+              <span className="text-xs text-slate-500">
+                ヘッダークリックで昇順/降順ソート
+              </span>
+            </div>
+
+            <div className="overflow-x-auto border border-slate-200 rounded-lg">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200 select-none cursor-pointer">
+                  <tr>
+                    <th
+                      className="py-2 px-3"
+                      onClick={() => {
+                        setTableSortField('machineNum');
+                        setTableSortAsc(!tableSortAsc);
+                      }}
+                    >
+                      台番号
+                    </th>
+                    <th
+                      className="py-2 px-3 text-right"
+                      onClick={() => {
+                        setTableSortField('daysCount');
+                        setTableSortAsc(!tableSortAsc);
+                      }}
+                    >
+                      根拠日数
+                    </th>
+                    <th
+                      className="py-2 px-3 text-right"
+                      onClick={() => {
+                        setTableSortField('avgGames');
+                        setTableSortAsc(!tableSortAsc);
+                      }}
+                    >
+                      平均G数
+                    </th>
+                    <th
+                      className="py-2 px-3 text-right"
+                      onClick={() => {
+                        setTableSortField('avgPayoutRate');
+                        setTableSortAsc(!tableSortAsc);
+                      }}
+                    >
+                      実績出率
+                    </th>
+                    <th
+                      className="py-2 px-3 text-center"
+                    >
+                      最尤設定
+                    </th>
+                    <th
+                      className="py-2 px-3 text-right"
+                      onClick={() => {
+                        setTableSortField('expectedSetting');
+                        setTableSortAsc(!tableSortAsc);
+                      }}
+                    >
+                      推定平均設定
+                    </th>
+                    <th
+                      className="py-2 px-3 text-right"
+                      onClick={() => {
+                        setTableSortField('highSettingProb');
+                        setTableSortAsc(!tableSortAsc);
+                      }}
+                    >
+                      設定{highThreshold}+ 確率
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-mono">
+                  {sortedMachineSummaries.map((m) => {
+                    const highProbPct = Number((m.highSettingProb * 100).toFixed(1));
+                    return (
+                      <tr key={m.machineNum} className="hover:bg-slate-50">
+                        <td className="py-2 px-3 font-bold text-slate-900 font-sans">
+                          #{m.machineNum}
+                        </td>
+                        <td className="py-2 px-3 text-right text-slate-700">
+                          {m.daysCount} 日
+                        </td>
+                        <td className="py-2 px-3 text-right text-slate-700">
+                          {m.avgGames.toLocaleString()} G
+                        </td>
+                        <td className="py-2 px-3 text-right font-black text-slate-900">
+                          {m.avgPayoutRate}%
+                        </td>
+                        <td className="py-2 px-3 text-center">
+                          <span className="text-[11px] px-2 py-0.5 rounded font-bold bg-slate-100 text-slate-800">
+                            {m.mostLikelySetting}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-right font-black text-emerald-700">
+                          設定 {m.expectedSetting}
+                        </td>
+                        <td className="py-2 px-3 text-right font-black text-indigo-700">
+                          {highProbPct}%
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </details>
+      </div>
 
       {/* 4. 仕様テーブル入力・編集モーダル */}
       {isSpecModalOpen && editingSpec && (

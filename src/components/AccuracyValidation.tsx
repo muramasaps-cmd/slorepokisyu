@@ -339,10 +339,190 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
     setTuningResult(null);
   };
 
+  // Prompt 37: 3-line conclusion calculations
+  const modelPredictEdge = useMemo(() => {
+    if (summary.totalEvaluatedDays === 0) {
+      return {
+        status: '未検証',
+        detail: '検証データ不足（評価日数が足りません）',
+      };
+    }
+    const liftStr = `上位${topK}機種リフト: ${summary.engineAvgTopKLift >= 0 ? '+' : ''}${summary.engineAvgTopKLift}枚/台`;
+    const edgeStr = `対全期間比エッジ: ${summary.liftEdge >= 0 ? '+' : ''}${summary.liftEdge}枚`;
+    const winRateStr = `勝率: ${summary.engineTopKPositiveRate}%`;
+    const status = summary.liftEdge > 0 ? 'あり' : 'なし';
+    return {
+      status,
+      detail: `${liftStr} (${edgeStr}, ${winRateStr})`,
+    };
+  }, [summary, topK]);
+
+  const machinePredictEdge = useMemo(() => {
+    if (!hasMachineData) {
+      return {
+        status: '未検証',
+        detail: '台番データ未取り込み',
+      };
+    }
+    if (!machineBacktestResult || machineBacktestResult.evaluatedDaysCount === 0) {
+      return {
+        status: '未検証',
+        detail: '営業日データ不足（台番データを含む営業日4日以上必要）',
+      };
+    }
+    const activeEval =
+      machineFilterMode === 'withFilter'
+        ? machineBacktestResult.withFilter
+        : machineBacktestResult.withoutFilter;
+    const status = activeEval.hasEdge ? 'あり' : 'なし';
+    const liftStr = `Top-${machineTopN}台リフト: ${activeEval.avgLift >= 0 ? '+' : ''}${activeEval.avgLift}枚`;
+    const ciStr = `95%区間: [${activeEval.ci95[0] >= 0 ? '+' : ''}${activeEval.ci95[0]}枚, +${activeEval.ci95[1]}枚]`;
+    const winRateStr = `勝率: ${activeEval.avgWinRate}%`;
+    return {
+      status,
+      detail: `${liftStr} (${ciStr}, ${winRateStr})`,
+    };
+  }, [hasMachineData, machineBacktestResult, machineFilterMode, machineTopN]);
+
+  const weightRecommendation = useMemo(() => {
+    const reasons: string[] = [];
+    if (tuningResult?.isRecommended) {
+      reasons.push(`機種重み最適化案あり (全分割平均+${tuningResult.meanSplitGain}枚で有意)`);
+    }
+    if (suggestedZeroWeights && suggestedZeroWeights.changedNames.length > 0) {
+      reasons.push(`台番不要要素の0化案あり (${suggestedZeroWeights.changedNames.join(', ')})`);
+    }
+    if (
+      (additiveResult?.withFilter.avgLift ?? 0) > (interactionResult?.withFilter.avgLift ?? 0) &&
+      activeMachineWeights.cohortMode !== 'additive'
+    ) {
+      reasons.push('コホート推定を加法モデル(additive)へ切り替え推奨');
+    }
+
+    if (reasons.length > 0) {
+      return {
+        status: 'あり',
+        detail: reasons.join(' / '),
+      };
+    }
+    if (tuningResult && !tuningResult.isRecommended) {
+      return {
+        status: 'なし',
+        detail: '自動調整探索結果: 有意差なし（標準重みの維持を推奨）',
+      };
+    }
+    return {
+      status: 'なし',
+      detail: '現行重みの維持を推奨',
+    };
+  }, [
+    tuningResult,
+    suggestedZeroWeights,
+    additiveResult,
+    interactionResult,
+    activeMachineWeights.cohortMode,
+  ]);
+
   const displayedDays = showAllDays ? filteredEvaluations : filteredEvaluations.slice(-15);
 
   return (
     <div className="space-y-6">
+      {/* 画面最上部: 検証結論（3行） & 台番未取り込みメッセージ集約 (Prompt 37 Requirement 1 & 3) */}
+      <div className="bg-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-2xs border border-slate-800 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="bg-amber-400 text-slate-950 text-xs font-black px-2.5 py-0.5 rounded-md flex items-center gap-1">
+              <CheckCircle2 className="w-3.5 h-3.5 text-slate-950" />
+              検証結果の結論
+            </span>
+            <span className="text-xs text-slate-400">
+              バックテスト実績に基づく総合判定 ({storeName})
+            </span>
+          </div>
+          <span className="text-[11px] text-slate-400 font-mono hidden sm:inline">
+            検証日数: {summary.totalEvaluatedDays}営業日
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 divide-y divide-slate-800 text-xs sm:text-sm font-medium">
+          {/* 行1: 機種予測の優位性 */}
+          <div className="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-4">
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-slate-400 font-bold min-w-[150px]">機種予測の優位性:</span>
+              <span
+                className={`font-black px-2.5 py-0.5 rounded text-xs ${
+                  modelPredictEdge.status === 'あり'
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                    : modelPredictEdge.status === 'なし'
+                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                    : 'bg-slate-800 text-slate-300 border border-slate-700'
+                }`}
+              >
+                {modelPredictEdge.status}
+              </span>
+            </div>
+            <span className="text-slate-300 text-xs font-mono">
+              {modelPredictEdge.detail}
+            </span>
+          </div>
+
+          {/* 行2: 台番予測の優位性 */}
+          <div className="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-4">
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-slate-400 font-bold min-w-[150px]">台番予測の優位性:</span>
+              <span
+                className={`font-black px-2.5 py-0.5 rounded text-xs ${
+                  machinePredictEdge.status === 'あり'
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                    : machinePredictEdge.status === 'なし'
+                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                    : 'bg-slate-800 text-slate-300 border border-slate-700'
+                }`}
+              >
+                {machinePredictEdge.status}
+              </span>
+            </div>
+            <span className="text-slate-300 text-xs font-mono">
+              {machinePredictEdge.detail}
+            </span>
+          </div>
+
+          {/* 行3: 推奨する重みの変更 */}
+          <div className="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-4">
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-slate-400 font-bold min-w-[150px]">推奨する重みの変更:</span>
+              <span
+                className={`font-black px-2.5 py-0.5 rounded text-xs ${
+                  weightRecommendation.status === 'あり'
+                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                    : 'bg-slate-800 text-slate-300 border border-slate-700'
+                }`}
+              >
+                {weightRecommendation.status}
+              </span>
+            </div>
+            <span className="text-slate-300 text-xs">
+              {weightRecommendation.detail}
+            </span>
+          </div>
+        </div>
+
+        {/* 台番データ未取り込みの集約メッセージ (Prompt 37 Requirement 3) */}
+        {!hasMachineData && (
+          <div className="mt-2 pt-2.5 border-t border-slate-800 flex items-start gap-2 bg-slate-950/60 p-3 rounded-xl border border-amber-900/40 text-xs text-amber-200">
+            <Info className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-0.5">
+              <span className="font-bold text-amber-300 block">
+                台番別データ未取り込み
+              </span>
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                この店舗には台番別の実績データ（各台の差枚数・G数など）が取り込まれていません。店舗管理画面から台番別データ（HTML / CSV）を取り込むと、台番単位の予測力検証（Top-Nリフト、ベースライン対比、ブートストラップ優位性検定）が有効になります。
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Header & Verification Principles Banner */}
       <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs space-y-4">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -610,19 +790,26 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
         </div>
       </div>
 
-      {/* Comparison Table: Engine (Composite Score) vs 5 Baselines */}
-      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
-        <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+      {/* 1. 5大ベースライン比較 (詳細折りたたみ: 既定は閉じる) */}
+      <details className="group bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
+        <summary className="px-5 py-3.5 bg-slate-50 hover:bg-slate-100/80 cursor-pointer list-none flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-transparent group-open:border-slate-200 transition-colors">
           <div className="flex items-center gap-2">
-            <Trophy className="w-4 h-4 text-amber-500" />
+            <ChevronDown className="w-4 h-4 text-slate-500 transition-transform duration-200 group-open:rotate-180" />
+            <Trophy className="w-4 h-4 text-amber-500 shrink-0" />
             <h3 className="text-sm font-bold text-slate-900">
-              予測エンジン（複合スコア） vs 5大ベースライン比較検証
+              5大ベースライン比較
             </h3>
           </div>
-          <span className="text-xs text-slate-500">
-            検証対象日数: <strong>{summary.totalEvaluatedDays}営業日</strong> (特日 {summary.specialDaysCount}日 / 通常 {summary.normalDaysCount}日)
-          </span>
-        </div>
+          <div className="text-xs text-slate-600 flex items-center gap-1.5 flex-wrap">
+            <span className="text-slate-400 text-[11px] font-medium hidden sm:inline">要約:</span>
+            <span className="font-semibold text-slate-800">
+              上位{topK}機種リフト {summary.engineAvgTopKLift >= 0 ? `+${summary.engineAvgTopKLift}` : summary.engineAvgTopKLift}枚/台（全期間比エッジ: {summary.liftEdge >= 0 ? `+${summary.liftEdge}` : summary.liftEdge}枚, 勝率: {summary.engineTopKPositiveRate}%）
+            </span>
+            <span className="text-[11px] text-slate-400">
+              ({summary.totalEvaluatedDays}営業日検証)
+            </span>
+          </div>
+        </summary>
 
         <div className="overflow-x-auto">
           <table className="w-full text-xs text-left">
@@ -844,77 +1031,94 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
             </tbody>
           </table>
         </div>
-      </div>
+      </details>
 
-      {/* Auto-Tuning Section (自動調整) */}
-      <div className="bg-white rounded-2xl border border-indigo-200 overflow-hidden shadow-2xs">
-        <div className="px-5 py-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white flex flex-col md:flex-row md:items-center justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="bg-amber-400 text-slate-950 text-[11px] font-black px-2 py-0.5 rounded flex items-center gap-1">
-                <Cpu className="w-3 h-3" />
-                店舗別パラメータ自動調整
-              </span>
-              <span className="text-indigo-200 text-xs font-medium">
+      {/* 2. 最適重み探索と有意性検証 (詳細折りたたみ: 既定は閉じる) */}
+      <details className="group bg-white rounded-2xl border border-indigo-200 overflow-hidden shadow-2xs">
+        <summary className="px-5 py-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white cursor-pointer list-none flex flex-col md:flex-row md:items-center justify-between gap-3 transition-colors">
+          <div className="flex items-center gap-2">
+            <ChevronDown className="w-4 h-4 text-indigo-300 transition-transform duration-200 group-open:rotate-180" />
+            <Cpu className="w-4 h-4 text-amber-400 shrink-0" />
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="bg-amber-400 text-slate-950 text-[10px] font-black px-1.5 py-0.2 rounded">
+                  自動調整
+                </span>
+                <h3 className="text-sm font-bold text-white">
+                  最適重み探索と有意性検証
+                </h3>
+              </div>
+            </div>
+          </div>
+          <div className="text-xs text-indigo-200 flex items-center gap-1.5 flex-wrap">
+            <span className="text-indigo-400 text-[11px] font-medium hidden sm:inline">要約:</span>
+            <span className="font-semibold text-indigo-100">
+              {tuningResult
+                ? `${tuningResult.isRecommended ? '【採用推奨】有意な改善を確認' : '【標準維持推奨】有意差なし'} (全分割平均: ${tuningResult.meanSplitGain >= 0 ? `+${tuningResult.meanSplitGain}` : tuningResult.meanSplitGain}枚, 95%区間下限: ${tuningResult.bootstrapCiLower}枚)`
+                : '未実行（過学習防止型ローリング検証 & 7日ブロックブートストラップ探索）'}
+            </span>
+          </div>
+        </summary>
+
+        <div className="p-5 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div>
+              <h4 className="text-sm font-bold text-slate-800">
+                過学習防止型 最適重み探索と統計的有意性検証
+              </h4>
+              <span className="text-xs text-slate-500">
                 拡張ローリング検証（3〜5分割） & 7日ブロックブートストラップ（2,000回）
               </span>
             </div>
-            <h3 className="text-base sm:text-lg font-bold text-white mt-1">
-              過学習防止型 最適重み探索と統計的有意性検証
-            </h3>
-          </div>
-
-          <div className="flex items-center gap-2 self-start md:self-auto">
-            {isTuningRunning ? (
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-2 bg-indigo-900/80 px-3 py-1.5 rounded-xl border border-indigo-700/50">
-                  <div className="w-16 bg-indigo-950 rounded-full h-2 overflow-hidden">
-                    <div
-                      className="bg-amber-400 h-2 rounded-full transition-all duration-300"
-                      style={{ width: `${Math.max(5, tuningProgress)}%` }}
-                    />
+            <div className="flex items-center gap-2 self-start sm:self-auto">
+              {isTuningRunning ? (
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 bg-indigo-950 px-3 py-1.5 rounded-xl border border-indigo-700/50">
+                    <div className="w-16 bg-indigo-900 rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-amber-400 h-2 rounded-full transition-all duration-300"
+                        style={{ width: `${Math.max(5, tuningProgress)}%` }}
+                      />
+                    </div>
+                    <span className="text-xs font-mono font-bold text-amber-300 min-w-[36px]">
+                      {tuningProgress}%
+                    </span>
                   </div>
-                  <span className="text-xs font-mono font-bold text-amber-300 min-w-[36px]">
-                    {tuningProgress}%
-                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCancelTuning}
+                    className="px-3 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white transition-all cursor-pointer flex items-center gap-1 shadow-xs"
+                    title="処理を中止"
+                  >
+                    <XCircle className="w-4 h-4 text-white" />
+                    <span>中止</span>
+                  </button>
                 </div>
+              ) : (
                 <button
                   type="button"
-                  onClick={handleCancelTuning}
-                  className="px-3 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white transition-all cursor-pointer flex items-center gap-1 shadow-xs"
-                  title="処理を中止"
+                  onClick={handleRunTuning}
+                  disabled={dailyRecords.length < 8}
+                  className="px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs bg-amber-400 hover:bg-amber-300 text-slate-950"
                 >
-                  <XCircle className="w-4 h-4 text-white" />
-                  <span>中止</span>
+                  <Sparkles className="w-4 h-4 text-slate-950" />
+                  <span>重みを自動探索＆検証</span>
                 </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={handleRunTuning}
-                disabled={dailyRecords.length < 8}
-                className="px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs bg-amber-400 hover:bg-amber-300 text-slate-950"
-              >
-                <Sparkles className="w-4 h-4 text-slate-950" />
-                <span>重みを自動探索＆検証</span>
-              </button>
-            )}
+              )}
 
-            {isCustomApplied && !isTuningRunning && (
-              <button
-                type="button"
-                onClick={handleResetWeights}
-                className="px-3 py-2 rounded-xl text-xs font-semibold bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer flex items-center gap-1"
-                title="標準デフォルト重みに戻す"
-              >
-                <RotateCcw className="w-3.5 h-3.5 text-amber-300" />
-                <span>初期値に戻す</span>
-              </button>
-            )}
+              {isCustomApplied && !isTuningRunning && (
+                <button
+                  type="button"
+                  onClick={handleResetWeights}
+                  className="px-3 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer flex items-center gap-1"
+                  title="標準デフォルト重みに戻す"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-slate-600" />
+                  <span>初期値に戻す</span>
+                </button>
+              )}
+            </div>
           </div>
-        </div>
-
-        <div className="p-5 space-y-4">
           <div className="text-xs text-slate-600 max-w-4xl space-y-1">
             <p>
               過去の全データを<strong>時系列の拡張ウィンドウ（3〜5分割ローリング検証）</strong>で評価します。粗グリッドからランダム探索（64組・規模補正ON/OFF含む）を行い、<strong>「全分割平均の改善が正」かつ「7日ブロックブートストラップ（2,000回）の95%信頼区間下限が0超」</strong>を満たした場合のみ「採用推奨」と判定します。※多数の候補探索に伴う多重比較バイアス（過学習）を厳格に防ぎます。
@@ -1068,90 +1272,108 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
             </div>
           )}
         </div>
-      </div>
+      </details>
 
-      {/* Machine Number Ranking Backtest Section (台番ランキングの検証) */}
-      <div className="bg-white rounded-2xl border border-amber-200 overflow-hidden shadow-2xs space-y-4">
-        <div className="px-5 py-4 bg-gradient-to-r from-slate-900 via-amber-950/70 to-slate-900 text-white flex flex-col md:flex-row md:items-center justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="bg-amber-400 text-slate-950 text-[11px] font-black px-2 py-0.5 rounded flex items-center gap-1">
-                <Target className="w-3 h-3 text-slate-950" />
-                台番ランキングの予測力検証
-              </span>
-              <span className="text-amber-200 text-xs font-medium">
-                ブロックブートストラップ (7日ブロック / 2,000回反復)
-              </span>
-            </div>
-            <h3 className="text-base sm:text-lg font-bold text-white mt-1">
-              台番単位の狙い台予測に統計的優位性はあるか？
-            </h3>
-          </div>
-
-          {hasMachineData && (
-            <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
-              {/* Top-N selector */}
-              <div className="flex items-center gap-1 bg-white/10 px-2 py-1 rounded-xl border border-white/20 text-xs">
-                <span className="text-slate-300 text-[11px]">対象台数:</span>
-                {[5, 10, 20].map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => setMachineTopN(n)}
-                    className={`px-2 py-0.5 rounded font-bold cursor-pointer transition-colors ${
-                      machineTopN === n
-                        ? 'bg-amber-400 text-slate-950'
-                        : 'text-slate-300 hover:text-white'
-                    }`}
-                  >
-                    上位{n}台
-                  </button>
-                ))}
+      {/* 3. 台番単位の検証（アブレーション・ローリング検証） (詳細折りたたみ: 既定は閉じる) */}
+      <details className="group bg-white rounded-2xl border border-amber-200 overflow-hidden shadow-2xs">
+        <summary className="px-5 py-4 bg-gradient-to-r from-slate-900 via-amber-950/70 to-slate-900 text-white cursor-pointer list-none flex flex-col md:flex-row md:items-center justify-between gap-3 transition-colors">
+          <div className="flex items-center gap-2">
+            <ChevronDown className="w-4 h-4 text-amber-300 transition-transform duration-200 group-open:rotate-180" />
+            <Target className="w-4 h-4 text-amber-400 shrink-0" />
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="bg-amber-400 text-slate-950 text-[10px] font-black px-1.5 py-0.2 rounded">
+                  台番検証
+                </span>
+                <h3 className="text-sm font-bold text-white">
+                  台番単位の検証（アブレーション・ローリング検証）
+                </h3>
               </div>
+            </div>
+          </div>
+          <div className="text-xs text-amber-200 flex items-center gap-1.5 flex-wrap">
+            <span className="text-amber-400 text-[11px] font-medium hidden sm:inline">要約:</span>
+            <span className="font-semibold text-amber-100">
+              {!hasMachineData
+                ? '台番データ未取り込み（データ取り込みで検証可能）'
+                : !machineBacktestResult || machineBacktestResult.evaluatedDaysCount === 0
+                ? '評価営業日データ不足（4日以上の台番データが必要）'
+                : (() => {
+                    const activeEval =
+                      machineFilterMode === 'withFilter'
+                        ? machineBacktestResult.withFilter
+                        : machineBacktestResult.withoutFilter;
+                    return `${activeEval.hasEdge ? '統計的優位性あり' : '優位性なし（偶然の範囲）'} (Top-${machineTopN}台リフト: ${activeEval.avgLift >= 0 ? `+${activeEval.avgLift}` : activeEval.avgLift}枚, 勝率: ${activeEval.avgWinRate}%)`;
+                  })()}
+            </span>
+          </div>
+        </summary>
 
-              {/* Filter mode selector */}
-              <div className="flex items-center bg-white/10 p-0.5 rounded-xl border border-white/20 text-xs">
-                <button
-                  type="button"
-                  onClick={() => setMachineFilterMode('withFilter')}
-                  className={`px-2.5 py-1 rounded-lg font-bold cursor-pointer transition-colors ${
-                    machineFilterMode === 'withFilter'
-                      ? 'bg-amber-400 text-slate-950'
-                      : 'text-slate-300 hover:text-white'
-                  }`}
-                  title="根拠日数が3日未満の台をTop-N候補から除外"
-                >
-                  除外あり (根拠3日以上)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMachineFilterMode('withoutFilter')}
-                  className={`px-2.5 py-1 rounded-lg font-bold cursor-pointer transition-colors ${
-                    machineFilterMode === 'withoutFilter'
-                      ? 'bg-amber-400 text-slate-950'
-                      : 'text-slate-300 hover:text-white'
-                  }`}
-                  title="全台を候補対象として評価"
-                >
-                  除外なし (全台)
-                </button>
+        <div className="p-5 space-y-4">
+          {hasMachineData && (
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+              <div>
+                <h4 className="text-sm font-bold text-slate-800">
+                  台番単位の狙い台予測に統計的優位性はあるか？
+                </h4>
+                <span className="text-xs text-slate-500">
+                  ブロックブートストラップ (7日ブロック / 2,000回反復)
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+                {/* Top-N selector */}
+                <div className="flex items-center gap-1 bg-slate-100 px-2 py-1 rounded-xl border border-slate-200 text-xs">
+                  <span className="text-slate-600 text-[11px]">対象台数:</span>
+                  {[5, 10, 20].map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setMachineTopN(n)}
+                      className={`px-2 py-0.5 rounded font-bold cursor-pointer transition-colors ${
+                        machineTopN === n
+                          ? 'bg-amber-500 text-slate-950 shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      上位{n}台
+                    </button>
+                  ))}
+                </div>
+
+                {/* Filter mode selector */}
+                <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setMachineFilterMode('withFilter')}
+                    className={`px-2.5 py-1 rounded-lg font-bold cursor-pointer transition-colors ${
+                      machineFilterMode === 'withFilter'
+                        ? 'bg-amber-500 text-slate-950 font-black shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                    title="根拠日数が3日未満の台をTop-N候補から除外"
+                  >
+                    除外あり (根拠3日以上)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMachineFilterMode('withoutFilter')}
+                    className={`px-2.5 py-1 rounded-lg font-bold cursor-pointer transition-colors ${
+                      machineFilterMode === 'withoutFilter'
+                        ? 'bg-amber-500 text-slate-950 font-black shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                    title="全台を候補対象として評価"
+                  >
+                    除外なし (全台)
+                  </button>
+                </div>
               </div>
             </div>
           )}
-        </div>
 
-        <div className="p-5 space-y-4">
           {!hasMachineData ? (
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex items-start gap-3">
-              <Info className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-              <div>
-                <h4 className="text-xs font-bold text-slate-800">
-                  台番別データ未取り込み
-                </h4>
-                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                  この店舗には台番別の実績データ（各台の差枚数・G数など）が取り込まれていません。店舗管理画面から台番別データ（HTML / CSV）を取り込むと、台番単位の予測力検証（Top-Nリフト、ベースライン対比、ブートストラップ優位性検定）が有効になります。
-                </p>
-              </div>
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-500">
+              ※ 台番別データが未取り込みのため、台番単位の検証は実施できません（画面最上部の「検証結果の結論」内の案内をご確認ください）。
             </div>
           ) : !machineBacktestResult || machineBacktestResult.evaluatedDaysCount === 0 ? (
             <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-center gap-2">
@@ -1948,22 +2170,32 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
             })()
           )}
         </div>
-      </div>
+      </details>
 
-      {/* Historical Verification Log (Day by Day) */}
-      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs space-y-3">
-        <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
-              <Activity className="w-4 h-4 text-amber-500" />
-              営業日別 バックテスト検証履歴（全{filteredEvaluations.length}営業日）
+      {/* 4. 営業日別の履歴 (詳細折りたたみ: 既定は閉じる) */}
+      <details className="group bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs space-y-3">
+        <summary className="px-5 py-3.5 bg-slate-50 hover:bg-slate-100/80 cursor-pointer list-none flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-transparent group-open:border-slate-200 transition-colors">
+          <div className="flex items-center gap-2">
+            <ChevronDown className="w-4 h-4 text-slate-500 transition-transform duration-200 group-open:rotate-180" />
+            <Activity className="w-4 h-4 text-amber-500 shrink-0" />
+            <h3 className="text-sm font-bold text-slate-900">
+              営業日別の履歴
             </h3>
-            <p className="text-[11px] text-slate-500 mt-0.5">
-              各日の朝時点の予測（その日より前のデータのみ使用）と、当日の実際の結果の完全照合ログです。
-            </p>
           </div>
+          <div className="text-xs text-slate-600 flex items-center gap-1.5 flex-wrap">
+            <span className="text-slate-400 text-[11px] font-medium hidden sm:inline">要約:</span>
+            <span className="font-semibold text-slate-800">
+              全{filteredEvaluations.length}営業日の朝予測と当日実績の完全照合ログ（特日: {filteredEvaluations.filter((e) => e.isSpecialDay).length}日 / 通常: {filteredEvaluations.filter((e) => !e.isSpecialDay).length}日）
+            </span>
+          </div>
+        </summary>
 
-          <div className="flex items-center gap-2 self-start sm:self-auto">
+        <div className="px-5 py-2.5 bg-slate-50/50 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <p className="text-[11px] text-slate-500">
+            各日の朝時点の予測（その日より前のデータのみ使用）と、当日の実際の結果の完全照合ログです。
+          </p>
+
+          <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
             <div className="flex bg-white p-0.5 rounded-lg border border-slate-200 text-xs">
               <button
                 type="button"
@@ -2143,7 +2375,7 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
             </button>
           </div>
         )}
-      </div>
+      </details>
     </div>
   );
 };

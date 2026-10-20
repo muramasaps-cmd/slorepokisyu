@@ -1,9 +1,10 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { SettingDistributionPanel } from '../SettingDistributionPanel';
 import { DailyRecord } from '../../data/types';
 import * as settingSpecs from '../../utils/settingSpecs';
+import * as settingEstimation from '../../utils/settingEstimation';
 
 describe('SettingDistributionPanel Component', () => {
   const mockDailyRecords: DailyRecord[] = [
@@ -70,6 +71,10 @@ describe('SettingDistributionPanel Component', () => {
     ]);
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('renders with default minGames = 0, preset buttons, and 500 bootstrap reps in heading', () => {
     const html = renderToString(
       <SettingDistributionPanel
@@ -117,5 +122,91 @@ describe('SettingDistributionPanel Component', () => {
     expect(parseMinGamesInput('-500')).toBe(0);
     expect(parseMinGamesInput('1000')).toBe(1000);
     expect(parseMinGamesInput('3000')).toBe(3000);
+  });
+
+  it('displays 1-line info notice at top when EM estimation is unstable, and places EM warnings only inside the reference section', () => {
+    const originalEstimate = settingEstimation.estimateModelSettingDistribution;
+    vi.spyOn(settingEstimation, 'estimateModelSettingDistribution').mockImplementation((...args) => {
+      const realResult = originalEstimate(...args);
+      return {
+        ...realResult,
+        converged: false,
+        pointEstimateReachedMaxIterations: true,
+        bootstrapMaxIterationsRate: 0.38,
+        bootstrapNote: '再標本の38%が反復上限で終了しました。区間は参考値です。',
+        warnings: [
+          '設定の分布が平らで、推定が定まりにくいデータです。上の『範囲』を参考にしてください',
+          '※ 95%信頼区間はσを固定した区間です。台数が少ないと実際より狭く出ることがあります。',
+          '再標本の38%が反復上限で終了しました。区間は参考値です。',
+        ],
+      };
+    });
+
+    const html = renderToString(
+      <SettingDistributionPanel
+        dailyRecords={mockDailyRecords}
+        selectedModelName="マイジャグラーV"
+      />
+    );
+
+    // 1. Top of page contains the short 1-line info notice in info color
+    expect(html).toContain(
+      '設定の分布グラフ（EM推定）は参考値です。上の出率ベースの範囲を主にご覧ください'
+    );
+
+    // Split html into main display region (before <details) and reference region (inside <details)
+    const detailsIndex = html.indexOf('<details');
+    expect(detailsIndex).toBeGreaterThan(-1);
+
+    const mainDisplayRegion = html.slice(0, detailsIndex);
+    const referenceRegion = html.slice(detailsIndex);
+
+    // 2. The main display region does NOT contain the 3 EM estimation warnings
+    expect(mainDisplayRegion).not.toContain(
+      '設定の分布が平らで、推定が定まりにくいデータです'
+    );
+    expect(mainDisplayRegion).not.toContain(
+      'σを固定した区間です'
+    );
+    expect(mainDisplayRegion).not.toContain(
+      '再標本の38%が反復上限で終了しました'
+    );
+
+    // 3. The reference region (EM model estimation details) DOES contain the 3 warnings
+    expect(referenceRegion).toContain(
+      '設定の分布が平らで、推定が定まりにくいデータです。上の『範囲』を参考にしてください'
+    );
+    expect(referenceRegion).toContain(
+      '※ 95%信頼区間はσを固定した区間です。台数が少ないと実際より狭く出ることがあります。'
+    );
+    expect(referenceRegion).toContain(
+      '再標本の38%が反復上限で終了しました。区間は参考値です。'
+    );
+  });
+
+  it('does NOT display the top 1-line info notice when EM estimation is stable', () => {
+    const originalEstimate = settingEstimation.estimateModelSettingDistribution;
+    vi.spyOn(settingEstimation, 'estimateModelSettingDistribution').mockImplementation((...args) => {
+      const realResult = originalEstimate(...args);
+      return {
+        ...realResult,
+        converged: true,
+        pointEstimateReachedMaxIterations: false,
+        bootstrapMaxIterationsRate: 0,
+        isCiCalculated: true,
+        warnings: [],
+      };
+    });
+
+    const html = renderToString(
+      <SettingDistributionPanel
+        dailyRecords={mockDailyRecords}
+        selectedModelName="マイジャグラーV"
+      />
+    );
+
+    expect(html).not.toContain(
+      '設定の分布グラフ（EM推定）は参考値です。上の出率ベースの範囲を主にご覧ください'
+    );
   });
 });

@@ -51,6 +51,18 @@ const STORE_COLORS = [
   '#7c3aed', // violet
 ];
 
+export function formatMonthlyTrendTooltip(val: any, name: any): [string, string] {
+  const storeName = String(name ?? '');
+  if (val === null || val === undefined || val === '') {
+    return ['-', storeName];
+  }
+  const num = typeof val === 'number' ? val : Number(val);
+  const formattedVal = Number.isFinite(num)
+    ? `${num >= 0 ? '+' : ''}${num.toFixed(1)}枚/台`
+    : `${val}枚/台`;
+  return [formattedVal, storeName];
+}
+
 export const StoreComparison: React.FC<StoreComparisonProps> = ({
   stores,
   onSelectStore,
@@ -337,46 +349,7 @@ export const StoreComparison: React.FC<StoreComparisonProps> = ({
             </div>
           </div>
 
-          {/* 3. Monthly Trend Overlaid Chart */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3">
-            <div className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-              <TrendingUp className="w-4 h-4 text-indigo-600" />
-              <span>月次推移の重ね合わせ折れ線（台あたり平均差枚）</span>
-            </div>
-
-            <div className="h-64 w-full">
-              {monthlyChartData.length === 0 ? (
-                <div className="h-full flex items-center justify-center text-slate-400 text-xs">
-                  月次推移データがありません
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={monthlyChartData} margin={{ top: 10, right: 20, left: 0, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                    <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 11 }} />
-                    <Tooltip
-                      formatter={(val: any) => [`${val >= 0 ? '+' : ''}${val}枚/台`, '']}
-                      contentStyle={{ fontSize: 12, borderRadius: 8 }}
-                    />
-                    <Legend wrapperStyle={{ fontSize: 11 }} />
-                    {comparedStores.map((s, idx) => (
-                      <Line
-                        key={s.id}
-                        type="monotone"
-                        dataKey={s.name}
-                        stroke={STORE_COLORS[idx % STORE_COLORS.length]}
-                        strokeWidth={2}
-                        dot={{ r: 3 }}
-                      />
-                    ))}
-                  </LineChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </div>
-
-          {/* 4. Digit Day Heatmap Grid (店舗 × のつく日) */}
+          {/* 3. Digit Day Heatmap Grid (店舗 × のつく日) */}
           <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3">
             <div className="space-y-1">
               <div className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
@@ -461,7 +434,7 @@ export const StoreComparison: React.FC<StoreComparisonProps> = ({
             </div>
           </div>
 
-          {/* 5. Day of Week Heatmap Grid (店 × 曜日) */}
+          {/* 4. Day of Week Heatmap Grid (店 × 曜日) */}
           <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3">
             <div className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
               <Calendar className="w-4 h-4 text-indigo-600" />
@@ -513,6 +486,46 @@ export const StoreComparison: React.FC<StoreComparisonProps> = ({
                   })}
                 </tbody>
               </table>
+            </div>
+          </div>
+
+          {/* 5. Monthly Trend Overlaid Chart */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3">
+            <div className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+              <TrendingUp className="w-4 h-4 text-indigo-600" />
+              <span>月次推移の重ね合わせ折れ線（台あたり平均差枚）</span>
+            </div>
+
+            <div className="h-64 w-full">
+              {monthlyChartData.length === 0 ? (
+                <div className="h-full flex items-center justify-center text-slate-400 text-xs">
+                  月次推移データがありません
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={monthlyChartData} margin={{ top: 10, right: 20, left: 0, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} />
+                    <Tooltip
+                      formatter={formatMonthlyTrendTooltip}
+                      contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    {comparedStores.map((s, idx) => (
+                      <Line
+                        key={s.id}
+                        type="monotone"
+                        dataKey={s.name}
+                        name={s.name}
+                        stroke={STORE_COLORS[idx % STORE_COLORS.length]}
+                        strokeWidth={2}
+                        dot={{ r: 3 }}
+                      />
+                    ))}
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
             </div>
           </div>
 

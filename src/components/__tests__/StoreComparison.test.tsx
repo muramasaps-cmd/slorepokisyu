@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, it, expect } from 'vitest';
 import { renderToString } from 'react-dom/server';
-import { StoreComparison } from '../StoreComparison';
+import { StoreComparison, formatMonthlyTrendTooltip } from '../StoreComparison';
 import { StoreProfile, DailyRecord } from '../../data/types';
 
 function createMockStore(id: string, name: string, dates: string[]): StoreProfile {
@@ -127,5 +127,40 @@ describe('StoreComparison Component', () => {
   it('renders empty state message when less than 2 stores are provided', () => {
     const html = renderToString(<StoreComparison stores={[storeA]} />);
     expect(html).toContain('店舗比較には2店舗以上の登録が必要です');
+  });
+
+  it('renders sections in the specified order: summary -> metrics table -> digit day heatmap -> dow heatmap -> monthly trend chart -> category/common models', () => {
+    const html = renderToString(<StoreComparison stores={[storeA, storeB]} />);
+
+    const posSummary = html.indexOf('データに基づく各店舗の傾向要約（客観数値自動生成）');
+    const posMetrics = html.indexOf('主要指標 比較一覧表（台あたり基準）');
+    const posDigit = html.indexOf('店舗 × のつく日 ヒートマップ（台あたり平均差枚）');
+    const posDow = html.indexOf('店舗 × 曜日 ヒートマップ（台あたり平均差枚）');
+    const posMonthly = html.indexOf('月次推移の重ね合わせ折れ線（台あたり平均差枚）');
+    const posCategory = html.indexOf('機種カテゴリ構成比');
+    const posCommonModels = html.indexOf('共通機種ランキング（同一機種の店別成績）');
+
+    expect(posSummary).toBeGreaterThan(-1);
+    expect(posMetrics).toBeGreaterThan(posSummary);
+    expect(posDigit).toBeGreaterThan(posMetrics);
+    expect(posDow).toBeGreaterThan(posDigit);
+    expect(posMonthly).toBeGreaterThan(posDow);
+    expect(posCategory).toBeGreaterThan(posMonthly);
+    expect(posCommonModels).toBeGreaterThan(posMonthly);
+  });
+
+  it('formats monthly trend tooltip with signed 1-decimal value and store name', () => {
+    expect(formatMonthlyTrendTooltip(75, 'ホールA店')).toEqual(['+75.0枚/台', 'ホールA店']);
+    expect(formatMonthlyTrendTooltip(-12.34, 'ホールB店')).toEqual(['-12.3枚/台', 'ホールB店']);
+    expect(formatMonthlyTrendTooltip(0, 'ホールC店')).toEqual(['+0.0枚/台', 'ホールC店']);
+    expect(formatMonthlyTrendTooltip(null, 'ホールA店')).toEqual(['-', 'ホールA店']);
+    expect(formatMonthlyTrendTooltip(undefined, 'ホールB店')).toEqual(['-', 'ホールB店']);
+  });
+
+  it('renders monthly trend chart lines with store names and legend matching', () => {
+    const html = renderToString(<StoreComparison stores={[storeA, storeB]} />);
+    expect(html).toContain('月次推移の重ね合わせ折れ線（台あたり平均差枚）');
+    expect(html).toContain('ホールA店');
+    expect(html).toContain('ホールB店');
   });
 });

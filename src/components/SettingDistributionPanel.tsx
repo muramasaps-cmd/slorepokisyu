@@ -615,6 +615,38 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
     return { imported, errors };
   };
 
+  const isEmWarning = (warn: string): boolean => {
+    return (
+      warn.includes('設定の分布が平ら') ||
+      warn.includes('σを固定した区間') ||
+      warn.includes('反復上限で終了')
+    );
+  };
+
+  const emWarnings = useMemo(() => {
+    if (!estimationResult?.warnings) return [];
+    return Array.from(new Set(estimationResult.warnings.filter(isEmWarning)));
+  }, [estimationResult]);
+
+  const nonEmWarnings = useMemo(() => {
+    if (!estimationResult?.warnings) return [];
+    return estimationResult.warnings.filter((w) => !isEmWarning(w));
+  }, [estimationResult]);
+
+  const isEmUnstable = useMemo(() => {
+    if (!estimationResult) return false;
+    return Boolean(
+      estimationResult.pointEstimateReachedMaxIterations ||
+        !estimationResult.converged ||
+        (estimationResult.bootstrapMaxIterationsRate !== undefined &&
+          estimationResult.bootstrapMaxIterationsRate > 0) ||
+        !estimationResult.isCiCalculated ||
+        estimationResult.warnings?.some(
+          (w) => w.includes('設定の分布が平ら') || w.includes('反復上限で終了')
+        )
+    );
+  }, [estimationResult]);
+
   return (
     <div className="space-y-4">
       {/* 1. 機種選択 & 仕様テーブル管理ヘッダー */}
@@ -1100,10 +1132,17 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
             </div>
           </div>
 
-          {/* 警告メッセージ表示 (乖離や収束未達等) */}
-          {estimationResult.warnings.length > 0 && (
+          {/* 警告メッセージ表示 (EM推定が不安定なときだけ、最上部に1行の案内を情報の色で表示) */}
+          {isEmUnstable && (
+            <div className="p-2.5 bg-sky-50 border border-sky-200 rounded-lg flex items-center gap-2 text-xs text-sky-900">
+              <Info className="w-4 h-4 text-sky-600 shrink-0" />
+              <span>設定の分布グラフ（EM推定）は参考値です。上の出率ベースの範囲を主にご覧ください</span>
+            </div>
+          )}
+
+          {nonEmWarnings.length > 0 && (
             <div className="space-y-1.5">
-              {estimationResult.warnings.map((warn, wIdx) => (
+              {nonEmWarnings.map((warn, wIdx) => (
                 <div
                   key={wIdx}
                   className="px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 flex items-center gap-2"
@@ -1811,6 +1850,21 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
                     （変動幅 <strong>{sensitivityResult.rateSpread}ポイント</strong> ≧ 30pt）と極端に変動しています。
                     回転数と出率に強い相関があるため、特定条件での断定的な分布は算出できません。下のグラフは参考として薄く表示しています。
                   </p>
+                </div>
+              )}
+
+              {/* EM推定の警告（設定の分布が平ら…／σを固定した区間です…／再標本の◯%が反復上限で終了…） */}
+              {emWarnings.length > 0 && (
+                <div className="space-y-1.5">
+                  {emWarnings.map((warn, wIdx) => (
+                    <div
+                      key={wIdx}
+                      className="px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 flex items-center gap-2"
+                    >
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>{warn}</span>
+                    </div>
+                  ))}
                 </div>
               )}
 

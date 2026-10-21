@@ -10,6 +10,11 @@ import {
   ConditionBucketStat,
   DOW_COLUMNS,
   TAIL_COLUMNS,
+  SPECIAL_COLUMNS,
+  MACHINE_TAIL_COLUMNS,
+  getConditionColumns,
+  SPECIAL_DEFINITION_TEXT,
+  MACHINE_TAIL_DEFINITION_TEXT,
   DIGIT_DAY_DEFINITION_TEXT,
   DIGIT_DAY_EXPLANATION,
   DOW_EXPLANATION,
@@ -21,6 +26,7 @@ import {
   calculateMultiStoreConditions,
   StoreConditionRow,
 } from '../utils/conditionAnalysis';
+import { SpecialDayPatterns } from './SpecialDayPatterns';
 import {
   Calendar,
   CalendarDays,
@@ -39,6 +45,7 @@ import {
   Check,
   Building2,
   Info,
+  Hash,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -147,18 +154,25 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
   >('rank');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
+  const [selectedStoreIndex, setSelectedStoreIndex] = useState<number>(0);
+
   const isHall = perspective === 'hall';
   const isMultiStore = Boolean(stores && stores.length >= 1);
 
-  // Single store bucket stats
+  // Single store bucket stats (or selected store in multi-store mode)
   const singleStats: ConditionBucketStat[] = useMemo(() => {
     if (isMultiStore && stores && stores.length > 0) {
-      // If stores is provided, singleStats defaults to first store or merged
-      const first = stores[0];
-      return calculateConditionStats(first.dailyRecords || [], currentDimension, {
+      const targetStore = stores[selectedStoreIndex] || stores[0];
+      let recs = targetStore.dailyRecords || [];
+      if (period && period.startDate && period.endDate && period.hasCommonPeriod !== false) {
+        recs = recs.filter((r) => r.date >= period.startDate! && r.date <= period.endDate!);
+      }
+      return calculateConditionStats(recs, currentDimension, {
         perspective,
-        oldEventDays: first.oldEventDays || oldEventDays,
-        specialDayRules: first.specialDayRules || specialDayRules,
+        oldEventDays: targetStore.oldEventDays || oldEventDays,
+        specialDayRules: targetStore.specialDayRules || specialDayRules,
+        totalMachinesApprox: targetStore.totalMachinesApprox,
+        includeMonthDayZoro: false,
       });
     }
     return calculateConditionStats(dailyRecords, currentDimension, {
@@ -169,6 +183,8 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
   }, [
     isMultiStore,
     stores,
+    selectedStoreIndex,
+    period,
     dailyRecords,
     currentDimension,
     perspective,
@@ -436,24 +452,38 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
   };
 
   // Determine section headers
-  const columns = currentDimension === 'dow' ? DOW_COLUMNS : TAIL_COLUMNS;
+  const columns = getConditionColumns(currentDimension);
   const isDow = currentDimension === 'dow';
 
-  const defaultTitle = isDow
-    ? isMultiStore
-      ? '店舗 × 曜日 ヒートマップ（台あたり平均差枚）'
-      : '曜日・祝日別 利益・出玉傾向分析'
-    : isMultiStore
-    ? '店舗 × のつく日 ヒートマップ（台あたり平均差枚）'
-    : '〇のつく日別の利益・出玉傾向分析';
+  const defaultTitle =
+    currentDimension === 'dow'
+      ? isMultiStore
+        ? '店舗 × 曜日 ヒートマップ（台あたり平均差枚）'
+        : '曜日・祝日別 利益・出玉傾向分析'
+      : currentDimension === 'tail'
+      ? isMultiStore
+        ? '店舗 × のつく日 ヒートマップ（台あたり平均差枚）'
+        : '〇のつく日別の利益・出玉傾向分析'
+      : currentDimension === 'special'
+      ? isMultiStore
+        ? '店舗 × 特日／通常日 ヒートマップ'
+        : '特日／通常日別の利益・出玉傾向分析'
+      : isMultiStore
+      ? '店舗 × 台番号末尾 ヒートマップ'
+      : '台番号末尾別の利益・出玉傾向分析';
 
   const titleText = customTitle || defaultTitle;
 
-  const defaultDescription = isDow
-    ? DOW_EXPLANATION
-    : isMultiStore
-    ? DIGIT_DAY_DEFINITION_TEXT
-    : DIGIT_DAY_EXPLANATION;
+  const defaultDescription =
+    currentDimension === 'dow'
+      ? DOW_EXPLANATION
+      : currentDimension === 'tail'
+      ? isMultiStore
+        ? DIGIT_DAY_DEFINITION_TEXT
+        : DIGIT_DAY_EXPLANATION
+      : currentDimension === 'special'
+      ? SPECIAL_DEFINITION_TEXT
+      : MACHINE_TAIL_DEFINITION_TEXT;
 
   const descriptionText = customDescription || defaultDescription;
 
@@ -486,13 +516,27 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
         <div>
           <div className="flex items-center gap-2">
             <div className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600">
-              {isDow ? <Calendar className="w-5 h-5" /> : <Sparkles className="w-5 h-5" />}
+              {currentDimension === 'dow' ? (
+                <Calendar className="w-5 h-5" />
+              ) : currentDimension === 'tail' ? (
+                <CalendarDays className="w-5 h-5" />
+              ) : currentDimension === 'special' ? (
+                <Sparkles className="w-5 h-5" />
+              ) : (
+                <Hash className="w-5 h-5" />
+              )}
             </div>
             <h2 className="text-base sm:text-lg font-bold text-slate-900 flex items-center gap-2">
               <span>{titleText}</span>
               {!isMultiStore && (
                 <span className="text-xs font-normal text-slate-500">
-                  {isDow ? '(月〜日曜日 & 国民の祝日)' : '(0〜9のつく日 & ゾロ目の日)'}
+                  {currentDimension === 'dow'
+                    ? '(月〜日曜日 & 国民の祝日)'
+                    : currentDimension === 'tail'
+                    ? '(0〜9のつく日 & ゾロ目の日)'
+                    : currentDimension === 'special'
+                    ? '(特日 vs 通常日 & 前日・翌日)'
+                    : '(末尾0〜9 & 末尾ゾロ目)'}
                 </span>
               )}
             </h2>
@@ -503,7 +547,7 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
         {/* Global Switchers */}
         {!hideControls && (
           <div className="flex flex-wrap items-center gap-2 shrink-0 self-start lg:self-auto text-xs">
-            {/* 1. Dimension Switcher (切り口: 曜日・祝日 / のつく日・ゾロ目) */}
+            {/* 1. Dimension Switcher (切り口: 曜日・祝日 / のつく日・ゾロ目 / 特日／通常日 / 末尾) */}
             {!fixedDimension && (
               <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl font-bold">
                 <button
@@ -529,6 +573,30 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                 >
                   <CalendarDays className="w-3.5 h-3.5" />
                   のつく日・ゾロ目
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDimensionChange('special')}
+                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                    currentDimension === 'special'
+                      ? 'bg-white text-indigo-700 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  特日／通常日
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDimensionChange('machineTail')}
+                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                    currentDimension === 'machineTail'
+                      ? 'bg-white text-indigo-700 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Hash className="w-3.5 h-3.5" />
+                  末尾
                 </button>
               </div>
             )}
@@ -835,6 +903,27 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
       {/* VIEW 2: CHART */}
       {currentViewMode === 'chart' && (
         <div className="space-y-4">
+          {isMultiStore && stores && stores.length > 1 && (
+            <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-xl border border-slate-200">
+              <span className="text-2xs font-bold text-slate-500">店舗詳細切替:</span>
+              <div className="flex flex-wrap gap-1.5">
+                {stores.map((s, idx) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => setSelectedStoreIndex(idx)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      selectedStoreIndex === idx
+                        ? 'bg-slate-900 text-white shadow-2xs'
+                        : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    {s.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="h-64 sm:h-72 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart
@@ -955,6 +1044,27 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
       {/* VIEW 3: TABLE */}
       {currentViewMode === 'table' && (
         <div className="space-y-4">
+          {isMultiStore && stores && stores.length > 1 && (
+            <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-xl border border-slate-200">
+              <span className="text-2xs font-bold text-slate-500">店舗詳細切替:</span>
+              <div className="flex flex-wrap gap-1.5">
+                {stores.map((s, idx) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => setSelectedStoreIndex(idx)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      selectedStoreIndex === idx
+                        ? 'bg-slate-900 text-white shadow-2xs'
+                        : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    {s.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {/* TOP 3 & Worst 3 Cards */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* TOP 3 Card */}
@@ -1355,6 +1465,37 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
               </tbody>
             </table>
           </div>
+      {/* Special Day Detailed Patterns (特日サイクル・特日タイプ別・前日翌日) */}
+      {currentDimension === 'special' && (
+        <div className="mt-6 pt-6 border-t border-slate-200">
+          <div className="mb-3 flex items-center gap-2">
+            <span className="p-1 rounded-lg bg-indigo-50 text-indigo-600">
+              <Sparkles className="w-4 h-4" />
+            </span>
+            <h3 className="text-sm font-bold text-slate-900">
+              特日詳細分析（特日サイクル・特日タイプ別・前日翌日）
+            </h3>
+          </div>
+          <SpecialDayPatterns
+            dailyRecords={
+              isMultiStore && stores && stores.length > 0
+                ? stores[selectedStoreIndex]?.dailyRecords || dailyRecords
+                : dailyRecords
+            }
+            perspective={perspective}
+            unit={unit === 'yen' || unit === 'coins' || unit === 'payoutRate' ? unit : 'avgDiff'}
+            specialDayRules={
+              isMultiStore && stores && stores.length > 0
+                ? stores[selectedStoreIndex]?.specialDayRules || specialDayRules
+                : specialDayRules
+            }
+            oldEventDays={
+              isMultiStore && stores && stores.length > 0
+                ? stores[selectedStoreIndex]?.oldEventDays || oldEventDays
+                : oldEventDays
+            }
+            onSelectMonth={(ym) => onSelectDate?.(ym)}
+          />
         </div>
       )}
     </div>

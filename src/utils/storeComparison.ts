@@ -1,6 +1,14 @@
 import { StoreProfile, DailyRecord } from '../data/types';
 import { isDateSpecialDay } from './dataEngine';
 import { normalizeModelName } from './modelName';
+import {
+  TAIL_COLUMNS,
+  getDiffHeatmapColor,
+  isFewDays,
+  FEW_DAYS_LABEL,
+  DIGIT_DAY_DEFINITION_TEXT,
+} from './conditionAnalysis';
+
 
 export interface StoreCommonPeriod {
   startDate: string;
@@ -479,45 +487,15 @@ export function calculateStoreCategoryComposition(
   ];
 }
 
-export const DIGIT_DAY_COLUMNS = [
-  { key: '1', label: '1のつく日', shortLabel: '1日' },
-  { key: '2', label: '2のつく日', shortLabel: '2日' },
-  { key: '3', label: '3のつく日', shortLabel: '3日' },
-  { key: '4', label: '4のつく日', shortLabel: '4日' },
-  { key: '5', label: '5のつく日', shortLabel: '5日' },
-  { key: '6', label: '6のつく日', shortLabel: '6日' },
-  { key: '7', label: '7のつく日', shortLabel: '7日' },
-  { key: '8', label: '8のつく日', shortLabel: '8日' },
-  { key: '9', label: '9のつく日', shortLabel: '9日' },
-  { key: '0', label: '0のつく日', shortLabel: '0日' },
-  { key: 'ゾロ目', label: 'ゾロ目の日', shortLabel: 'ゾロ目' },
-] as const;
+export const DIGIT_DAY_COLUMNS = TAIL_COLUMNS;
+export {
+  getDiffHeatmapColor,
+  isFewDays,
+  FEW_DAYS_LABEL,
+  DIGIT_DAY_DEFINITION_TEXT,
+};
 
-/**
- * Shared color classification for Heatmap cells (used in both Digit Day and Day of Week heatmaps).
- */
-export function getDiffHeatmapColor(
-  diff: number,
-  daysCount = 3
-): {
-  bgClass: string;
-  isFewDays: boolean;
-} {
-  const isFewDays = daysCount > 0 && daysCount < 3;
-  let bgClass = 'bg-slate-50 text-slate-600';
-  if (daysCount === 0) {
-    bgClass = 'bg-slate-50/50 text-slate-400';
-  } else if (diff >= 300) {
-    bgClass = 'bg-blue-600 text-white font-bold';
-  } else if (diff >= 100) {
-    bgClass = 'bg-blue-100 text-blue-900 font-bold';
-  } else if (diff <= -300) {
-    bgClass = 'bg-rose-600 text-white font-bold';
-  } else if (diff <= -100) {
-    bgClass = 'bg-rose-100 text-rose-900 font-bold';
-  }
-  return { bgClass, isFewDays };
-}
+
 
 /**
  * Pure function: Computes Digit Day ('のつく日' 1..9, 0 + 'ゾロ目の日') heatmap metrics for a store.

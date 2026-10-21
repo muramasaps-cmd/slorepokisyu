@@ -12,6 +12,7 @@ import {
   getScaleLabel,
   StabilityQuadrant,
 } from '../utils/highPayoutAnalytics';
+import { ConditionDimension } from '../utils/conditionAnalysis';
 import {
   Sparkles,
   Flame,
@@ -39,6 +40,7 @@ import {
   AlertCircle,
   HelpCircle,
   Compass,
+  ArrowRight,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -59,18 +61,14 @@ interface HighPayoutAnalysisProps {
   rateExchange?: number;
   oldEventDays?: string;
   specialDayRules?: SpecialDayRules;
+  onNavigateToConditions?: (dim?: ConditionDimension) => void;
 }
 
 type ActiveTab =
   | 'insights'
-  | 'scale'
-  | 'rebound'
-  | 'stability'
   | 'models'
-  | 'tails'
-  | 'timing'
-  | 'games'
-  | 'records';
+  | 'rebound'
+  | 'scale';
 
 export const HighPayoutAnalysis: React.FC<HighPayoutAnalysisProps> = ({
   dailyRecords,
@@ -79,6 +77,7 @@ export const HighPayoutAnalysis: React.FC<HighPayoutAnalysisProps> = ({
   rateLend = 46,
   rateExchange = 52,
   oldEventDays = '',
+  onNavigateToConditions,
 }) => {
   const isHall = perspective === 'hall';
 
@@ -533,15 +532,10 @@ export const HighPayoutAnalysis: React.FC<HighPayoutAnalysisProps> = ({
       {/* Navigation Tabs */}
       <div className="flex items-center gap-1 border-b border-slate-200 overflow-x-auto pb-1">
         {[
-          { id: 'insights' as const, label: '総合特徴・黄金法則カルテ', icon: Award },
-          { id: 'scale' as const, label: '台数規模別特徴 (多台数/中規模/バラ)', icon: Scale, isNew: true },
-          { id: 'rebound' as const, label: '前日相関 (上げ vs 据え置き)', icon: RefreshCw, isNew: true },
-          { id: 'stability' as const, label: '勝率・安定度マトリクス', icon: ShieldCheck, isNew: true },
-          { id: 'models' as const, label: `機種別ランキング (${modelStats.length})`, icon: Trophy },
-          { id: 'tails' as const, label: `末尾別特徴 (${tailStats.length})`, icon: Hash },
-          { id: 'timing' as const, label: '特日・曜日別特徴', icon: Calendar },
-          { id: 'games' as const, label: '稼働G数別特徴', icon: Clock },
-          { id: 'records' as const, label: `該当データ一覧 (${highItems.length})`, icon: Layers },
+          { id: 'insights' as const, label: '総合特徴・黄金抽出カルテ', icon: Award },
+          { id: 'models' as const, label: `機種カテゴリ別・機種別 (${modelStats.length})`, icon: Trophy },
+          { id: 'rebound' as const, label: '投入形態 (前日相関: 上げ vs 据え置き)', icon: RefreshCw },
+          { id: 'scale' as const, label: '台数規模別特徴 (多台数/中規模/バラ)', icon: Scale },
         ].map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -558,14 +552,29 @@ export const HighPayoutAnalysis: React.FC<HighPayoutAnalysisProps> = ({
             >
               <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-amber-600' : 'text-slate-400'}`} />
               <span>{tab.label}</span>
-              {tab.isNew && (
-                <span className="bg-rose-500 text-white text-[9px] px-1 py-0.2 rounded-full font-black animate-pulse">
-                  新
-                </span>
-              )}
             </button>
           );
         })}
+      </div>
+
+      {/* Integration Banner to ConditionAnalysis */}
+      <div className="p-3 bg-gradient-to-r from-slate-50 to-indigo-50/40 border border-slate-200 rounded-xl text-xs text-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Sparkles className="w-4 h-4 text-indigo-600 shrink-0" />
+          <span>
+            <strong>特日vs通常日・曜日別・末尾別の高出率台割合</strong>は、「条件別分析」（指標: 高出率台の率）に統合されました。
+          </span>
+        </div>
+        {onNavigateToConditions && (
+          <button
+            type="button"
+            onClick={() => onNavigateToConditions('dow')}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-lg transition-colors cursor-pointer shrink-0"
+          >
+            <span>条件別に詳しく見る</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
 
       {/* Tab Content 1: 総合特徴・黄金法則カルテ */}
@@ -1115,90 +1124,7 @@ export const HighPayoutAnalysis: React.FC<HighPayoutAnalysisProps> = ({
         </div>
       )}
 
-      {/* Tab Content 4: 【新設】勝率・安定度マトリクス */}
-      {activeTab === 'stability' && (
-        <div className="space-y-6 animate-in fade-in duration-150">
-          <div className="bg-purple-50/70 border border-purple-200 rounded-xl p-4 text-xs text-purple-950 space-y-1.5">
-            <div className="font-bold flex items-center gap-1.5 text-sm">
-              <ShieldCheck className="w-4 h-4 text-purple-600" />
-              高出率台の勝率・出玉安定度マトリクス
-            </div>
-            <p className="text-purple-900 leading-relaxed">
-              高出率台を「勝率の高さ（負けにくさ・安定性）」と「荒波一撃度」の4象限に分類。手堅く勝ちたい時は「超安定・高勝率型」を、夕方からの一発逆転や爆発を狙う時は「荒波一撃型」を選択するなど、目的に応じた機種選択の指標となります。
-            </p>
-          </div>
 
-          {/* 4象限カードグリッド */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {stabilityStat.quadrants.map((q) => (
-              <div
-                key={q.id}
-                className="bg-white rounded-xl p-4 border border-slate-200 shadow-2xs space-y-3 flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span className={`px-2 py-0.5 rounded text-xs font-black border ${q.badgeBg} ${q.badgeText}`}>
-                      {q.label}
-                    </span>
-                    <span className="text-xs font-bold text-slate-500">
-                      {q.count}機種 ({q.percent}%)
-                    </span>
-                  </div>
-
-                  <div className="text-xs text-slate-500 font-semibold mt-1">
-                    {q.subLabel}
-                  </div>
-
-                  <p className="text-[11px] text-slate-600 mt-1 leading-normal">
-                    {q.description}
-                  </p>
-                </div>
-
-                <div className="border-t border-slate-100 pt-2.5">
-                  <div className="text-[11px] font-bold text-slate-700 mb-1.5">
-                    該当機種:
-                  </div>
-                  {q.models.length === 0 ? (
-                    <div className="text-[11px] text-slate-400">該当機種なし</div>
-                  ) : (
-                    <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-1">
-                      {q.models.map((m) => (
-                        <div
-                          key={m.modelName}
-                          className="bg-slate-50 border border-slate-200 px-2 py-1 rounded text-xs flex items-center gap-1.5"
-                          title={`${m.modelName}: 高出率時勝率 ${m.winRateWhenHigh || '-'}%, 平均出率 ${m.avgPayoutRateWhenHigh}%`}
-                        >
-                          <span className="font-bold text-slate-900">{m.modelName}</span>
-                          <span className="font-mono text-emerald-700 text-[10px] font-black">
-                            {m.winRateWhenHigh !== null ? `${m.winRateWhenHigh}%` : '-'}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs text-slate-700 space-y-2">
-            <div className="font-bold text-slate-900 flex items-center gap-1.5">
-              <Compass className="w-4 h-4 text-purple-600" />
-              プレイヤーの戦術ナビゲーション:
-            </div>
-            <ul className="list-disc list-inside space-y-1 pl-1 text-slate-800">
-              <li>
-                <strong>朝イチツモ狙い（軍資金を保ちつつ手堅くツモりたい場合）:</strong>{' '}
-                「超安定・高勝率型」の島へ。下ブレしにくく小役判別も早いため、低リスクで立ち回れます。
-              </li>
-              <li>
-                <strong>特定日の万枚・大勝ち狙い:</strong>{' '}
-                「荒波一撃型」の主力スマスロへ。高設定でも展開に左右されますが、ツモった際の出玉期待値は群を抜いています。
-              </li>
-            </ul>
-          </div>
-        </div>
-      )}
 
       {/* Tab Content 5: 機種別特徴ランキング */}
       {activeTab === 'models' && (

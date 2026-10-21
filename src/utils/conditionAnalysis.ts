@@ -1,8 +1,9 @@
 import { DailyRecord, StoreProfile, SpecialDayRules } from '../data/types';
 import { isJapaneseHoliday } from './holidayUtils';
+import { isDateSpecialDay } from './dataEngine';
 import { StoreCommonPeriod } from './storeComparison';
 
-export type ConditionDimension = 'dow' | 'tail';
+export type ConditionDimension = 'dow' | 'tail' | 'special' | 'machineTail';
 export type ConditionMetric = 'avgDiff' | 'payoutRate' | 'highPayoutRate';
 export type ConditionViewMode = 'heatmap' | 'table' | 'chart';
 
@@ -38,11 +39,54 @@ export const TAIL_COLUMNS: readonly ConditionColumnDef[] = [
   { key: 'ゾロ目', label: 'ゾロ目の日', shortLabel: 'ゾロ目', sampleDays: '11日, 22日, 月日ゾロ目' },
 ] as const;
 
+export const SPECIAL_COLUMNS: readonly ConditionColumnDef[] = [
+  { key: 'special', label: '特日 (旧イベント日)', shortLabel: '特日' },
+  { key: 'normal', label: '通常営業日', shortLabel: '通常' },
+  { key: 'before', label: '特日前日', shortLabel: '前日' },
+  { key: 'after', label: '特日翌日', shortLabel: '翌日' },
+] as const;
+
+export const MACHINE_TAIL_COLUMNS: readonly ConditionColumnDef[] = [
+  { key: '0', label: '末尾0', shortLabel: '末0' },
+  { key: '1', label: '末尾1', shortLabel: '末1' },
+  { key: '2', label: '末尾2', shortLabel: '末2' },
+  { key: '3', label: '末尾3', shortLabel: '末3' },
+  { key: '4', label: '末尾4', shortLabel: '末4' },
+  { key: '5', label: '末尾5', shortLabel: '末5' },
+  { key: '6', label: '末尾6', shortLabel: '末6' },
+  { key: '7', label: '末尾7', shortLabel: '末7' },
+  { key: '8', label: '末尾8', shortLabel: '末8' },
+  { key: '9', label: '末尾9', shortLabel: '末9' },
+  { key: 'zoro', label: '末尾ゾロ目', shortLabel: 'ゾロ目' },
+] as const;
+
+export function getConditionColumns(dimension: ConditionDimension): readonly ConditionColumnDef[] {
+  switch (dimension) {
+    case 'dow':
+      return DOW_COLUMNS;
+    case 'tail':
+      return TAIL_COLUMNS;
+    case 'special':
+      return SPECIAL_COLUMNS;
+    case 'machineTail':
+      return MACHINE_TAIL_COLUMNS;
+    default:
+      return DOW_COLUMNS;
+  }
+}
+
+export const SPECIAL_DEFINITION_TEXT =
+  '特定日（旧イベント日・〇のつく日）と通常営業日、および特日の前日・翌日の出玉・高出率台投入傾向を比較分析します。';
+
+export const MACHINE_TAIL_DEFINITION_TEXT =
+  '台番号の1桁目（0〜9番台およびゾロ目番台）ごとの全台出玉・稼働・勝率集計です。当たりの入りやすい特定末尾の特定に役立ちます。';
+
 export const DIGIT_DAY_DEFINITION_TEXT =
   '「Nのつく日」は、日付の一の位が N の日とする（N=1〜9、0）。例: 1のつく日＝1・11・21・31日、0のつく日＝10・20・30日。ゾロ目は日の十の位と一の位が同じ日（11・22日）。共通期間のみ集計。';
 
 export const DIGIT_DAY_EXPLANATION =
   '「Nのつく日」は、日付の一の位が N の日とする（N=1〜9、0）。例: 1のつく日＝1・11・21・31日、0のつく日＝10・20・30日。ゾロ目は日の十の位と一の位が同じ日（11・22日）。';
+
 
 export const DOW_EXPLANATION =
   '月曜日から日曜日まで、および祝日（祝祭日・振替休日）ごとの出玉傾向・ホール粗利（G数連動）・稼働状況を比較分析します。';
@@ -231,8 +275,9 @@ export function calculateConditionStats(
     includeMonthDayZoro = true,
   } = options;
 
+  const columns = getConditionColumns(dimension);
+
   if (!dailyRecords || dailyRecords.length === 0) {
-    const columns = dimension === 'dow' ? DOW_COLUMNS : TAIL_COLUMNS;
     return columns.map((col) => ({
       key: col.key,
       label: col.label,
@@ -266,7 +311,20 @@ export function calculateConditionStats(
     }));
   }
 
-  const columns = dimension === 'dow' ? DOW_COLUMNS : TAIL_COLUMNS;
+  // Pre-index records by date for special day before/after lookups
+  const recordMap = new Map<string, DailyRecord>();
+  if (dimension === 'special') {
+    dailyRecords.forEach((r) => recordMap.set(r.date, r));
+  }
+
+  const isSpecialRecord = (r: DailyRecord) => {
+    if (r.isOldEventDay) return true;
+    if (isDateSpecialDay(r.date, specialDayRules)) return true;
+    if (isStoreEventDow(r.dayOfWeek, oldEventDays, specialDayRules)) return true;
+    const day = r.day ?? parseInt(r.date.split('-')[2] || '0', 10);
+    if (isStoreEventTail(day % 10, oldEventDays, specialDayRules)) return true;
+    return false;
+  };
 
   return columns.map((col) => {
     let records: DailyRecord[] = [];
@@ -282,7 +340,7 @@ export function calculateConditionStats(
       records = isHoliday
         ? dailyRecords.filter((r) => isJapaneseHoliday(r.date))
         : dailyRecords.filter((r) => r.dayOfWeek === dow);
-    } else {
+    } else if (dimension === 'tail') {
       const key = col.key;
       const isZoro = key === 'ゾロ目' || key === 'zoro';
       isStoreEvent = isStoreEventTail(key, oldEventDays, specialDayRules);
@@ -301,6 +359,115 @@ export function calculateConditionStats(
           return day % 10 === digit;
         });
       }
+    } else if (dimension === 'special') {
+      isStoreEvent = col.key === 'special';
+      if (col.key === 'special') {
+        records = dailyRecords.filter((r) => isSpecialRecord(r));
+      } else if (col.key === 'normal') {
+        records = dailyRecords.filter((r) => !isSpecialRecord(r));
+      } else if (col.key === 'before') {
+        records = dailyRecords.filter((r) => {
+          if (isSpecialRecord(r)) return false;
+          const parts = r.date.split(/[-/.]/);
+          if (parts.length !== 3) return false;
+          const nextDate = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10) + 1);
+          const nextStr = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, '0')}-${String(nextDate.getDate()).padStart(2, '0')}`;
+          const nextRec = recordMap.get(nextStr);
+          return Boolean(nextRec && isSpecialRecord(nextRec));
+        });
+      } else if (col.key === 'after') {
+        records = dailyRecords.filter((r) => {
+          if (isSpecialRecord(r)) return false;
+          const parts = r.date.split(/[-/.]/);
+          if (parts.length !== 3) return false;
+          const prevDate = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10) - 1);
+          const prevStr = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}-${String(prevDate.getDate()).padStart(2, '0')}`;
+          const prevRec = recordMap.get(prevStr);
+          return Boolean(prevRec && isSpecialRecord(prevRec));
+        });
+      }
+    } else if (dimension === 'machineTail') {
+      const key = col.key;
+      const isZoroCol = key === 'zoro' || key === 'ゾロ目';
+      const targetDigit = isZoroCol ? null : parseInt(key, 10);
+      isStoreEvent = isStoreEventTail(key, oldEventDays, specialDayRules);
+
+      const tailRecordsList: DailyRecord[] = [];
+
+      dailyRecords.forEach((r) => {
+        if (r.tails && r.tails.length > 0) {
+          const matchingTail = r.tails.find((t) => {
+            if (isZoroCol) {
+              return t.tailNum === null || t.tailName.includes('ゾロ');
+            }
+            return (
+              t.tailNum === targetDigit ||
+              t.tailName === `末尾${targetDigit}` ||
+              t.tailName.endsWith(String(targetDigit))
+            );
+          });
+
+          if (matchingTail) {
+            const count = matchingTail.totalMachines > 0 ? matchingTail.totalMachines : 1;
+            const diffCoins = matchingTail.totalDiffCoins;
+            const avgDiff = matchingTail.avgDiffCoins;
+            const avgG = matchingTail.avgGames;
+            const inCoins = avgG * 3 * count;
+            const outCoins = inCoins + diffCoins;
+            const payoutRate = inCoins > 0 ? Math.round((outCoins / inCoins) * 10000) / 100 : 100;
+
+            tailRecordsList.push({
+              ...r,
+              avgDiffCoins: avgDiff,
+              totalDiffCoins: diffCoins,
+              avgGames: avgG,
+              winMachines: matchingTail.winMachines,
+              totalMachines: count,
+              winRate: matchingTail.winRate,
+              payoutRate,
+              gModelHallProfit: -diffCoins * 20,
+              gModelPlayerProfit: diffCoins * 20,
+            });
+          }
+        } else if (r.machines && r.machines.length > 0) {
+          const matchingMachines = r.machines.filter((m) => {
+            if (isZoroCol) {
+              return m.isZoro || (m.machineNum >= 11 && m.machineNum % 11 === 0);
+            }
+            return (
+              m.tailDigit === targetDigit ||
+              m.machineNum % 10 === targetDigit
+            );
+          });
+
+          if (matchingMachines.length > 0) {
+            const count = matchingMachines.length;
+            const totalDiff = matchingMachines.reduce((sum, m) => sum + (m.diff || 0), 0);
+            const totalGames = matchingMachines.reduce((sum, m) => sum + (m.games || 0), 0);
+            const winMachs = matchingMachines.filter((m) => (m.diff || 0) > 0).length;
+            const avgDiff = Math.round((totalDiff / count) * 10) / 10;
+            const avgG = Math.round(totalGames / count);
+            const inCoins = totalGames * 3;
+            const outCoins = inCoins + totalDiff;
+            const payoutRate = inCoins > 0 ? Math.round((outCoins / inCoins) * 10000) / 100 : 100;
+
+            tailRecordsList.push({
+              ...r,
+              avgDiffCoins: avgDiff,
+              totalDiffCoins: totalDiff,
+              avgGames: avgG,
+              winMachines: winMachs,
+              totalMachines: count,
+              winRate: Math.round((winMachs / count) * 1000) / 10,
+              payoutRate,
+              gModelHallProfit: -totalDiff * 20,
+              gModelPlayerProfit: totalDiff * 20,
+            });
+          }
+        }
+      });
+
+      records = tailRecordsList;
     }
 
     const count = records.length;
@@ -345,7 +512,22 @@ export function calculateConditionStats(
     const totalPlayerProfit = records.reduce((acc, r) => acc + (r.gModelPlayerProfit || 0), 0);
     const dailyPlayerProfit = Math.round(totalPlayerProfit / count);
 
-    const totalDiffCoins = records.reduce((acc, r) => acc + r.totalDiffCoins, 0);
+    const rawTotalDiffCoins = records.reduce((acc, r) => acc + (r.totalDiffCoins || 0), 0);
+    const totalMachineDays = records.reduce(
+      (acc, r) => acc + (r.totalMachines > 0 ? r.totalMachines : totalMachinesApprox),
+      0
+    );
+    const totalDiffCoins =
+      rawTotalDiffCoins !== 0
+        ? rawTotalDiffCoins
+        : Math.round(
+            records.reduce(
+              (acc, r) =>
+                acc +
+                (r.avgDiffCoins || 0) * (r.totalMachines > 0 ? r.totalMachines : totalMachinesApprox),
+              0
+            )
+          );
     const avgDiffCoins =
       Math.round((records.reduce((acc, r) => acc + r.avgDiffCoins, 0) / count) * 10) / 10;
     const avgGames = Math.round(records.reduce((acc, r) => acc + r.avgGames, 0) / count);
@@ -378,9 +560,7 @@ export function calculateConditionStats(
         ? Math.round((winMachsSum / totalMachsSum) * 1000) / 10
         : playerWinRate;
 
-    const avgMachines = Math.round(
-      records.reduce((acc, r) => acc + (r.totalMachines || totalMachinesApprox), 0) / count
-    );
+    const avgMachines = count > 0 ? Math.round(totalMachineDays / count) : 0;
     const perMachineDailyProfit = avgMachines > 0 ? Math.round(dailyHallProfit / avgMachines) : 0;
     const perMachineDailyPlayerProfit =
       avgMachines > 0 ? Math.round(dailyPlayerProfit / avgMachines) : 0;
@@ -408,7 +588,7 @@ export function calculateConditionStats(
       highPayoutRate,
       avgGames,
       totalDiffCoins,
-      totalMachines: avgMachines * count,
+      totalMachines: totalMachineDays,
       totalHallProfit,
       dailyHallProfit,
       totalPlayerProfit,

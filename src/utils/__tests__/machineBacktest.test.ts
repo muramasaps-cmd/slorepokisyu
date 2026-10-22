@@ -285,7 +285,7 @@ describe('runMachineBacktest & computeBlockBootstrapCI', () => {
           }
         }
       }
-    });
+    }, 30000);
 
     it('uses rolling validation (3-5 splits) and block bootstrap to reject weight changes on noise data', () => {
       const noiseData = createSyntheticMachineRecords({

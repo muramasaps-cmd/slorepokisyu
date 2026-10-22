@@ -110,6 +110,94 @@ import {
   Flame,
 } from 'lucide-react';
 
+export type ActiveTab = 'overview' | 'target' | 'analysis' | 'compare' | 'validation';
+export type AnalysisSubTab = 'models' | 'conditions' | 'high_payout';
+export type TargetScope = 'store' | 'all';
+
+export interface ParsedHashResult {
+  tab: ActiveTab;
+  scope: TargetScope;
+  date?: string;
+  viewMode?: 'chart' | 'table';
+  subTab?: AnalysisSubTab;
+}
+
+export function parseHash(hashStr: string): ParsedHashResult {
+  const raw = hashStr.replace(/^#/, '');
+  if (!raw) return { tab: 'overview', scope: 'store' };
+
+  const [pathPart, queryPart] = raw.split('?');
+  const params = new URLSearchParams(queryPart || (pathPart.includes('&') ? pathPart : ''));
+
+  // Legacy #forecast -> #target (scope: store)
+  if (pathPart === 'forecast') {
+    const date = params.get('date') || params.get('targetDate') || undefined;
+    return { tab: 'target', scope: 'store', date };
+  }
+
+  // Legacy #cross -> #target (scope: all)
+  if (pathPart === 'cross') {
+    const date = params.get('crossDate') || params.get('date') || params.get('targetDate') || undefined;
+    return { tab: 'target', scope: 'all', date };
+  }
+
+  // Unified #target
+  if (pathPart === 'target') {
+    const scopeParam = params.get('scope');
+    const scope: TargetScope = scopeParam === 'all' ? 'all' : 'store';
+    const date = params.get('date') || params.get('targetDate') || params.get('crossDate') || undefined;
+    return { tab: 'target', scope, date };
+  }
+
+  // Legacy #models -> analysis (sub: models)
+  if (pathPart === 'models' || pathPart === 'model') {
+    return { tab: 'analysis', subTab: 'models', scope: 'store' };
+  }
+
+  // Legacy #trends -> analysis (sub: conditions)
+  if (pathPart === 'trends' || pathPart === 'conditions' || pathPart === 'condition') {
+    return { tab: 'analysis', subTab: 'conditions', scope: 'store' };
+  }
+
+  // Legacy #high_payout / #highPayout -> analysis (sub: high_payout)
+  if (pathPart === 'high_payout' || pathPart === 'highPayout' || pathPart === 'payout') {
+    return { tab: 'analysis', subTab: 'high_payout', scope: 'store' };
+  }
+
+  // Unified #analysis
+  if (pathPart === 'analysis') {
+    const subParam = params.get('sub');
+    let subTab: AnalysisSubTab = 'models';
+    if (subParam === 'conditions' || subParam === 'trends' || subParam === 'condition') {
+      subTab = 'conditions';
+    } else if (subParam === 'high_payout' || subParam === 'highPayout' || subParam === 'payout') {
+      subTab = 'high_payout';
+    }
+    return { tab: 'analysis', subTab, scope: 'store' };
+  }
+
+  // Legacy #tables -> overview (with table view mode)
+  if (pathPart === 'tables') {
+    return { tab: 'overview', scope: 'store', viewMode: 'table' };
+  }
+
+  // Verification tab (validation)
+  if (pathPart === 'validation') {
+    return { tab: 'validation', scope: 'store' };
+  }
+
+  // Store comparison tab (compare)
+  if (pathPart === 'compare') {
+    return { tab: 'compare', scope: 'store' };
+  }
+
+  if (pathPart === 'overview') {
+    return { tab: 'overview', scope: 'store' };
+  }
+
+  return { tab: 'overview', scope: 'store' };
+}
+
 export default function App() {
   const [stores, setStores] = useState<StoreProfile[]>(() => getSavedStores());
   const [activeStoreIdState, setActiveStoreIdState] = useState<string>(() => getActiveStoreId());
@@ -173,50 +261,18 @@ export default function App() {
   const [selectedYear, setSelectedYear] = useState<string>('all');
   const [selectedMonthModal, setSelectedMonthModal] = useState<string | null>(null);
 
-  // Unified Tabs State (including target tab with store/all scopes)
-  type ActiveTab = 'overview' | 'target' | 'models' | 'trends' | 'tables' | 'validation' | 'compare';
-  type TargetScope = 'store' | 'all';
-
-  const parseHash = (hashStr: string): { tab: ActiveTab; scope: TargetScope; date?: string } => {
-    const raw = hashStr.replace(/^#/, '');
-    if (!raw) return { tab: 'overview', scope: 'store' };
-
-    const [pathPart, queryPart] = raw.split('?');
-    const params = new URLSearchParams(queryPart || (pathPart.includes('&') ? pathPart : ''));
-
-    // Legacy #forecast -> #target (scope: store)
-    if (pathPart === 'forecast') {
-      const date = params.get('date') || params.get('targetDate') || undefined;
-      return { tab: 'target', scope: 'store', date };
-    }
-
-    // Legacy #cross -> #target (scope: all)
-    if (pathPart === 'cross') {
-      const date = params.get('crossDate') || params.get('date') || params.get('targetDate') || undefined;
-      return { tab: 'target', scope: 'all', date };
-    }
-
-    // Unified #target
-    if (pathPart === 'target') {
-      const scopeParam = params.get('scope');
-      const scope: TargetScope = scopeParam === 'all' ? 'all' : 'store';
-      const date = params.get('date') || params.get('targetDate') || params.get('crossDate') || undefined;
-      return { tab: 'target', scope, date };
-    }
-
-    if (['overview', 'models', 'trends', 'tables', 'validation', 'compare'].includes(pathPart)) {
-      return { tab: pathPart as ActiveTab, scope: 'store' };
-    }
-
-    return { tab: 'overview', scope: 'store' };
-  };
-
   const initialHashInfo = parseHash(typeof window !== 'undefined' ? window.location.hash : '');
   const [activeTab, setActiveTab] = useState<ActiveTab>(initialHashInfo.tab);
   const [targetScope, setTargetScope] = useState<TargetScope>(initialHashInfo.scope);
   const [targetDate, setTargetDate] = useState<string>(initialHashInfo.date || '');
+  const [overviewViewMode, setOverviewViewMode] = useState<'chart' | 'table'>(
+    initialHashInfo.viewMode || 'chart'
+  );
+  const [analysisSubTab, setAnalysisSubTab] = useState<AnalysisSubTab>(
+    initialHashInfo.subTab || 'models'
+  );
 
-  // Synchronize activeTab, targetScope, and targetDate with URL hash (also migrates legacy #forecast/#cross)
+  // Synchronize activeTab, targetScope, targetDate, and analysisSubTab with URL hash (also migrates legacy URLs)
   useEffect(() => {
     if (activeTab === 'target') {
       const params = new URLSearchParams();
@@ -228,18 +284,29 @@ export default function App() {
       if (window.location.hash !== newHash) {
         window.location.hash = newHash;
       }
+    } else if (activeTab === 'analysis') {
+      const newHash = `#analysis?sub=${analysisSubTab}`;
+      if (window.location.hash !== newHash) {
+        window.location.hash = newHash;
+      }
     } else {
       const currentTab = window.location.hash.replace('#', '').split('?')[0].split('&')[0];
       if (currentTab !== activeTab) {
         window.location.hash = `#${activeTab}`;
       }
     }
-  }, [activeTab, targetScope, targetDate]);
+  }, [activeTab, targetScope, targetDate, analysisSubTab]);
 
   useEffect(() => {
     const handleHashChange = () => {
       const parsed = parseHash(window.location.hash);
       setActiveTab(parsed.tab);
+      if (parsed.viewMode) {
+        setOverviewViewMode(parsed.viewMode);
+      }
+      if (parsed.subTab) {
+        setAnalysisSubTab(parsed.subTab);
+      }
       if (parsed.tab === 'target') {
         setTargetScope(parsed.scope);
         if (parsed.date) {
@@ -272,7 +339,8 @@ export default function App() {
   const [conditionDimension, setConditionDimension] = useState<ConditionDimension>('dow');
   const handleNavigateToConditions = (dim: ConditionDimension = 'dow') => {
     setConditionDimension(dim);
-    setActiveTab('trends');
+    setActiveTab('analysis');
+    setAnalysisSubTab('conditions');
   };
 
   const latestDataDate = useMemo(() => {
@@ -1179,18 +1247,14 @@ export default function App() {
           </div>
         )}
 
-        {/* Navigation Bar */}
-        <div className="flex items-center gap-1 sm:gap-2 border-b border-slate-200 bg-white px-2 sm:px-3 py-1.5 rounded-xl shadow-2xs overflow-x-auto">
+        {/* Navigation Bar: 5 Tabs (375px mobile friendly grid) */}
+        <nav aria-label="メインナビゲーション" className="grid grid-cols-5 gap-1 bg-white p-1 sm:p-1.5 rounded-xl border border-slate-200 shadow-2xs w-full max-w-full">
           {[
-            { id: 'overview' as const, label: '概要', icon: BarChart3, desc: 'KPIと月別推移' },
+            { id: 'overview' as const, label: '概要', icon: BarChart3, desc: 'KPI・月別推移・総合ヒートマップ' },
             { id: 'target' as const, label: '狙い', icon: Target, desc: '来店日・機種・台番 狙い予測（この店／全店）' },
-            { id: 'models' as const, label: '機種分析', icon: Cpu, desc: '機種別深掘り・高出玉' },
-            { id: 'trends' as const, label: '日付傾向', icon: Calendar, desc: '末尾・曜日・特日' },
-            { id: 'tables' as const, label: '月別・ヒートマップ', icon: Layers, desc: '月別表・ヒートマップ' },
-            { id: 'validation' as const, label: '精度検証', icon: ShieldCheck, desc: 'バックテスト・自動調整' },
-            ...(uniqueStores.length >= 2
-              ? [{ id: 'compare' as const, label: '店舗比較', icon: Building2, desc: '複数ホールの横断比較' }]
-              : []),
+            { id: 'analysis' as const, label: '分析', icon: Cpu, desc: '機種・条件別・高出率台' },
+            { id: 'compare' as const, label: '店舗比較', icon: Building2, desc: '複数ホールの横断比較' },
+            { id: 'validation' as const, label: '検証', icon: ShieldCheck, desc: 'バックテスト・自動調整' },
           ].map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -1199,28 +1263,21 @@ export default function App() {
                 key={tab.id}
                 type="button"
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm font-bold rounded-lg transition-all cursor-pointer whitespace-nowrap ${
+                className={`flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 py-1.5 sm:py-2 px-1 sm:px-2 rounded-lg transition-all cursor-pointer text-center select-none ${
                   isActive
-                    ? 'bg-amber-500 text-slate-950 shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    ? 'bg-amber-500 text-slate-950 font-black shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100 font-bold'
                 }`}
                 title={tab.desc}
               >
-                <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-slate-950' : 'text-slate-500'}`} />
-                <span>{tab.label}</span>
-                {tab.id === 'validation' && (
-                  <span
-                    className={`px-1.5 py-0.2 rounded text-[10px] font-black ${
-                      isActive ? 'bg-slate-950 text-amber-300' : 'bg-indigo-100 text-indigo-700'
-                    }`}
-                  >
-                    新規
-                  </span>
-                )}
+                <Icon className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 ${isActive ? 'text-slate-950' : 'text-slate-500'}`} />
+                <span className="text-[11px] sm:text-xs md:text-sm tracking-tight whitespace-nowrap">
+                  {tab.label}
+                </span>
               </button>
             );
           })}
-        </div>
+        </nav>
 
         {/* Tab Contents with React.Suspense for Code-Split Lazy Loaded Modules */}
         <React.Suspense
@@ -1231,9 +1288,9 @@ export default function App() {
             </div>
           }
         >
-        {/* TAB 1: 概要 (KPI と月別推移グラフ) */}
+        {/* TAB 1: 概要 (KPI、月別推移[グラフ/表]、総合ヒートマップ) */}
         {activeTab === 'overview' && (
-          <div className="space-y-4 animate-in fade-in duration-150">
+          <div className="space-y-6 animate-in fade-in duration-150">
             {/* KPI Cards: Full Width 4-Card Responsive Grid */}
             <div className="w-full">
               <KpiCards
@@ -1244,17 +1301,74 @@ export default function App() {
               />
             </div>
 
-            {/* Monthly Profit Chart: Full Width with High Visibility */}
-            <div className="w-full">
-              <ProfitChart
-                monthlyStats={filteredMonthlyStats}
-                perspective={perspective}
-                unit={unit}
-                profitModel={profitModel}
-                selectedYear={selectedYear}
-                onResetYearFilter={() => setSelectedYear('all')}
-                onSelectMonth={(ym) => setSelectedMonthModal(ym)}
-              />
+            {/* 月別推移（グラフ／表 切替） */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm sm:text-base font-bold text-slate-900 flex items-center gap-1.5">
+                    <BarChart3 className="w-4 h-4 text-amber-500" />
+                    <span>月別推移</span>
+                  </h3>
+                  <span className="text-xs text-slate-500 font-medium">
+                    ({filteredMonthlyStats.length}ヶ月分)
+                  </span>
+                </div>
+
+                {/* グラフ／表 切替ボタン */}
+                <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200/80 text-xs shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={() => setOverviewViewMode('chart')}
+                    className={`px-3 py-1 font-bold rounded-md transition-all cursor-pointer flex items-center gap-1.5 ${
+                      overviewViewMode === 'chart'
+                        ? 'bg-white text-slate-900 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <BarChart3 className="w-3.5 h-3.5" />
+                    <span>グラフ</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOverviewViewMode('table')}
+                    className={`px-3 py-1 font-bold rounded-md transition-all cursor-pointer flex items-center gap-1.5 ${
+                      overviewViewMode === 'table'
+                        ? 'bg-white text-slate-900 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5" />
+                    <span>表</span>
+                  </button>
+                </div>
+              </div>
+
+              {overviewViewMode === 'chart' ? (
+                <div className="w-full">
+                  <ProfitChart
+                    monthlyStats={filteredMonthlyStats}
+                    perspective={perspective}
+                    unit={unit}
+                    profitModel={profitModel}
+                    selectedYear={selectedYear}
+                    onResetYearFilter={() => setSelectedYear('all')}
+                    onSelectMonth={(ym) => setSelectedMonthModal(ym)}
+                  />
+                </div>
+              ) : (
+                <div className="w-full">
+                  <MonthlyTable
+                    monthlyStats={filteredMonthlyStats}
+                    dailyRecords={filteredDailyRecords}
+                    perspective={perspective}
+                    unit={unit}
+                    profitModel={profitModel}
+                    specialDayRules={currentStore.specialDayRules}
+                    oldEventDays={currentStore.oldEventDays}
+                    onSelectMonth={(ym) => setSelectedMonthModal(ym)}
+                  />
+                </div>
+              )}
             </div>
 
             {/* Footnote / Explanation */}
@@ -1272,6 +1386,33 @@ export default function App() {
                 </li>
               </ul>
             </div>
+
+            {/* 総合出玉・粗利ヒートマップ（折りたたみ: 既定は閉じる） */}
+            <details className="group bg-white rounded-xl border border-slate-200/80 overflow-hidden shadow-2xs">
+              <summary className="px-4 sm:px-5 py-3.5 bg-slate-50 hover:bg-slate-100/80 cursor-pointer list-none flex items-center justify-between gap-2 transition-colors select-none">
+                <div className="flex items-center gap-2">
+                  <ChevronDown className="w-4 h-4 text-slate-500 transition-transform duration-200 group-open:rotate-180 shrink-0" />
+                  <Flame className="w-4 h-4 text-rose-500 shrink-0" />
+                  <h3 className="text-sm font-bold text-slate-900">
+                    総合出玉・粗利ヒートマップ分析
+                  </h3>
+                </div>
+                <span className="text-xs text-slate-500">
+                  カレンダー・台番号・末尾別色彩マッピング（クリックで展開）
+                </span>
+              </summary>
+              <div className="p-4 sm:p-5 border-t border-slate-100 bg-slate-50/20">
+                <HeatmapAnalysis
+                  dailyRecords={filteredDailyRecords}
+                  perspective={perspective}
+                  unit={unit}
+                  profitModel={profitModel}
+                  specialDayRules={currentStore.specialDayRules}
+                  oldEventDays={currentStore.oldEventDays}
+                  onSelectMonth={(ym) => setSelectedMonthModal(ym)}
+                />
+              </div>
+            </details>
           </div>
         )}
 
@@ -1298,87 +1439,100 @@ export default function App() {
           />
         )}
 
-        {/* TAB 3: 機種分析 (機種別の深掘り、高出玉分析) */}
-        {activeTab === 'models' && (
+        {/* TAB 3: 分析 (サブタブ: 機種／条件別／高出率台) */}
+        {activeTab === 'analysis' && (
+          <div className="space-y-4 sm:space-y-6 animate-in fade-in duration-150">
+            {/* Subtabs Switcher for 分析 */}
+            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200/80 shadow-2xs self-start text-xs sm:text-sm">
+              {[
+                { id: 'models' as const, label: '機種', icon: Cpu, desc: '機種別深掘り・台番号末尾詳細分析' },
+                { id: 'conditions' as const, label: '条件別', icon: Calendar, desc: '曜日・祝日・のつく日・ゾロ目・特日・通常日' },
+                { id: 'high_payout' as const, label: '高出率台', icon: Flame, desc: '出率が高い台の特徴・投入傾向分析' },
+              ].map((sub) => {
+                const SubIcon = sub.icon;
+                const isSubActive = analysisSubTab === sub.id;
+                return (
+                  <button
+                    key={sub.id}
+                    type="button"
+                    onClick={() => setAnalysisSubTab(sub.id)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap ${
+                      isSubActive
+                        ? 'bg-white text-slate-900 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                    }`}
+                    title={sub.desc}
+                  >
+                    <SubIcon className={`w-3.5 h-3.5 shrink-0 ${isSubActive ? 'text-amber-500' : 'text-slate-400'}`} />
+                    <span>{sub.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Subtab 1: 機種 */}
+            {analysisSubTab === 'models' && (
+              <ModelDeepAnalysis
+                dailyRecords={filteredDailyRecords}
+                perspective={perspective}
+                unit={unit}
+                rateLend={currentStore.rateLend}
+                rateExchange={currentStore.rateExchange}
+                specialDayRules={currentStore?.specialDayRules}
+                globalModelPreset={modelPreset}
+                globalSelectedModelNames={selectedModelNames}
+                activeFilterLabel={activeFilterLabel}
+                onSelectPreset={handleSelectModelPreset}
+                onOpenModelModal={() => setIsMultiSelectModalOpen(true)}
+                onToggleModel={handleToggleModelInSelection}
+                onNavigateToConditions={handleNavigateToConditions}
+              />
+            )}
+
+            {/* Subtab 2: 条件別 */}
+            {analysisSubTab === 'conditions' && (
+              <ConditionAnalysis
+                dailyRecords={filteredDailyRecords}
+                perspective={perspective}
+                unit={unit}
+                setUnit={setUnit}
+                oldEventDays={currentStore.oldEventDays}
+                specialDayRules={currentStore.specialDayRules}
+                onSelectDate={(ym) => setSelectedMonthModal(ym)}
+                dimension={conditionDimension}
+                onDimensionChange={setConditionDimension}
+              />
+            )}
+
+            {/* Subtab 3: 高出率台 */}
+            {analysisSubTab === 'high_payout' && (
+              <HighPayoutAnalysis
+                dailyRecords={filteredDailyRecords}
+                perspective={perspective}
+                unit={unit}
+                rateLend={rateLend}
+                rateExchange={rateExchange}
+                oldEventDays={currentStore.oldEventDays}
+                specialDayRules={currentStore.specialDayRules}
+                onNavigateToConditions={handleNavigateToConditions}
+              />
+            )}
+          </div>
+        )}
+
+        {/* TAB 4: 店舗比較 (複数ホールの横断比較) */}
+        {activeTab === 'compare' && (
           <div className="space-y-6 animate-in fade-in duration-150">
-            {/* 店舗分析深堀り: 機種別・台番号末尾詳細分析 */}
-            <ModelDeepAnalysis
-              dailyRecords={filteredDailyRecords}
-              perspective={perspective}
-              unit={unit}
-              rateLend={currentStore.rateLend}
-              rateExchange={currentStore.rateExchange}
-              specialDayRules={currentStore?.specialDayRules}
-              globalModelPreset={modelPreset}
-              globalSelectedModelNames={selectedModelNames}
+            <StoreComparison
+              stores={filteredStoresByModel}
               activeFilterLabel={activeFilterLabel}
-              onSelectPreset={handleSelectModelPreset}
-              onOpenModelModal={() => setIsMultiSelectModalOpen(true)}
-              onToggleModel={handleToggleModelInSelection}
-              onNavigateToConditions={handleNavigateToConditions}
-            />
-
-            {/* 出率が高い台の特徴・投入傾向分析 */}
-            <HighPayoutAnalysis
-              dailyRecords={filteredDailyRecords}
-              perspective={perspective}
-              unit={unit}
-              rateLend={rateLend}
-              rateExchange={rateExchange}
-              oldEventDays={currentStore.oldEventDays}
-              specialDayRules={currentStore.specialDayRules}
-              onNavigateToConditions={handleNavigateToConditions}
+              isModelFilterActive={isModelFilterActive}
+              onSelectStore={(id) => handleSelectStore(id)}
             />
           </div>
         )}
 
-        {/* TAB 4: 日付傾向 (末尾、曜日、特日) */}
-        {activeTab === 'trends' && (
-          <div className="space-y-6 animate-in fade-in duration-150">
-            {/* 条件別分析（曜日・祝日 / のつく日・ゾロ目 / 特日／通常日 / 末尾） */}
-            <ConditionAnalysis
-              dailyRecords={filteredDailyRecords}
-              perspective={perspective}
-              unit={unit}
-              setUnit={setUnit}
-              oldEventDays={currentStore.oldEventDays}
-              specialDayRules={currentStore.specialDayRules}
-              onSelectDate={(ym) => setSelectedMonthModal(ym)}
-              dimension={conditionDimension}
-              onDimensionChange={setConditionDimension}
-            />
-          </div>
-        )}
-
-        {/* TAB 5: 月別・ヒートマップ (月別表、ヒートマップ) */}
-        {activeTab === 'tables' && (
-          <div className="space-y-6 animate-in fade-in duration-150">
-            {/* Detailed Monthly Table */}
-            <MonthlyTable
-              monthlyStats={filteredMonthlyStats}
-              dailyRecords={filteredDailyRecords}
-              perspective={perspective}
-              unit={unit}
-              profitModel={profitModel}
-              specialDayRules={currentStore.specialDayRules}
-              oldEventDays={currentStore.oldEventDays}
-              onSelectMonth={(ym) => setSelectedMonthModal(ym)}
-            />
-
-            {/* 総合出玉・粗利ヒートマップ分析 */}
-            <HeatmapAnalysis
-              dailyRecords={filteredDailyRecords}
-              perspective={perspective}
-              unit={unit}
-              profitModel={profitModel}
-              specialDayRules={currentStore.specialDayRules}
-              oldEventDays={currentStore.oldEventDays}
-              onSelectMonth={(ym) => setSelectedMonthModal(ym)}
-            />
-          </div>
-        )}
-
-        {/* TAB 6: 精度検証 (バックテストと自動調整) */}
+        {/* TAB 5: 検証 (バックテストと自動調整) */}
         {activeTab === 'validation' && (
           <div className="space-y-6 animate-in fade-in duration-150">
             <AccuracyValidation
@@ -1390,18 +1544,6 @@ export default function App() {
               onSaveStoreWeights={handleSaveStoreWeights}
               currentMachineWeights={currentStore.customMachineRankingWeights}
               onSaveStoreMachineWeights={handleSaveStoreMachineWeights}
-            />
-          </div>
-        )}
-
-        {/* TAB 7: 店舗比較 (複数ホールの横断比較) */}
-        {activeTab === 'compare' && uniqueStores.length >= 2 && (
-          <div className="space-y-6 animate-in fade-in duration-150">
-            <StoreComparison
-              stores={filteredStoresByModel}
-              activeFilterLabel={activeFilterLabel}
-              isModelFilterActive={isModelFilterActive}
-              onSelectStore={(id) => handleSelectStore(id)}
             />
           </div>
         )}

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import React from 'react';
 import { renderToString } from 'react-dom/server';
 import { TargetTab, TargetScope } from '../TargetTab';
+import { parseHash } from '../../App';
 import { StoreProfile } from '../../data/types';
 import { generateSyntheticDailyRecords } from '../../utils/__tests__/testDataGenerator';
 
@@ -136,40 +137,7 @@ describe('TargetTab Component', () => {
     expect(html).toContain('店舗横断 狙い台・狙い機種ランキング');
   });
 
-  it('correctly parses legacy hash (#forecast, #cross) and unified #target hash', () => {
-    // Helper replicating the URL hash router in App.tsx
-    type ActiveTab = 'overview' | 'target' | 'models' | 'trends' | 'tables' | 'validation' | 'compare';
-    const parseHash = (hashStr: string): { tab: ActiveTab; scope: TargetScope; date?: string } => {
-      const raw = hashStr.replace(/^#/, '');
-      if (!raw) return { tab: 'overview', scope: 'store' };
-
-      const [pathPart, queryPart] = raw.split('?');
-      const params = new URLSearchParams(queryPart || (pathPart.includes('&') ? pathPart : ''));
-
-      if (pathPart === 'forecast') {
-        const date = params.get('date') || params.get('targetDate') || undefined;
-        return { tab: 'target', scope: 'store', date };
-      }
-
-      if (pathPart === 'cross') {
-        const date = params.get('crossDate') || params.get('date') || params.get('targetDate') || undefined;
-        return { tab: 'target', scope: 'all', date };
-      }
-
-      if (pathPart === 'target') {
-        const scopeParam = params.get('scope');
-        const scope: TargetScope = scopeParam === 'all' ? 'all' : 'store';
-        const date = params.get('date') || params.get('targetDate') || params.get('crossDate') || undefined;
-        return { tab: 'target', scope, date };
-      }
-
-      if (['overview', 'models', 'trends', 'tables', 'validation', 'compare'].includes(pathPart)) {
-        return { tab: pathPart as ActiveTab, scope: 'store' };
-      }
-
-      return { tab: 'overview', scope: 'store' };
-    };
-
+  it('correctly parses legacy hash (#forecast, #cross, #tables) and unified #target hash', () => {
     // 1. Legacy #forecast
     const legacyForecast = parseHash('#forecast');
     expect(legacyForecast).toEqual({ tab: 'target', scope: 'store', date: undefined });
@@ -194,5 +162,9 @@ describe('TargetTab Component', () => {
     // 4. Default target without query params
     const defaultTarget = parseHash('#target');
     expect(defaultTarget).toEqual({ tab: 'target', scope: 'store', date: undefined });
+
+    // 5. Legacy #tables -> overview (Prompt 42 requirement)
+    const legacyTables = parseHash('#tables');
+    expect(legacyTables).toEqual({ tab: 'overview', scope: 'store', viewMode: 'table' });
   });
 });

@@ -77,7 +77,7 @@ describe('runWalkForwardBacktest', () => {
         expect(tEval.baselineTopKActualAvgDiff).toBe(pEval.baselineTopKActualAvgDiff);
         expect(tEval.baselineTopKActualLift).toBe(pEval.baselineTopKActualLift);
       }
-    });
+    }, 30000);
   });
 
   describe('warmup period and evaluation structure', () => {

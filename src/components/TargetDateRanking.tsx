@@ -10,6 +10,7 @@ import {
 import { formatYen, formatCoins, formatNumber } from '../utils/formatters';
 import { UnitMode } from './Header';
 import { TargetMachineRanking } from './TargetMachineRanking';
+import { TargetRankingTable } from './TargetRankingTable';
 import {
   Target,
   Trophy,
@@ -530,191 +531,34 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
         </div>
       </div>
 
-      {/* Model Recommendations Table */}
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs text-left text-slate-700">
-          <thead className="text-[11px] text-slate-500 bg-slate-100/80 uppercase border-b border-slate-200">
-            <tr>
-              <th className="px-3 py-3 font-bold text-center w-12">詳細</th>
-              <th className="px-3 py-3 font-bold text-center">順位 / 評価</th>
-              <th className="px-4 py-3 font-bold">機種名 / 設置台数</th>
-              <th className="px-3 py-3 font-bold text-right">
-                {isHall ? '店平均期待差枚' : '客平均期待差枚'}
-              </th>
-              <th className="px-3 py-3 font-bold text-right">予想機械割</th>
-              <th className="px-3 py-3 font-bold text-right">予想勝率</th>
-              <th className="px-4 py-3 font-bold">過去同種日の実績</th>
-              <th className="px-4 py-3 font-bold">立ち回り・推奨根拠</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {sortedModels.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="p-8 text-center text-slate-400">
-                  該当する機種データがありません。絞り込み条件を変更してください。
-                </td>
-              </tr>
-            ) : (
-              sortedModels.map((model) => {
-                const isExpanded = expandedModel === model.modelName;
-                return (
-                  <React.Fragment key={`target-model-${model.modelName}`}>
-                    <tr
-                      className={`hover:bg-indigo-50/40 transition-colors ${
-                        model.rank <= 3 ? 'bg-amber-50/20 font-medium' : ''
-                      }`}
-                    >
-                      <td className="px-3 py-3 text-center">
-                        <button
-                          type="button"
-                          onClick={() => setExpandedModel(isExpanded ? null : model.modelName)}
-                          className={`p-1.5 rounded transition-colors cursor-pointer ${
-                            isExpanded ? 'bg-indigo-100 text-indigo-700' : 'hover:bg-slate-200 text-slate-500'
-                          }`}
-                          title="同種日での過去履歴を表示"
-                        >
-                          {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                        </button>
-                      </td>
-                      <td className="px-3 py-3 text-center whitespace-nowrap">
-                        {getRankBadge(model.rank, model.rankGrade)}
-                      </td>
-                      <td className="px-4 py-3 min-w-[180px]">
-                        <div className="font-bold text-slate-900 text-sm flex items-center gap-1.5 flex-wrap">
-                          <span>{model.modelName}</span>
-                          {model.allHighDaysCount > 0 && (
-                            <span className="bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-bold px-1.5 py-0.2 rounded">
-                              全台系実績{model.allHighDaysCount}回
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                          <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-medium">
-                            設置 {model.totalMachines}台
-                          </span>
-                          {model.tags.map((tag) => (
-                            <span
-                              key={tag}
-                              className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                                tag === 'スマスロ'
-                                  ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
-                                  : tag.includes('ジャグラー')
-                                  ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                  : 'bg-slate-100 text-slate-600'
-                              }`}
-                            >
-                              {tag}
-                            </span>
-                          ))}
-                        </div>
-                      </td>
-                      <td className={`px-3 py-3 text-right font-black whitespace-nowrap ${
-                        model.expectedDiffCoins > 0
-                          ? isHall ? 'text-indigo-600' : 'text-blue-600'
-                          : 'text-rose-600'
-                      }`}>
-                        {formatProfitValue(model.expectedDiffCoins)}
-                      </td>
-                      <td className="px-3 py-3 text-right font-bold text-indigo-600 whitespace-nowrap">
-                        {model.predictedPayoutRate.toFixed(2)}%
-                      </td>
-                      <td className="px-3 py-3 text-right font-semibold text-slate-700 whitespace-nowrap">
-                        {model.predictedWinRate}%
-                      </td>
-                      <td className="px-4 py-3 min-w-[170px]">
-                        {model.matchingDaysCount > 0 ? (
-                          <div className="space-y-0.5">
-                            <div className="font-bold text-slate-800 text-[11px]">
-                              過去{model.matchingDaysCount}回中 平均
-                              <span className={model.matchingAvgDiffCoins > 0 ? 'text-blue-600 ml-1' : 'text-rose-600 ml-1'}>
-                                {model.matchingAvgDiffCoins > 0 ? `+${model.matchingAvgDiffCoins}` : model.matchingAvgDiffCoins}枚
-                              </span>
-                            </div>
-                            <div className="text-[10px] text-slate-400">
-                              同種日勝率: {model.matchingWinRate}% (サンプル{model.sampleDays}日)
-                            </div>
-                          </div>
-                        ) : (
-                          <span className="text-slate-400 text-xs">特日履歴少 (全体参照)</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-slate-600 min-w-[200px] leading-snug">
-                        {model.tacticalReason}
-                      </td>
-                    </tr>
-
-                    {/* Historical Samples Dropdown */}
-                    {isExpanded && (
-                      <tr>
-                        <td colSpan={8} className="bg-indigo-50/50 p-4 border-y border-indigo-100">
-                          <div className="text-xs font-bold text-slate-800 mb-2 flex items-center justify-between">
-                            <span className="flex items-center gap-1.5 text-indigo-900">
-                              <Calendar className="w-3.5 h-3.5 text-indigo-600" />
-                              【{model.modelName}】類似営業日での過去実績一覧 ({model.sampleRecords.length}日)
-                            </span>
-                            <span className="text-[11px] text-slate-500 font-normal">
-                              ※ 過去の同種特日・同曜日における実績データ
-                            </span>
-                          </div>
-
-                          {model.sampleRecords.length === 0 ? (
-                            <div className="bg-white p-3 rounded-lg border border-slate-200 text-xs text-slate-400 text-center">
-                              類似日での過去個別データはありません
-                            </div>
-                          ) : (
-                            <div className="max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white">
-                              <table className="w-full text-[11px] text-left">
-                                <thead className="bg-slate-100 text-slate-600 sticky top-0">
-                                  <tr>
-                                    <th className="px-3 py-1.5">日付</th>
-                                    <th className="px-2 py-1.5">曜日</th>
-                                    <th className="px-2 py-1.5">種別</th>
-                                    <th className="px-3 py-1.5 text-right">台平均差枚</th>
-                                    <th className="px-3 py-1.5 text-right">勝率</th>
-                                    <th className="px-3 py-1.5 text-right">稼働G数</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100">
-                                  {model.sampleRecords.map((rec) => (
-                                    <tr key={`${model.modelName}-${rec.date}`} className="hover:bg-slate-50">
-                                      <td className="px-3 py-1 font-mono font-bold text-slate-800">{rec.date}</td>
-                                      <td className="px-2 py-1 text-slate-600">{rec.dayOfWeek}</td>
-                                      <td className="px-2 py-1">
-                                        {rec.isOldEventDay ? (
-                                          <span className="bg-amber-100 text-amber-800 font-bold px-1.5 py-0.2 rounded text-[10px]">
-                                            特日
-                                          </span>
-                                        ) : (
-                                          <span className="text-slate-400 text-[10px]">通常</span>
-                                        )}
-                                      </td>
-                                      <td className={`px-3 py-1 text-right font-bold ${
-                                        rec.avgDiffCoins > 0 ? 'text-blue-600' : 'text-rose-600'
-                                      }`}>
-                                        {rec.avgDiffCoins > 0 ? `+${rec.avgDiffCoins}` : rec.avgDiffCoins}枚
-                                      </td>
-                                      <td className="px-3 py-1 text-right text-slate-700">
-                                        {rec.winRate !== null ? `${rec.winRate}%` : '-'}
-                                      </td>
-                                      <td className="px-3 py-1 text-right text-slate-600">
-                                        {formatNumber(rec.avgGames)}G
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+      {/* Model Recommendations Table (Unified Component) */}
+      <TargetRankingTable
+        rankingType="model"
+        showStoreColumn={false}
+        formatProfitValue={formatProfitValue}
+        rows={sortedModels.map((model) => ({
+          id: `model-${model.modelName}`,
+          rank: model.rank,
+          rankGrade: model.rankGrade,
+          modelName: model.modelName,
+          totalMachines: model.totalMachines,
+          tags: model.tags,
+          allHighDaysCount: model.allHighDaysCount,
+          expectedDiff: model.expectedDiffCoins,
+          payoutRate: Number(model.predictedPayoutRate.toFixed(2)),
+          winRate: model.predictedWinRate,
+          evidenceDays: model.matchingDaysCount > 0 ? model.matchingDaysCount : model.sampleDays,
+          reasons:
+            model.matchingDaysCount > 0
+              ? [
+                  `過去${model.matchingDaysCount}回中 平均 ${model.matchingAvgDiffCoins > 0 ? '+' : ''}${model.matchingAvgDiffCoins}枚 (勝率 ${model.matchingWinRate}%)`,
+                ]
+              : [],
+          tacticalReason: model.tacticalReason,
+          sampleRecords: model.sampleRecords,
+        }))}
+        emptyMessage="該当する機種データがありません。絞り込み条件を変更してください。"
+      />
 
       {/* Target Machine Ranking Component (台番号別 狙い台ランキング) */}
       <TargetMachineRanking

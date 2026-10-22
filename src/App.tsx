@@ -10,6 +10,9 @@ const ProfitChart = React.lazy(() =>
 const HighPayoutAnalysis = React.lazy(() =>
   import('./components/HighPayoutAnalysis').then((m) => ({ default: m.HighPayoutAnalysis }))
 );
+const ConditionAnalysis = React.lazy(() =>
+  import('./components/ConditionAnalysis').then((m) => ({ default: m.ConditionAnalysis }))
+);
 const TailNumberAnalysis = React.lazy(() =>
   import('./components/TailNumberAnalysis').then((m) => ({ default: m.TailNumberAnalysis }))
 );
@@ -34,17 +37,14 @@ const ModelMultiSelectModal = React.lazy(() =>
 const StoreManagerModal = React.lazy(() =>
   import('./components/StoreManagerModal').then((m) => ({ default: m.StoreManagerModal }))
 );
-const TargetDateRanking = React.lazy(() =>
-  import('./components/TargetDateRanking').then((m) => ({ default: m.TargetDateRanking }))
+const TargetTab = React.lazy(() =>
+  import('./components/TargetTab').then((m) => ({ default: m.TargetTab }))
 );
 const AccuracyValidation = React.lazy(() =>
   import('./components/AccuracyValidation').then((m) => ({ default: m.AccuracyValidation }))
 );
 const StoreComparison = React.lazy(() =>
   import('./components/StoreComparison').then((m) => ({ default: m.StoreComparison }))
-);
-const CrossStoreTarget = React.lazy(() =>
-  import('./components/CrossStoreTarget').then((m) => ({ default: m.CrossStoreTarget }))
 );
 const ModelDeepAnalysis = React.lazy(() =>
   import('./components/ModelDeepAnalysis').then((m) => ({ default: m.ModelDeepAnalysis }))
@@ -53,6 +53,7 @@ const HeatmapAnalysis = React.lazy(() =>
   import('./components/HeatmapAnalysis').then((m) => ({ default: m.HeatmapAnalysis }))
 );
 import { processStoreData, aggregateStoreModels } from './utils/dataEngine';
+import { ConditionDimension } from './utils/conditionAnalysis';
 import { parseSlorepoHtml, parseRatesFromExchangeRate } from './utils/htmlParser';
 import { parseSpecialDayRulesFromText } from './utils/specialDayRules';
 import { parseStoresFromBackupJson, mergeImportedStores } from './utils/storeBackup';
@@ -104,6 +105,9 @@ import {
   Calendar,
   ShieldCheck,
   Calculator,
+  ChevronDown,
+  ChevronUp,
+  Flame,
 } from 'lucide-react';
 
 export default function App() {
@@ -169,31 +173,78 @@ export default function App() {
   const [selectedYear, setSelectedYear] = useState<string>('all');
   const [selectedMonthModal, setSelectedMonthModal] = useState<string | null>(null);
 
-  // 8 Tabs State (including multi-store comparison and cross-store target)
-  type ActiveTab = 'overview' | 'forecast' | 'models' | 'trends' | 'tables' | 'validation' | 'compare' | 'cross';
-  const [activeTab, setActiveTab] = useState<ActiveTab>(() => {
-    const raw = window.location.hash.replace('#', '');
-    const tabPart = raw.split('?')[0].split('&')[0];
-    if (['overview', 'forecast', 'models', 'trends', 'tables', 'validation', 'compare', 'cross'].includes(tabPart)) {
-      return tabPart as ActiveTab;
-    }
-    return 'overview';
-  });
+  // Unified Tabs State (including target tab with store/all scopes)
+  type ActiveTab = 'overview' | 'target' | 'models' | 'trends' | 'tables' | 'validation' | 'compare';
+  type TargetScope = 'store' | 'all';
 
-  // Synchronize activeTab with URL hash (preserve hash parameters if tab matches)
-  useEffect(() => {
-    const currentTab = window.location.hash.replace('#', '').split('?')[0].split('&')[0];
-    if (currentTab !== activeTab) {
-      window.location.hash = `#${activeTab}`;
+  const parseHash = (hashStr: string): { tab: ActiveTab; scope: TargetScope; date?: string } => {
+    const raw = hashStr.replace(/^#/, '');
+    if (!raw) return { tab: 'overview', scope: 'store' };
+
+    const [pathPart, queryPart] = raw.split('?');
+    const params = new URLSearchParams(queryPart || (pathPart.includes('&') ? pathPart : ''));
+
+    // Legacy #forecast -> #target (scope: store)
+    if (pathPart === 'forecast') {
+      const date = params.get('date') || params.get('targetDate') || undefined;
+      return { tab: 'target', scope: 'store', date };
     }
-  }, [activeTab]);
+
+    // Legacy #cross -> #target (scope: all)
+    if (pathPart === 'cross') {
+      const date = params.get('crossDate') || params.get('date') || params.get('targetDate') || undefined;
+      return { tab: 'target', scope: 'all', date };
+    }
+
+    // Unified #target
+    if (pathPart === 'target') {
+      const scopeParam = params.get('scope');
+      const scope: TargetScope = scopeParam === 'all' ? 'all' : 'store';
+      const date = params.get('date') || params.get('targetDate') || params.get('crossDate') || undefined;
+      return { tab: 'target', scope, date };
+    }
+
+    if (['overview', 'models', 'trends', 'tables', 'validation', 'compare'].includes(pathPart)) {
+      return { tab: pathPart as ActiveTab, scope: 'store' };
+    }
+
+    return { tab: 'overview', scope: 'store' };
+  };
+
+  const initialHashInfo = parseHash(typeof window !== 'undefined' ? window.location.hash : '');
+  const [activeTab, setActiveTab] = useState<ActiveTab>(initialHashInfo.tab);
+  const [targetScope, setTargetScope] = useState<TargetScope>(initialHashInfo.scope);
+  const [targetDate, setTargetDate] = useState<string>(initialHashInfo.date || '');
+
+  // Synchronize activeTab, targetScope, and targetDate with URL hash (also migrates legacy #forecast/#cross)
+  useEffect(() => {
+    if (activeTab === 'target') {
+      const params = new URLSearchParams();
+      params.set('scope', targetScope);
+      if (targetDate) {
+        params.set('date', targetDate);
+      }
+      const newHash = `#target?${params.toString()}`;
+      if (window.location.hash !== newHash) {
+        window.location.hash = newHash;
+      }
+    } else {
+      const currentTab = window.location.hash.replace('#', '').split('?')[0].split('&')[0];
+      if (currentTab !== activeTab) {
+        window.location.hash = `#${activeTab}`;
+      }
+    }
+  }, [activeTab, targetScope, targetDate]);
 
   useEffect(() => {
     const handleHashChange = () => {
-      const raw = window.location.hash.replace('#', '');
-      const tabPart = raw.split('?')[0].split('&')[0];
-      if (['overview', 'forecast', 'models', 'trends', 'tables', 'validation', 'compare', 'cross'].includes(tabPart)) {
-        setActiveTab(tabPart as ActiveTab);
+      const parsed = parseHash(window.location.hash);
+      setActiveTab(parsed.tab);
+      if (parsed.tab === 'target') {
+        setTargetScope(parsed.scope);
+        if (parsed.date) {
+          setTargetDate(parsed.date);
+        }
       }
     };
     window.addEventListener('hashchange', handleHashChange);
@@ -217,8 +268,12 @@ export default function App() {
   const [selectedModelNames, setSelectedModelNames] = useState<string[]>([]);
   const [isMultiSelectModalOpen, setIsMultiSelectModalOpen] = useState<boolean>(false);
 
-  // Target Date (攻略狙い日) State
-  const [targetDate, setTargetDate] = useState<string>('');
+  // Condition Analysis Dimension State
+  const [conditionDimension, setConditionDimension] = useState<ConditionDimension>('dow');
+  const handleNavigateToConditions = (dim: ConditionDimension = 'dow') => {
+    setConditionDimension(dim);
+    setActiveTab('trends');
+  };
 
   const latestDataDate = useMemo(() => {
     if (!currentStore?.dailyRecords || currentStore.dailyRecords.length === 0) return '';
@@ -269,13 +324,13 @@ export default function App() {
 
   // All models in current store across raw daily records (or all stores when comparing/cross targeting)
   const allAvailableModels = useMemo(() => {
-    if (activeTab === 'compare' || activeTab === 'cross') {
+    if (activeTab === 'compare' || (activeTab === 'target' && targetScope === 'all')) {
       const allDaily = uniqueStores.flatMap((s) => s.dailyRecords || []);
       return aggregateStoreModels(allDaily, rateLend, rateExchange);
     }
     if (!currentStore || !currentStore.dailyRecords) return [];
     return aggregateStoreModels(currentStore.dailyRecords, rateLend, rateExchange);
-  }, [activeTab, uniqueStores, currentStore?.dailyRecords, rateLend, rateExchange]);
+  }, [activeTab, targetScope, uniqueStores, currentStore?.dailyRecords, rateLend, rateExchange]);
 
   const allAvailableModelNames = useMemo(
     () => allAvailableModels.map((m) => m.modelName),
@@ -1128,7 +1183,7 @@ export default function App() {
         <div className="flex items-center gap-1 sm:gap-2 border-b border-slate-200 bg-white px-2 sm:px-3 py-1.5 rounded-xl shadow-2xs overflow-x-auto">
           {[
             { id: 'overview' as const, label: '概要', icon: BarChart3, desc: 'KPIと月別推移' },
-            { id: 'forecast' as const, label: '狙い日予測', icon: Target, desc: '機種・末尾ランキング' },
+            { id: 'target' as const, label: '狙い', icon: Target, desc: '来店日・機種・台番 狙い予測（この店／全店）' },
             { id: 'models' as const, label: '機種分析', icon: Cpu, desc: '機種別深掘り・高出玉' },
             { id: 'trends' as const, label: '日付傾向', icon: Calendar, desc: '末尾・曜日・特日' },
             { id: 'tables' as const, label: '月別・ヒートマップ', icon: Layers, desc: '月別表・ヒートマップ' },
@@ -1136,7 +1191,6 @@ export default function App() {
             ...(uniqueStores.length >= 2
               ? [{ id: 'compare' as const, label: '店舗比較', icon: Building2, desc: '複数ホールの横断比較' }]
               : []),
-            { id: 'cross' as const, label: '横断狙い', icon: Sparkles, desc: '来店日の横断狙い機種・狙い台' },
           ].map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -1221,29 +1275,27 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 2: 狙い日予測 (機種・末尾ランキング) */}
-        {activeTab === 'forecast' && (
-          <div className="space-y-6 animate-in fade-in duration-150">
-            <TargetDateRanking
-              targetDate={targetDate || latestDataDate || new Date().toISOString().slice(0, 10)}
-              setTargetDate={setTargetDate}
-              dailyRecords={currentStore.dailyRecords || []}
-              perspective={perspective}
-              unit={unit}
-              rateLend={rateLend}
-              rateExchange={rateExchange}
-              specialDayRules={currentStore.specialDayRules}
-              oldEventDays={currentStore.oldEventDays}
-              customWeights={currentStore.customRankingWeights}
-              customMachineWeights={currentStore.customMachineRankingWeights}
-              islandConfig={currentStore.islandConfig}
-              includeReusedMachines={currentStore.includeReusedMachinesInStats}
-              aliasDictionary={currentStore.modelAliasDictionary}
-              onNavigateToValidation={() => setActiveTab('validation')}
-              onOpenStoreManager={() => setIsStoreModalOpen(true)}
-              storeId={currentStore.id}
-            />
-          </div>
+        {/* TAB 2: 狙い (来店日・機種・台番 狙い予測: この店／全店) */}
+        {activeTab === 'target' && (
+          <TargetTab
+            targetDate={targetDate}
+            onTargetDateChange={setTargetDate}
+            scope={targetScope}
+            onScopeChange={setTargetScope}
+            currentStore={currentStore}
+            stores={uniqueStores}
+            latestDataDate={latestDataDate}
+            perspective={perspective}
+            unit={unit}
+            rateLend={rateLend}
+            rateExchange={rateExchange}
+            filteredStoresByModel={filteredStoresByModel}
+            activeFilterLabel={activeFilterLabel}
+            isModelFilterActive={isModelFilterActive}
+            onSelectStore={(id) => handleSelectStore(id)}
+            onNavigateToValidation={() => setActiveTab('validation')}
+            onOpenStoreManager={() => setIsStoreModalOpen(true)}
+          />
         )}
 
         {/* TAB 3: 機種分析 (機種別の深掘り、高出玉分析) */}
@@ -1263,6 +1315,7 @@ export default function App() {
               onSelectPreset={handleSelectModelPreset}
               onOpenModelModal={() => setIsMultiSelectModalOpen(true)}
               onToggleModel={handleToggleModelInSelection}
+              onNavigateToConditions={handleNavigateToConditions}
             />
 
             {/* 出率が高い台の特徴・投入傾向分析 */}
@@ -1274,6 +1327,7 @@ export default function App() {
               rateExchange={rateExchange}
               oldEventDays={currentStore.oldEventDays}
               specialDayRules={currentStore.specialDayRules}
+              onNavigateToConditions={handleNavigateToConditions}
             />
           </div>
         )}
@@ -1281,34 +1335,17 @@ export default function App() {
         {/* TAB 4: 日付傾向 (末尾、曜日、特日) */}
         {activeTab === 'trends' && (
           <div className="space-y-6 animate-in fade-in duration-150">
-            {/* 〇のつく日別の利益・出玉傾向分析 */}
-            <TailNumberAnalysis
+            {/* 条件別分析（曜日・祝日 / のつく日・ゾロ目 / 特日／通常日 / 末尾） */}
+            <ConditionAnalysis
               dailyRecords={filteredDailyRecords}
               perspective={perspective}
               unit={unit}
               setUnit={setUnit}
               oldEventDays={currentStore.oldEventDays}
               specialDayRules={currentStore.specialDayRules}
-            />
-
-            {/* 曜日別 利益・出玉傾向分析 */}
-            <DayOfWeekAnalysis
-              dailyRecords={filteredDailyRecords}
-              perspective={perspective}
-              unit={unit}
-              setUnit={setUnit}
-              oldEventDays={currentStore.oldEventDays}
-              specialDayRules={currentStore.specialDayRules}
-            />
-
-            {/* Special Day Patterns (出す・回収するサイクル分析) */}
-            <SpecialDayPatterns
-              dailyRecords={filteredDailyRecords}
-              perspective={perspective}
-              unit={unit}
-              specialDayRules={currentStore.specialDayRules}
-              oldEventDays={currentStore.oldEventDays}
-              onSelectMonth={(ym) => setSelectedMonthModal(ym)}
+              onSelectDate={(ym) => setSelectedMonthModal(ym)}
+              dimension={conditionDimension}
+              onDimensionChange={setConditionDimension}
             />
           </div>
         )}
@@ -1369,18 +1406,7 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 8: 横断狙い (来店日の全店横断 狙い機種・狙い台ランキング) */}
-        {activeTab === 'cross' && (
-          <div className="space-y-6 animate-in fade-in duration-150">
-            <CrossStoreTarget
-              stores={filteredStoresByModel}
-              initialTargetDate={targetDate || latestDataDate}
-              activeFilterLabel={activeFilterLabel}
-              isModelFilterActive={isModelFilterActive}
-              onSelectStore={(id) => handleSelectStore(id)}
-            />
-          </div>
-        )}
+
         </React.Suspense>
       </main>
 

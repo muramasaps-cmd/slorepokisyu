@@ -50,7 +50,6 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Cell,
 } from 'recharts';
 
 interface HighPayoutAnalysisProps {
@@ -91,8 +90,6 @@ export const HighPayoutAnalysis: React.FC<HighPayoutAnalysisProps> = ({
   const [activeTab, setActiveTab] = useState<ActiveTab>('insights');
   const [searchModelQuery, setSearchModelQuery] = useState<string>('');
   const [showConfigDrawer, setShowConfigDrawer] = useState<boolean>(false);
-  const [recordsPage, setRecordsPage] = useState<number>(1);
-  const recordsPerPage = 15;
 
   const config: HighPayoutFilterConfig = useMemo(
     () => ({
@@ -111,12 +108,7 @@ export const HighPayoutAnalysis: React.FC<HighPayoutAnalysisProps> = ({
 
   const {
     highItems,
-    allItems,
     modelStats,
-    tailStats,
-    dayOfWeekStats,
-    eventTimingStat,
-    gamesBracketStats,
     scaleStats,
     reboundStat,
     stabilityStat,
@@ -130,14 +122,6 @@ export const HighPayoutAnalysis: React.FC<HighPayoutAnalysisProps> = ({
     const q = searchModelQuery.toLowerCase();
     return modelStats.filter((m) => m.modelName.toLowerCase().includes(q));
   }, [modelStats, searchModelQuery]);
-
-  // Paginated records
-  const paginatedHighItems = useMemo(() => {
-    const start = (recordsPage - 1) * recordsPerPage;
-    return highItems.slice(start, start + recordsPerPage);
-  }, [highItems, recordsPage]);
-
-  const totalPages = Math.ceil(highItems.length / recordsPerPage) || 1;
 
   // Helper formatting for diff coins / yen
   const formatProfit = (coins: number) => {
@@ -463,6 +447,16 @@ export const HighPayoutAnalysis: React.FC<HighPayoutAnalysisProps> = ({
                 <div className="text-[10px] text-slate-600 mt-1">
                   平均出率: <strong className="text-slate-900">{insights.topTail.avgPayout}%</strong>
                 </div>
+                {onNavigateToConditions && (
+                  <button
+                    type="button"
+                    onClick={() => onNavigateToConditions('machineTail')}
+                    className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold underline mt-1.5 inline-flex items-center gap-0.5 cursor-pointer text-left"
+                  >
+                    <span>条件別分析で見る</span>
+                    <ArrowRight className="w-3 h-3" />
+                  </button>
+                )}
               </>
             ) : (
               <div className="text-xs text-slate-400 mt-2">末尾データなし</div>
@@ -496,6 +490,16 @@ export const HighPayoutAnalysis: React.FC<HighPayoutAnalysisProps> = ({
             <div className="text-[10px] text-slate-600 mt-1">
               通常日: <strong className="text-slate-900">{insights.normalDayHighRate}%</strong>
             </div>
+            {onNavigateToConditions && (
+              <button
+                type="button"
+                onClick={() => onNavigateToConditions('special')}
+                className="text-[10px] text-rose-600 hover:text-rose-800 font-bold underline mt-1.5 inline-flex items-center gap-0.5 cursor-pointer text-left"
+              >
+                <span>条件別分析で見る</span>
+                <ArrowRight className="w-3 h-3" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -1284,404 +1288,6 @@ export const HighPayoutAnalysis: React.FC<HighPayoutAnalysisProps> = ({
                 </tbody>
               </table>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Tab Content 6: 末尾別特徴 */}
-      {activeTab === 'tails' && (
-        <div className="space-y-6 animate-in fade-in duration-150">
-          <div className="text-xs text-slate-500">
-            台番号末尾（0〜9およびゾロ目）ごとの高出率達成頻度と平均出玉率を可視化。どの末尾に当たりが偏るかを把握できます。
-          </div>
-
-          {/* Bar Chart */}
-          <div className="bg-slate-50/60 p-4 rounded-xl border border-slate-200">
-            <h4 className="text-xs font-bold text-slate-700 mb-3 flex items-center gap-1.5">
-              <BarChart3 className="w-4 h-4 text-indigo-500" />
-              末尾別の高出率達成率(%)・平均出玉率
-            </h4>
-            <div className="h-64 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={tailStats} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                  <XAxis dataKey="tailName" tick={{ fontSize: 11, fill: '#475569' }} />
-                  <YAxis tick={{ fontSize: 11, fill: '#475569' }} unit="%" />
-                  <Tooltip
-                    content={({ active, payload }) => {
-                      if (!active || !payload || !payload.length) return null;
-                      const d = payload[0].payload as (typeof tailStats)[0];
-                      return (
-                        <div className="bg-slate-900 text-white p-2.5 rounded-lg text-xs shadow-lg space-y-1">
-                          <div className="font-bold text-amber-400">{d.tailName}</div>
-                          <div>高出率達成率: <strong>{d.highPayoutRate}%</strong> ({d.highPayoutCount}/{d.totalDays}日)</div>
-                          <div>高出率時平均出率: <strong>{d.avgPayoutRateWhenHigh || d.avgPayoutRateOverall}%</strong></div>
-                          <div>高出率時平均差枚: <strong>{formatProfitRaw(d.avgDiffCoinsWhenHigh)}</strong></div>
-                          <div>平均G数: <strong>{d.avgGamesWhenHigh.toLocaleString()} G</strong></div>
-                        </div>
-                      );
-                    }}
-                  />
-                  <Bar dataKey="highPayoutRate" fill="#6366f1" radius={[4, 4, 0, 0]}>
-                    {tailStats.map((entry, index) => (
-                      <Cell
-                        key={`cell-${index}`}
-                        fill={entry.tailName === insights.topTail?.tailName ? '#f59e0b' : '#6366f1'}
-                      />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* Table */}
-          <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-[11px] border-b border-slate-200">
-                <tr>
-                  <th className="py-2.5 px-3">末尾</th>
-                  <th className="py-2.5 px-3 text-right">総営業日数</th>
-                  <th className="py-2.5 px-3 text-right">高出率達成日数</th>
-                  <th className="py-2.5 px-3 text-right">高出率発生率</th>
-                  <th className="py-2.5 px-3 text-right">高出率時 平均出率</th>
-                  <th className="py-2.5 px-3 text-right">高出率時 平均差枚</th>
-                  <th className="py-2.5 px-3 text-right">平均G数</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200">
-                {tailStats.map((tail) => {
-                  const isTop = tail.tailName === insights.topTail?.tailName;
-                  return (
-                    <tr
-                      key={tail.tailName}
-                      className={`hover:bg-slate-50 transition-colors ${
-                        isTop ? 'bg-amber-50/60 font-bold' : 'bg-white'
-                      }`}
-                    >
-                      <td className="py-2 px-3 font-bold text-slate-900 flex items-center gap-1.5">
-                        {isTop && <Trophy className="w-3.5 h-3.5 text-amber-500" />}
-                        {tail.tailName}
-                      </td>
-                      <td className="py-2 px-3 text-right font-mono text-slate-600">
-                        {tail.totalDays}日
-                      </td>
-                      <td className="py-2 px-3 text-right font-mono font-black text-indigo-700">
-                        {tail.highPayoutCount}日
-                      </td>
-                      <td className="py-2 px-3 text-right font-mono font-extrabold text-slate-900">
-                        {tail.highPayoutRate}%
-                      </td>
-                      <td className="py-2 px-3 text-right font-mono font-black text-emerald-700">
-                        {tail.avgPayoutRateWhenHigh > 0 ? `${tail.avgPayoutRateWhenHigh}%` : '-'}
-                      </td>
-                      <td className="py-2 px-3 text-right font-mono font-bold text-slate-900">
-                        {tail.highPayoutCount > 0 ? formatProfitRaw(tail.avgDiffCoinsWhenHigh) : '-'}
-                      </td>
-                      <td className="py-2 px-3 text-right font-mono text-slate-700">
-                        {tail.highPayoutCount > 0 ? `${tail.avgGamesWhenHigh.toLocaleString()} G` : '-'}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Tab Content 7: 特日・曜日別特徴 */}
-      {activeTab === 'timing' && (
-        <div className="space-y-6 animate-in fade-in duration-150">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* 特日 vs 平日 比較カード */}
-            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
-              <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                <Calendar className="w-4 h-4 text-emerald-600" />
-                特日（旧イベ日/〇のつく日）vs 通常営業日 比較
-              </h4>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl">
-                  <div className="text-xs font-bold text-emerald-900">特日 (旧イベント日)</div>
-                  <div className="text-2xl font-black text-emerald-700 mt-1">
-                    {eventTimingStat.eventHighRate}%
-                  </div>
-                  <div className="text-[11px] text-slate-600 mt-1">
-                    高出率 {eventTimingStat.eventHighCount} / {eventTimingStat.eventDaysCount} 営業日
-                  </div>
-                </div>
-
-                <div className="p-3 bg-slate-100 border border-slate-200 rounded-xl">
-                  <div className="text-xs font-bold text-slate-700">通常営業日</div>
-                  <div className="text-2xl font-black text-slate-700 mt-1">
-                    {eventTimingStat.normalHighRate}%
-                  </div>
-                  <div className="text-[11px] text-slate-600 mt-1">
-                    高出率 {eventTimingStat.normalHighCount} / {eventTimingStat.normalDaysCount} 営業日
-                  </div>
-                </div>
-              </div>
-
-              <p className="text-xs text-slate-600 bg-white p-2.5 rounded-lg border border-slate-200">
-                特日ルール（{oldEventDays || '店舗設定'}）での高出率発生率は通常の
-                <strong className="text-emerald-700 mx-1">
-                  {eventTimingStat.normalHighRate > 0
-                    ? (eventTimingStat.eventHighRate / eventTimingStat.normalHighRate).toFixed(1)
-                    : '-'}
-                  倍
-                </strong>
-                。特定日を重視した立ち回りの有効性が実証されています。
-              </p>
-            </div>
-
-            {/* 曜日別テーブル */}
-            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
-              <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                <Clock className="w-4 h-4 text-indigo-600" />
-                曜日別の高出率台 投入傾向
-              </h4>
-
-              <table className="w-full text-xs text-left">
-                <thead className="bg-white text-slate-600 font-bold border-b border-slate-200">
-                  <tr>
-                    <th className="py-1.5 px-2">曜日</th>
-                    <th className="py-1.5 px-2 text-right">高出率件数</th>
-                    <th className="py-1.5 px-2 text-right">発生率</th>
-                    <th className="py-1.5 px-2 text-right">平均差枚</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200">
-                  {dayOfWeekStats.map((dow) => {
-                    const isTop = dow.dayOfWeek === insights.topDayOfWeek?.day;
-                    return (
-                      <tr
-                        key={dow.dayOfWeek}
-                        className={`hover:bg-slate-100 ${isTop ? 'bg-amber-50 font-bold' : ''}`}
-                      >
-                        <td className="py-1.5 px-2 font-bold">
-                          <span
-                            className={
-                              dow.dayOfWeek === '日'
-                                ? 'text-rose-600'
-                                : dow.dayOfWeek === '土'
-                                ? 'text-blue-600'
-                                : 'text-slate-800'
-                            }
-                          >
-                            {dow.dayOfWeek}曜日
-                          </span>
-                          {isTop && (
-                            <span className="ml-1 text-[10px] bg-amber-200 text-amber-900 px-1 py-0.2 rounded font-black">
-                              TOP
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-1.5 px-2 text-right font-mono font-bold text-indigo-700">
-                          {dow.highPayoutCount}件
-                        </td>
-                        <td className="py-1.5 px-2 text-right font-mono font-bold text-slate-900">
-                          {dow.highPayoutRate}%
-                        </td>
-                        <td className="py-1.5 px-2 text-right font-mono text-slate-700">
-                          {formatProfitRaw(dow.avgDiffCoins)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Tab Content 8: 稼働G数帯別特徴 */}
-      {activeTab === 'games' && (
-        <div className="space-y-4 animate-in fade-in duration-150">
-          <div className="text-xs text-slate-500">
-            稼働ゲーム数（回されたG数）の帯域ごとに、高出率台がどれだけ出現しているかを比較。
-            「粘られている台ほど高出率になる」相関の強さを検証できます。
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            {gamesBracketStats.map((bracket) => (
-              <div
-                key={bracket.label}
-                className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs flex flex-col justify-between"
-              >
-                <div>
-                  <div className="text-xs font-bold text-slate-700">{bracket.label}</div>
-                  <div className="flex items-baseline justify-between mt-2">
-                    <span className="text-2xl font-black text-purple-700">
-                      {bracket.highPayoutRate}%
-                    </span>
-                    <span className="text-xs text-slate-500">
-                      ({bracket.highPayoutCount} / {bracket.totalCount}件)
-                    </span>
-                  </div>
-                  <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-2">
-                    <div
-                      className="h-full bg-purple-600 rounded-full"
-                      style={{ width: `${Math.min(bracket.highPayoutRate, 100)}%` }}
-                    />
-                  </div>
-                </div>
-
-                <div className="mt-3 pt-2 border-t border-slate-100 text-xs flex items-center justify-between text-slate-600">
-                  <span>平均出玉率:</span>
-                  <strong className="text-slate-900">{bracket.avgPayoutRate > 0 ? `${bracket.avgPayoutRate}%` : '-'}</strong>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="p-3 bg-purple-50/60 border border-purple-200 rounded-xl text-xs text-purple-950 leading-relaxed">
-            <strong>💡 稼働G数の示唆:</strong> 7,000G以上の帯域で高出率達成率が著しく高くなっている場合、
-            プレイヤーが設定示唆画面や小役カウント等の良挙動を確認して確信を持って閉店まで回していることを示します。
-            逆に低稼働帯の勝率が低いホールでは、夕方以降の見切りが早い傾向が読み取れます。
-          </div>
-        </div>
-      )}
-
-      {/* Tab Content 9: 該当高出率データ一覧 */}
-      {activeTab === 'records' && (
-        <div className="space-y-4 animate-in fade-in duration-150">
-          <div className="flex items-center justify-between text-xs text-slate-500">
-            <span>
-              条件（出率{minPayoutRate}%以上 / {minGames}G以上）に合致した全
-              <strong className="text-amber-700 font-bold mx-1">{highItems.length}件</strong>
-              の実績レコード
-            </span>
-            <span>
-              ページ {recordsPage} / {totalPages}
-            </span>
-          </div>
-
-          <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-[11px] border-b border-slate-200">
-                  <tr>
-                    <th className="py-2.5 px-3">日付</th>
-                    <th className="py-2.5 px-3">機種名</th>
-                    <th className="py-2.5 px-3 text-center">種別</th>
-                    <th className="py-2.5 px-3 text-center">規模</th>
-                    <th className="py-2.5 px-3 text-center">前日挙動</th>
-                    <th className="py-2.5 px-3 text-right">出玉率 (機械割)</th>
-                    <th className="py-2.5 px-3 text-right">平均差枚</th>
-                    <th className="py-2.5 px-3 text-right">総差枚</th>
-                    <th className="py-2.5 px-3 text-right">平均G数</th>
-                    <th className="py-2.5 px-3 text-right">勝率</th>
-                    <th className="py-2.5 px-3 text-center">特日</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200">
-                  {paginatedHighItems.length === 0 ? (
-                    <tr>
-                      <td colSpan={11} className="py-8 text-center text-slate-400 text-xs">
-                        該当する高出率データがありません
-                      </td>
-                    </tr>
-                  ) : (
-                    paginatedHighItems.map((item) => (
-                      <tr key={item.id} className="hover:bg-slate-50 transition-colors bg-white">
-                        <td className="py-2 px-3 font-mono font-semibold text-slate-900 whitespace-nowrap">
-                          {item.date} ({item.dayOfWeek})
-                        </td>
-                        <td className="py-2 px-3 font-bold text-slate-900">{item.modelName}</td>
-                        <td className="py-2 px-3 text-center">
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                              item.category === 'smart_slot'
-                                ? 'bg-purple-100 text-purple-800'
-                                : item.category === 'juggler'
-                                ? 'bg-amber-100 text-amber-900'
-                                : item.category === 'a_type'
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : 'bg-slate-100 text-slate-600'
-                            }`}
-                          >
-                            {getCategoryLabel(item.category)}
-                          </span>
-                        </td>
-                        <td className="py-2 px-3 text-center">
-                          <span className="text-[10px] text-slate-600 bg-slate-100 px-1 py-0.5 rounded">
-                            {item.scaleType === 'large' ? '多台数' : item.scaleType === 'medium' ? '中規模' : '少数'}
-                          </span>
-                        </td>
-                        <td className="py-2 px-3 text-center">
-                          {item.isRebound ? (
-                            <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold" title={`前日差枚: ${item.prevDayDiffCoins}枚`}>
-                              上げ
-                            </span>
-                          ) : item.isRetention ? (
-                            <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 text-[10px] font-bold" title={`前日差枚: +${item.prevDayDiffCoins}枚`}>
-                              据置
-                            </span>
-                          ) : (
-                            <span className="text-slate-300">-</span>
-                          )}
-                        </td>
-                        <td className="py-2 px-3 text-right font-mono font-black text-amber-700">
-                          {item.payoutRate}%
-                        </td>
-                        <td className="py-2 px-3 text-right font-mono font-bold text-emerald-700">
-                          {formatProfitRaw(item.avgDiffCoins)}
-                        </td>
-                        <td className="py-2 px-3 text-right font-mono text-slate-700">
-                          {formatProfitRaw(item.totalDiffCoins)}
-                        </td>
-                        <td className="py-2 px-3 text-right font-mono text-slate-700">
-                          {item.avgGames.toLocaleString()} G
-                        </td>
-                        <td className="py-2 px-3 text-right font-mono">
-                          {item.winRate !== null ? (
-                            <span className="font-bold text-emerald-700">{item.winRate}%</span>
-                          ) : (
-                            <span className="text-slate-400">-</span>
-                          )}
-                        </td>
-                        <td className="py-2 px-3 text-center">
-                          {item.isOldEventDay ? (
-                            <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 font-bold text-[10px]">
-                              特日
-                            </span>
-                          ) : (
-                            <span className="text-slate-300">-</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="flex items-center justify-between px-4 py-2.5 bg-slate-50 border-t border-slate-200 text-xs">
-                <button
-                  type="button"
-                  disabled={recordsPage <= 1}
-                  onClick={() => setRecordsPage((p) => Math.max(1, p - 1))}
-                  className="px-2.5 py-1 rounded border border-slate-300 bg-white font-bold disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
-                >
-                  前へ
-                </button>
-                <span className="text-slate-600">
-                  {recordsPage} / {totalPages} ページ
-                </span>
-                <button
-                  type="button"
-                  disabled={recordsPage >= totalPages}
-                  onClick={() => setRecordsPage((p) => Math.min(totalPages, p + 1))}
-                  className="px-2.5 py-1 rounded border border-slate-300 bg-white font-bold disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
-                >
-                  次へ
-                </button>
-              </div>
-            )}
           </div>
         </div>
       )}

@@ -1465,6 +1465,9 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
       {/* Special Day Detailed Patterns (特日サイクル・特日タイプ別・前日翌日) */}
       {currentDimension === 'special' && (
         <div className="mt-6 pt-6 border-t border-slate-200">

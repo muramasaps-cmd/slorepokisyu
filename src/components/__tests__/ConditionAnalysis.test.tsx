@@ -1,9 +1,12 @@
 import React from 'react';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { ConditionAnalysis } from '../ConditionAnalysis';
 import { DayOfWeekAnalysis } from '../DayOfWeekAnalysis';
 import { TailNumberAnalysis } from '../TailNumberAnalysis';
+import { HighPayoutAnalysis } from '../HighPayoutAnalysis';
+import { ModelDeepAnalysis } from '../ModelDeepAnalysis';
+import { SettingDistributionPanel } from '../SettingDistributionPanel';
 import {
   calculateConditionStats,
   getConditionHeatmapColor,
@@ -283,5 +286,129 @@ describe('ConditionAnalysis Component & Utilities', () => {
     expect(getConditionHeatmapColor('avgDiff', -150, 5).bgClass).toContain('bg-rose-100');
     // Zero days -> neutral bg
     expect(getConditionHeatmapColor('avgDiff', 0, 0).bgClass).toContain('bg-slate-50/50');
+  });
+
+  it('8. Prompt 39: Dimension special (特日／通常日) & machineTail (末尾) and SpecialDayPatterns sub-detail', () => {
+    // 1. Special dimension
+    const htmlSpecial = renderToString(
+      <ConditionAnalysis
+        dailyRecords={sampleRecords}
+        initialDimension="special"
+        oldEventDays="7のつく日"
+      />
+    );
+    expect(htmlSpecial).toContain('特日／通常日');
+    expect(htmlSpecial).toContain('特日 (旧イベント日)');
+    expect(htmlSpecial).toContain('通常営業日');
+    expect(htmlSpecial).toContain('特日前日');
+    expect(htmlSpecial).toContain('特日翌日');
+    // SpecialDayPatterns detail is rendered under special dimension
+    expect(htmlSpecial).toContain('特日詳細分析（特日サイクル・特日タイプ別・前日翌日）');
+
+    // 2. MachineTail dimension
+    const htmlMachineTail = renderToString(
+      <ConditionAnalysis
+        dailyRecords={sampleRecords}
+        initialDimension="machineTail"
+      />
+    );
+    expect(htmlMachineTail).toContain('末尾');
+    expect(htmlMachineTail).toContain('末尾0');
+    expect(htmlMachineTail).toContain('末尾1');
+    expect(htmlMachineTail).toContain('末尾7');
+    expect(htmlMachineTail).toContain('末尾ゾロ目');
+
+    // Number consistency: checks that special calculations match expectations
+    const specialStats = calculateConditionStats(sampleRecords, 'special', { oldEventDays: '7のつく日' });
+    const eventStat = specialStats.find((s) => s.key === 'special');
+    expect(eventStat).toBeDefined();
+    // 7のつく日 in sampleRecords: 2025-01-07 (500), 2025-01-17 (400), 2025-01-27 (450) -> count = 3
+    expect(eventStat!.count).toBe(3);
+    expect(eventStat!.avgDiffCoins).toBe(450);
+  });
+
+  it('9. Prompt 39: HighPayoutAnalysis contains only 4 tabs and no duplicate tails/timing sections', () => {
+    const onNavigateMock = vi.fn();
+    const htmlHighPayout = renderToString(
+      <HighPayoutAnalysis
+        dailyRecords={sampleRecords}
+        perspective="player"
+        unit="coins"
+        onNavigateToConditions={onNavigateMock}
+      />
+    );
+    // Retains the 4 core tabs
+    expect(htmlHighPayout).toContain('総合特徴・黄金抽出カルテ');
+    expect(htmlHighPayout).toContain('機種カテゴリ別・機種別');
+    expect(htmlHighPayout).toContain('投入形態 (前日相関: 上げ vs 据え置き)');
+    expect(htmlHighPayout).toContain('台数規模別特徴 (多台数/中規模/バラ)');
+
+    // Duplicate tabs are removed
+    expect(htmlHighPayout).not.toContain('末尾別特徴');
+    expect(htmlHighPayout).not.toContain('特日・曜日別特徴');
+    expect(htmlHighPayout).not.toContain('稼働G数帯別特徴');
+    expect(htmlHighPayout).not.toContain('全高出率レコード');
+
+    // Contains link to ConditionAnalysis
+    expect(htmlHighPayout).toContain('特日vs通常日・曜日別・末尾別の高出率台割合');
+    expect(htmlHighPayout).toContain('条件別に詳しく見る');
+  });
+
+  it('10. Prompt 39: ModelDeepAnalysis and SettingDistributionPanel render ConditionAnalysis links without duplicate displays', () => {
+    const onNavigateMock = vi.fn();
+    const recordsWithModels = sampleRecords.map((r, idx) => ({
+      ...r,
+      models: [
+        {
+          modelName: 'マイジャグラーV',
+          avgDiffCoins: 200,
+          totalDiffCoins: 400,
+          avgGames: 6000,
+          winRate: 50,
+          winMachines: 1,
+          totalMachines: 2,
+          isSmallCount: false,
+        },
+      ],
+      tails: [
+        {
+          tailName: '末尾1',
+          avgDiffCoins: 200,
+          totalDiffCoins: 400,
+          avgGames: 6000,
+          winRate: 50,
+          winMachines: 1,
+          totalMachines: 2,
+        },
+      ],
+      machines: [
+        {
+          machineNum: 100 + idx,
+          modelName: 'マイジャグラーV',
+          games: 5000,
+          diff: 200,
+          payoutRate: 101.3,
+        },
+      ],
+    }));
+
+    const htmlDeep = renderToString(
+      <ModelDeepAnalysis
+        dailyRecords={recordsWithModels}
+        perspective="player"
+        unit="coins"
+        onNavigateToConditions={onNavigateMock}
+      />
+    );
+    expect(htmlDeep).toContain('条件別に詳しく見る (末尾)');
+
+    const htmlSetting = renderToString(
+      <SettingDistributionPanel
+        dailyRecords={recordsWithModels}
+        onNavigateToConditions={onNavigateMock}
+      />
+    );
+    expect(htmlSetting).toContain('条件別の比較:');
+    expect(htmlSetting).toContain('条件別に詳しく見る');
   });
 });

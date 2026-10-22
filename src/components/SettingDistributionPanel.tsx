@@ -4,6 +4,7 @@ import {
   SpecialDayRules,
 } from '../data/types';
 import { isAType } from '../utils/modelFilterUtils';
+import { ConditionDimension } from '../utils/conditionAnalysis';
 import {
   ModelSettingSpec,
   SettingLevelSpec,
@@ -100,6 +101,7 @@ interface SettingDistributionPanelProps {
   specialDayRules?: SpecialDayRules;
   selectedModelName?: string;
   onSelectModelName?: (modelName: string) => void;
+  onNavigateToConditions?: (dim?: ConditionDimension) => void;
 }
 
 // 設定ごとの標準カラーパレット
@@ -141,6 +143,7 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
   specialDayRules,
   selectedModelName: controlledModelName,
   onSelectModelName,
+  onNavigateToConditions,
 }) => {
   // 1. 店舗データ内に存在するすべてのAタイプ機種名を抽出
   const aTypeModelNames = useMemo(() => {
@@ -1949,11 +1952,21 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
             <span className="text-xs text-slate-400 group-open:hidden shrink-0 ml-2">詳細を開く ▼</span>
           </summary>
           <div className="mt-4 pt-3 border-t border-slate-100 space-y-4 text-xs">
-            <div>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1">
                 <span>条件別 高設定（設定{highThreshold}以上）推定比率の比較と有意差判定</span>
                 <HelpTooltip text="特日・通常日、曜日別、台番号末尾別の高設定投入傾向と統計的有意性検定（2標本割合Z検定）です。" />
               </h4>
+              {onNavigateToConditions && (
+                <button
+                  type="button"
+                  onClick={() => onNavigateToConditions('special')}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-lg border border-indigo-200 transition-colors cursor-pointer self-start sm:self-auto shrink-0 shadow-2xs"
+                >
+                  <span>条件別に詳しく見る</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
 
             {estimationResult.conditionComparisons.length > 0 ? (

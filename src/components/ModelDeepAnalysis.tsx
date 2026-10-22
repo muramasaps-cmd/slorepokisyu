@@ -11,6 +11,7 @@ import {
   ModelPresetMode,
 } from '../utils/modelFilterUtils';
 import { ModelMultiSelectModal } from './ModelMultiSelectModal';
+import { ConditionDimension } from '../utils/conditionAnalysis';
 const SettingDistributionPanel = React.lazy(() =>
   import('./SettingDistributionPanel').then((m) => ({ default: m.SettingDistributionPanel }))
 );
@@ -38,6 +39,7 @@ import {
   X,
   Target,
   SlidersHorizontal,
+  ChevronRight,
 } from 'lucide-react';
 
 interface ModelDeepAnalysisProps {
@@ -53,6 +55,7 @@ interface ModelDeepAnalysisProps {
   onSelectPreset?: (preset: ModelPresetMode) => void;
   onOpenModelModal?: () => void;
   onToggleModel?: (modelName: string) => void;
+  onNavigateToConditions?: (dim?: ConditionDimension) => void;
 }
 
 type FilterCategory = 'all' | 'positive' | 'negative' | 'main' | 'small';
@@ -73,6 +76,7 @@ export const ModelDeepAnalysis: React.FC<ModelDeepAnalysisProps> = ({
   onSelectPreset,
   onOpenModelModal,
   onToggleModel,
+  onNavigateToConditions,
 }) => {
   const [subView, setSubView] = useState<ActiveSubView>('models');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -389,6 +393,17 @@ export const ModelDeepAnalysis: React.FC<ModelDeepAnalysisProps> = ({
               </p>
             </div>
           </div>
+          {onNavigateToConditions && (
+            <button
+              type="button"
+              onClick={() => onNavigateToConditions('machineTail')}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer border border-slate-700 shrink-0 self-start md:self-auto"
+            >
+              <Hash className="w-3.5 h-3.5 text-indigo-400" />
+              <span>条件別に詳しく見る (末尾)</span>
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
 
         {/* View Switcher Tabs */}
@@ -408,7 +423,13 @@ export const ModelDeepAnalysis: React.FC<ModelDeepAnalysisProps> = ({
           {aggregatedTails.length > 0 && (
             <button
               type="button"
-              onClick={() => setSubView('tails')}
+              onClick={() => {
+                if (onNavigateToConditions) {
+                  onNavigateToConditions('machineTail');
+                } else {
+                  setSubView('tails');
+                }
+              }}
               className={`px-3.5 py-1.5 font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
                 subView === 'tails'
                   ? 'bg-amber-400 text-slate-950 shadow-sm'
@@ -1269,112 +1290,29 @@ export const ModelDeepAnalysis: React.FC<ModelDeepAnalysisProps> = ({
         </div>
       )}
 
-      {/* TAIL NUMBER RESULTS SUBVIEW */}
+      {/* TAIL NUMBER RESULTS SUBVIEW (Unified into ConditionAnalysis) */}
       {subView === 'tails' && (
-        <div className="p-4 sm:p-5 space-y-4">
-          <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs text-slate-600 flex items-center justify-between">
-            <div>
-              <strong>台番号 末尾別結果 (スロレポ抽出データ):</strong>
-              <span className="ml-1 text-slate-500">
-                台番号の1桁目（0〜9およびゾロ目）ごとの全台出玉・稼働・勝率集計です。当たりの入りやすい特定末尾の特定に役立ちます。
-              </span>
+        <div className="p-6 sm:p-8 space-y-4 text-center">
+          <div className="max-w-md mx-auto bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-3">
+            <div className="w-12 h-12 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center mx-auto">
+              <Hash className="w-6 h-6" />
             </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {aggregatedTails.map((t) => {
-              const diffVal = isHall ? -t.avgDiffCoins : t.avgDiffCoins;
-              const totalVal = isHall ? -t.totalDiffCoins : t.totalDiffCoins;
-              const isPositive = t.avgDiffCoins > 0;
-
-              return (
-                <div
-                  key={t.tailName}
-                  className={`p-4 rounded-xl border transition-all ${
-                    isPositive
-                      ? 'bg-blue-50/40 border-blue-200 shadow-xs'
-                      : 'bg-white border-slate-200 shadow-2xs'
-                  }`}
-                >
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-7 h-7 rounded-lg bg-slate-900 text-amber-400 font-black text-sm flex items-center justify-center">
-                        {t.tailNum !== null ? t.tailNum : 'ゾ'}
-                      </span>
-                      <span className="font-extrabold text-slate-900 text-sm">{t.tailName}</span>
-                    </div>
-                    <span
-                      className={`text-xs font-black px-2 py-0.5 rounded ${
-                        isPositive ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-700'
-                      }`}
-                    >
-                      {isPositive ? '客プラス' : '店回収'}
-                    </span>
-                  </div>
-
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                    <div>
-                      <div className="text-slate-400 text-[11px]">1台平均差枚</div>
-                      <div
-                        className={`text-base font-black ${
-                          t.avgDiffCoins > 0 ? 'text-blue-600' : 'text-slate-800'
-                        }`}
-                      >
-                        {t.avgDiffCoins > 0 ? `+${formatNumber(t.avgDiffCoins)}` : formatNumber(t.avgDiffCoins)}枚
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="text-slate-400 text-[11px]">総差枚数</div>
-                      <div
-                        className={`text-base font-black ${
-                          t.totalDiffCoins > 0 ? 'text-blue-600' : 'text-slate-800'
-                        }`}
-                      >
-                        {t.totalDiffCoins > 0 ? `+${formatNumber(t.totalDiffCoins)}` : formatNumber(t.totalDiffCoins)}枚
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="text-slate-400 text-[11px]">勝率</div>
-                      <div className="font-bold text-slate-800 text-sm">
-                        {t.winRate}%{' '}
-                        <span className="text-[10px] text-slate-400 font-normal">
-                          ({t.winMachines}/{t.totalMachines}台)
-                        </span>
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="text-slate-400 text-[11px]">平均稼働</div>
-                      <div className="font-bold text-slate-800 text-sm">
-                        {formatNumber(t.avgGames)}G
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Progress bar visual for win rate */}
-                  <div className="mt-3 pt-2 border-t border-slate-100">
-                    <div className="flex justify-between text-[10px] text-slate-500 mb-1">
-                      <span>勝率ゲージ</span>
-                      <span>{t.winRate}%</span>
-                    </div>
-                    <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all ${
-                          (t.winRate ?? 0) >= 38
-                            ? 'bg-blue-600'
-                            : (t.winRate ?? 0) >= 35
-                            ? 'bg-amber-500'
-                            : 'bg-slate-400'
-                        }`}
-                        style={{ width: `${Math.min(100, t.winRate ?? 0)}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+            <h3 className="text-base font-bold text-slate-900">
+              台番号末尾データは「条件別分析」に統合されました
+            </h3>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              台番号の1桁目（0〜9およびゾロ目）ごとの全台出玉・出率・稼働・勝率などの詳細データは、条件別分析の「末尾」タブで一元的に比較・分析できます。
+            </p>
+            {onNavigateToConditions && (
+              <button
+                type="button"
+                onClick={() => onNavigateToConditions('machineTail')}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition-all cursor-pointer shadow-xs"
+              >
+                <span>条件別に詳しく見る</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -1394,6 +1332,7 @@ export const ModelDeepAnalysis: React.FC<ModelDeepAnalysisProps> = ({
               specialDayRules={specialDayRules}
               selectedModelName={selectedATypeModelName || aTypeModels[0]?.modelName}
               onSelectModelName={(mName) => setSelectedATypeModelName(mName)}
+              onNavigateToConditions={onNavigateToConditions}
             />
           </React.Suspense>
         </div>

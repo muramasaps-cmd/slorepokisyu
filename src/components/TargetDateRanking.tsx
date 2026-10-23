@@ -68,6 +68,7 @@ interface TargetDateRankingProps {
   onNavigateToValidation?: () => void;
   onOpenStoreManager?: () => void;
   storeId?: string;
+  storeName?: string;
   funnelModelName?: string | null;
   onSelectFunnelModel?: (modelName: string | null) => void;
   targetSection?: string;
@@ -94,6 +95,7 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
   onNavigateToValidation,
   onOpenStoreManager,
   storeId,
+  storeName,
   funnelModelName,
   onSelectFunnelModel,
   targetSection,
@@ -650,7 +652,7 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
       </div>
 
       {/* Step ③: どの機種を狙うか */}
-      <div id="target-step-3" className="border-t border-slate-200 bg-white p-4 sm:p-5 space-y-3.5">
+      <div id="target-step-3" className="border-t border-slate-200 bg-white p-4 sm:p-5 space-y-3.5 scroll-mt-28">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
@@ -714,11 +716,18 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
                 >
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between">
-                      <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-black ${
-                        idx === 0 ? 'bg-amber-500 text-slate-950' : idx === 1 ? 'bg-slate-300 text-slate-800' : 'bg-amber-700 text-white'
-                      }`}>
-                        {idx + 1}
-                      </span>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-black ${
+                          idx === 0 ? 'bg-amber-500 text-slate-950' : idx === 1 ? 'bg-slate-300 text-slate-800' : 'bg-amber-700 text-white'
+                        }`}>
+                          {idx + 1}
+                        </span>
+                        {storeName && (
+                          <span className="font-mono text-2xs font-extrabold text-indigo-700 bg-indigo-50 px-1.5 py-0.2 rounded border border-indigo-100 truncate max-w-[100px]">
+                            {storeName}
+                          </span>
+                        )}
+                      </div>
                       <span className={`text-[10px] px-1.5 py-0.5 rounded font-black ${getGradeStyle(model.rankGrade)}`}>
                         {model.rankGrade}
                       </span>
@@ -874,6 +883,14 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
               rankingType="model"
               showStoreColumn={false}
               formatProfitValue={formatProfitValue}
+              onSelectModel={(modelName) => {
+                onSelectFunnelModel?.(modelName ? modelName : null);
+                if (modelName) {
+                  const el = document.getElementById('target-step-4');
+                  if (el) el.scrollIntoView({ behavior: 'smooth' });
+                }
+              }}
+              selectedModelName={funnelModelName}
               rows={sortedModels.map((model) => ({
                 id: `model-${model.modelName}`,
                 rank: model.rank,
@@ -902,7 +919,7 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
       </div>
 
       {/* Step ④: どの台を狙うか */}
-      <div id="target-step-4" className="border-t border-slate-200 bg-white p-4 sm:p-5 space-y-3.5">
+      <div id="target-step-4" className="border-t border-slate-200 bg-white p-4 sm:p-5 space-y-3.5 scroll-mt-28">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
@@ -971,11 +988,18 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
                   >
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
-                        <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-black ${
-                          idx === 0 ? 'bg-amber-500 text-slate-950' : idx === 1 ? 'bg-slate-300 text-slate-800' : 'bg-amber-700 text-white'
-                        }`}>
-                          {idx + 1}
-                        </span>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-black ${
+                            idx === 0 ? 'bg-amber-500 text-slate-950' : idx === 1 ? 'bg-slate-300 text-slate-800' : 'bg-amber-700 text-white'
+                          }`}>
+                            {idx + 1}
+                          </span>
+                          {storeName && (
+                            <span className="font-mono text-2xs font-extrabold text-indigo-700 bg-indigo-50 px-1.5 py-0.2 rounded border border-indigo-100 truncate max-w-[100px]">
+                              {storeName}
+                            </span>
+                          )}
+                        </div>
                         <span className="font-mono font-black text-sm text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
                           #{mach.machineNum}
                         </span>
@@ -1050,7 +1074,7 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
       </div>
 
       {/* Step ⑤: 当日のチェックリスト */}
-      <div id="target-step-5" className="border-t border-slate-200 bg-white p-4 sm:p-5 space-y-3.5">
+      <div id="target-step-5" className="border-t border-slate-200 bg-white p-4 sm:p-5 space-y-3.5 scroll-mt-28">
         <div id="target-checklist" className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
@@ -1114,11 +1138,18 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
                 >
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between">
-                      <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-black ${
-                        idx === 0 ? 'bg-amber-500 text-slate-950' : idx === 1 ? 'bg-slate-300 text-slate-800' : 'bg-amber-700 text-white'
-                      }`}>
-                        {idx + 1}
-                      </span>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-black ${
+                          idx === 0 ? 'bg-amber-500 text-slate-950' : idx === 1 ? 'bg-slate-300 text-slate-800' : 'bg-amber-700 text-white'
+                        }`}>
+                          {idx + 1}
+                        </span>
+                        {storeName && (
+                          <span className="font-mono text-2xs font-extrabold text-indigo-700 bg-indigo-50 px-1.5 py-0.2 rounded border border-indigo-100 truncate max-w-[100px]">
+                            {storeName}
+                          </span>
+                        )}
+                      </div>
                       <span className="font-mono font-black text-sm text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
                         #{cand.machineNum}
                       </span>
@@ -1138,6 +1169,11 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
                       <span className="font-mono font-black text-indigo-600">
                         {cand.expectedDiffCoins >= 0 ? `+${cand.expectedDiffCoins}` : cand.expectedDiffCoins}枚
                       </span>
+                    </div>
+
+                    <div className="text-[10px] text-slate-600 bg-white/80 p-1.5 rounded-lg border border-slate-200/60 flex items-center justify-between">
+                      <span>信頼度: <strong className="text-slate-800">{cand.confidence}</strong></span>
+                      <span className="text-slate-500">根拠: {cand.evidenceDays}日分</span>
                     </div>
                   </div>
 

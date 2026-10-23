@@ -1524,8 +1524,8 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
       </div>
 
       {/* Step ②: どの店に行くか（全店のとき） */}
-      <div id="target-step-2" className="space-y-4">
-        <div id="target-store-ranking" className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3.5">
+      <div id="target-step-2" className="space-y-4 scroll-mt-28">
+        <div id="target-store-ranking" className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3.5 scroll-mt-28">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
             <div className="space-y-0.5">
               <div className="flex items-center gap-2">
@@ -2045,6 +2045,14 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                     toggleExpandModel(parts[0], parts[1]);
                   }
                 }}
+                onSelectModel={(modelName) => {
+                  onSelectFunnelModel?.(modelName ? modelName : null);
+                  if (modelName) {
+                    const el = document.getElementById('target-step-4');
+                    if (el) el.scrollIntoView({ behavior: 'smooth' });
+                  }
+                }}
+                selectedModelName={funnelModelName}
                 rows={step3Models.map((m) => {
                   const modelKey = `${m.storeId}___${m.modelName}`;
                   const subMachines = getMachinesForModelRank(m, rankingResult.machineRankings, filterCriteria);
@@ -2365,7 +2373,10 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
       {(() => {
         const effectiveChecklistStoreId = funnelStoreId || activeTargetStoreId;
         const activeStoreObj = stores.find((s) => s.id === effectiveChecklistStoreId) || stores[0];
-        const rawStoreCandidates = rankingResult.storeMachineRankings?.[effectiveChecklistStoreId] || [];
+        let rawStoreCandidates = rankingResult.storeMachineRankings?.[effectiveChecklistStoreId] || [];
+        if (funnelModelName) {
+          rawStoreCandidates = rawStoreCandidates.filter((m) => m.modelName === funnelModelName);
+        }
         const storeCandidates = filterMachineRankings(rawStoreCandidates, filterCriteria);
         const { activeCandidates, checkedCandidates, rolledUpCount } = filterAndRollupTargetList(
           storeCandidates,
@@ -2445,8 +2456,11 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                             >
                               #{mach.rank || idx + 1}
                             </span>
-                            <span className="font-mono text-2xs font-extrabold text-indigo-700 bg-indigo-50 px-1.5 py-0.2 rounded border border-indigo-100">
-                              {mach.machineNum}番台
+                            <span className="font-mono text-2xs font-extrabold text-indigo-700 bg-indigo-50 px-1.5 py-0.2 rounded border border-indigo-100 truncate max-w-[90px]">
+                              {mach.storeName || activeStoreObj?.name}
+                            </span>
+                            <span className="font-mono text-2xs font-extrabold text-slate-700 bg-slate-100 px-1.5 py-0.2 rounded border border-slate-200">
+                              #{mach.machineNum}番台
                             </span>
                           </div>
                           <span
@@ -2517,12 +2531,15 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                     </span>
                     <div className="flex flex-wrap gap-2">
                       {stores.map((s) => {
-                        const isCurrent = activeTargetStoreId === s.id;
+                        const isCurrent = effectiveChecklistStoreId === s.id;
                         return (
                           <button
                             key={s.id}
                             type="button"
-                            onClick={() => setActiveTargetStoreId(s.id)}
+                            onClick={() => {
+                              onSelectFunnelStore?.(s.id);
+                              setActiveTargetStoreId(s.id);
+                            }}
                             className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
                               isCurrent
                                 ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'

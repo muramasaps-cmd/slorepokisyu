@@ -262,12 +262,23 @@ export const TargetTab: React.FC<TargetTabProps> = ({
                 >
                   <Building2 className="w-3 h-3 text-amber-700" />
                   <span>{funnelStoreObj.name}</span>
-                  {scope === 'all' && (
+                  {scope === 'all' ? (
                     <button
                       type="button"
                       onClick={() => setFunnelStoreId(null)}
                       className="ml-0.5 text-amber-500 hover:text-rose-600 transition-colors cursor-pointer"
                       aria-label="店舗選択を解除"
+                      data-testid="clear-funnel-store"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => onScopeChange('all')}
+                      className="ml-0.5 text-amber-500 hover:text-rose-600 transition-colors cursor-pointer"
+                      aria-label="店舗選択を解除"
+                      title="全店表示に切り替えて店舗選択を解除"
                       data-testid="clear-funnel-store"
                     >
                       <X className="w-3 h-3" />
@@ -298,14 +309,18 @@ export const TargetTab: React.FC<TargetTabProps> = ({
               )}
             </div>
 
-            {(funnelStoreId || funnelModelName) && (
+            {(funnelStoreId || funnelModelName || scope === 'store') && (
               <button
                 type="button"
                 onClick={() => {
                   setFunnelStoreId(null);
                   setFunnelModelName(null);
+                  if (scope === 'store') {
+                    onScopeChange('all');
+                  }
                 }}
                 className="text-2xs font-bold text-slate-400 hover:text-rose-600 underline cursor-pointer"
+                data-testid="clear-all-funnel"
               >
                 全解除
               </button>
@@ -315,7 +330,7 @@ export const TargetTab: React.FC<TargetTabProps> = ({
       </div>
 
       {/* Step ①: Unified Top Control Bar: Target Date & Scope Switcher */}
-      <div id="target-step-1" className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3.5 scroll-mt-28">
+      <div id="target-step-1" data-testid="target-step-1-card" className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3.5 scroll-mt-28">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           {/* Left: Step ① Icon, Tab Title & Scope Switcher */}
           <div className="space-y-2">
@@ -508,6 +523,7 @@ export const TargetTab: React.FC<TargetTabProps> = ({
               onNavigateToValidation={onNavigateToValidation}
               onOpenStoreManager={onOpenStoreManager}
               storeId={currentStore.id}
+              storeName={currentStore.name}
               funnelModelName={funnelModelName}
               onSelectFunnelModel={setFunnelModelName}
               targetSection={targetSection}

@@ -510,6 +510,8 @@ export interface TargetRankingTableProps {
   expandedIds?: Set<string>;
   onToggleExpand?: (id: string) => void;
   formatProfitValue?: (coins: number) => string;
+  onSelectModel?: (modelName: string) => void;
+  selectedModelName?: string | null;
 }
 
 export const TargetRankingTable: React.FC<TargetRankingTableProps> = ({
@@ -522,6 +524,8 @@ export const TargetRankingTable: React.FC<TargetRankingTableProps> = ({
   expandedIds: controlledExpandedIds,
   onToggleExpand: controlledOnToggleExpand,
   formatProfitValue,
+  onSelectModel,
+  selectedModelName,
 }) => {
   // Local state for expanded rows if uncontrolled
   const [internalExpandedIds, setInternalExpandedIds] = useState<Set<string>>(new Set());
@@ -1023,6 +1027,27 @@ export const TargetRankingTable: React.FC<TargetRankingTableProps> = ({
                             <span className="bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-bold px-1.5 py-0.2 rounded">
                               全台系実績{row.allHighDaysCount}回
                             </span>
+                          )}
+                          {rankingType === 'model' && onSelectModel && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (selectedModelName === row.modelName) {
+                                  onSelectModel('');
+                                } else {
+                                  onSelectModel(row.modelName);
+                                }
+                              }}
+                              className={`px-2 py-0.5 rounded text-2xs font-bold border transition-colors cursor-pointer ${
+                                selectedModelName === row.modelName
+                                  ? 'bg-indigo-600 text-white border-indigo-600 font-black'
+                                  : 'bg-white hover:bg-indigo-50 text-indigo-700 border-indigo-200'
+                              }`}
+                              data-testid={`select-model-table-${row.modelName}`}
+                            >
+                              {selectedModelName === row.modelName ? '✓ 選択中' : '選択 ›'}
+                            </button>
                           )}
                         </div>
                         <div className="flex items-center gap-1.5 mt-1 flex-wrap">

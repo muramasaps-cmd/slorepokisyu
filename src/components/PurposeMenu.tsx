@@ -20,6 +20,8 @@ import {
   HardDriveDownload,
   SlidersHorizontal,
   LucideIcon,
+  CheckCircle2,
+  HelpCircle,
 } from 'lucide-react';
 import { ActiveTab, AnalysisSubTab, TargetScope } from '../App';
 
@@ -49,12 +51,15 @@ export interface PurposeMenuProps {
   analysisSubTab: AnalysisSubTab;
   targetScope: TargetScope;
   activeSection?: string;
+  isHome?: boolean;
+  skipHome?: boolean;
   onNavigate: (
     tab: ActiveTab,
     options?: {
       subTab?: AnalysisSubTab;
       scope?: TargetScope;
       section?: string;
+      isHome?: boolean;
     }
   ) => void;
   onOpenStoreManager?: (initialTab?: 'import' | 'list' | 'backup') => void;
@@ -66,6 +71,8 @@ export const PurposeMenu: React.FC<PurposeMenuProps> = ({
   analysisSubTab,
   targetScope,
   activeSection,
+  isHome = false,
+  skipHome = false,
   onNavigate,
   onOpenStoreManager,
   onOpenModelSpecs,
@@ -111,6 +118,18 @@ export const PurposeMenu: React.FC<PurposeMenuProps> = ({
 
   // Determine current active breadcrumb text
   const currentBreadcrumb = React.useMemo(() => {
+    if (isHome) {
+      if (activeTab === 'target') {
+        return {
+          parent: '指定日の狙い台を決める',
+          item: '何を知りたいか選ぶ（ホーム）',
+        };
+      }
+      return {
+        parent: '店舗を分析する',
+        item: '何を知りたいか選ぶ（ホーム）',
+      };
+    }
     if (activeTab === 'overview') {
       return {
         parent: '店舗を分析する',
@@ -170,6 +189,12 @@ export const PurposeMenu: React.FC<PurposeMenuProps> = ({
         return {
           parent: '指定日の狙い台を決める',
           item: 'どの台を狙うか',
+        };
+      }
+      if (activeSection === 'checklist' || activeSection === 'target-checklist') {
+        return {
+          parent: '指定日の狙い台を決める',
+          item: '当日のチェックリスト',
         };
       }
       return {
@@ -345,6 +370,22 @@ export const PurposeMenu: React.FC<PurposeMenuProps> = ({
           onSelect: () => {
             onNavigate('target', {
               section: 'target-machine-ranking',
+            });
+            setOpenMenuId(null);
+          },
+        },
+        {
+          id: 'checklist',
+          title: '当日のチェックリスト',
+          desc: '来店中の狙い台確保状況チェック・繰り上がり管理',
+          icon: CheckCircle2,
+          hash: '#target?section=checklist',
+          isActive:
+            activeTab === 'target' &&
+            (activeSection === 'checklist' || activeSection === 'target-checklist'),
+          onSelect: () => {
+            onNavigate('target', {
+              section: 'target-checklist',
             });
             setOpenMenuId(null);
           },

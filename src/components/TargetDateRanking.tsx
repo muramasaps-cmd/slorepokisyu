@@ -269,7 +269,7 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
               </button>
             </div>
 
-            <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2.5">
+            <h2 id="target-model-ranking" className="text-xl sm:text-2xl font-black text-white flex items-center gap-2.5">
               <span>{forecast.targetDate} の狙い台・おすすめ機種ランキング</span>
             </h2>
             <p className="text-xs sm:text-sm text-slate-300 mt-1 max-w-3xl">
@@ -561,19 +561,21 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
       />
 
       {/* Target Machine Ranking Component (台番号別 狙い台ランキング) */}
-      <TargetMachineRanking
-        targetDate={targetDate}
-        dailyRecords={dailyRecords}
-        specialDayRules={specialDayRules}
-        customWeights={customWeights}
-        customMachineWeights={customMachineWeights}
-        islandConfig={islandConfig}
-        includeReusedMachines={includeReusedState}
-        aliasDictionary={aliasDictionary}
-        onOpenStoreManager={onOpenStoreManager}
-        storeId={storeId}
-        featureIndex={sharedFeatureIndex}
-      />
+      <div id="target-machine-ranking">
+        <TargetMachineRanking
+          targetDate={targetDate}
+          dailyRecords={dailyRecords}
+          specialDayRules={specialDayRules}
+          customWeights={customWeights}
+          customMachineWeights={customMachineWeights}
+          islandConfig={islandConfig}
+          includeReusedMachines={includeReusedState}
+          aliasDictionary={aliasDictionary}
+          onOpenStoreManager={onOpenStoreManager}
+          storeId={storeId}
+          featureIndex={sharedFeatureIndex}
+        />
+      </div>
 
       {/* Footer Disclaimer */}
       <div className="p-3.5 bg-slate-50 border-t border-slate-200 text-[11px] text-slate-500 flex flex-col sm:flex-row sm:items-center justify-between gap-2">

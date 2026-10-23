@@ -475,7 +475,7 @@ export interface TargetRankingTableProps {
   title?: string;
   rankingType?: TargetRankingType; // 'machine' | 'model'
   rows: TargetRankingRow[];
-  showStoreColumn?: boolean; // 店舗名の列は、全店のときだけ表示する
+  showStoreColumn?: boolean; // 店舗名の列を表示（横断ランキング等）
 
   // Toolbar settings
   toolbar?: {
@@ -905,7 +905,9 @@ export const TargetRankingTable: React.FC<TargetRankingTableProps> = ({
             <tr>
               <th className="px-3 py-3 font-bold text-center w-12">展開</th>
               <th className="px-3 py-3 font-bold text-center w-16">順位</th>
-              {showStoreColumn && <th className="px-4 py-3 font-bold">店舗名</th>}
+              {showStoreColumn && (
+                <th className="hidden sm:table-cell px-4 py-3 font-bold">店舗名</th>
+              )}
               <th className="px-4 py-3 font-bold">機種名</th>
               <th className="px-3 py-3 font-bold">
                 {rankingType === 'machine' ? '台番' : '台数'}
@@ -975,9 +977,9 @@ export const TargetRankingTable: React.FC<TargetRankingTableProps> = ({
                         {getRankBadge(row.rank, row.rankGrade)}
                       </td>
 
-                      {/* 3. 店名 (店舗名の列は、全店のときだけ表示する) */}
+                      {/* 3. 店名 (店舗名の列は順位の次の列に置き、PC表示) */}
                       {showStoreColumn && (
-                        <td className="px-4 py-3 font-bold text-slate-900">
+                        <td className="hidden sm:table-cell px-4 py-3 font-bold text-slate-900">
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                             <span>{row.storeName || '店舗'}</span>
@@ -995,6 +997,26 @@ export const TargetRankingTable: React.FC<TargetRankingTableProps> = ({
 
                       {/* 4. 機種 */}
                       <td className="px-4 py-3">
+                        {/* スマートフォン幅での店舗名バッジ（列が収まらないときの代わり） */}
+                        {showStoreColumn && row.storeName && (
+                          <div className="sm:hidden mb-1">
+                            <span
+                              data-testid="mobile-store-badge"
+                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200"
+                            >
+                              <Building2 className="w-3 h-3 text-slate-400 shrink-0" />
+                              <span>{row.storeName}</span>
+                              {row.isSpecialDay && (
+                                <span
+                                  className="px-1 py-0.2 rounded bg-amber-100 text-amber-800 text-[9px] font-black"
+                                  title={row.specialDayReason}
+                                >
+                                  特日
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        )}
                         <div className="font-bold text-slate-900 text-sm flex items-center gap-1.5 flex-wrap">
                           <span>{row.modelName}</span>
                           {row.allHighDaysCount !== undefined && row.allHighDaysCount > 0 && (

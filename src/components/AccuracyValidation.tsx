@@ -543,7 +543,7 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
                 </span>
               )}
             </div>
-            <h2 className="text-lg sm:text-xl font-black text-slate-900">
+            <h2 id="validation-models" className="text-lg sm:text-xl font-black text-slate-900">
               予測精度の過去実績バックテスト検証 ({storeName})
             </h2>
             <p className="text-xs text-slate-500 max-w-3xl leading-relaxed">
@@ -1275,7 +1275,7 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
       </details>
 
       {/* 3. 台番単位の検証（アブレーション・ローリング検証） (詳細折りたたみ: 既定は閉じる) */}
-      <details className="group bg-white rounded-2xl border border-amber-200 overflow-hidden shadow-2xs">
+      <details id="validation-machines" className="group bg-white rounded-2xl border border-amber-200 overflow-hidden shadow-2xs">
         <summary className="px-5 py-4 bg-gradient-to-r from-slate-900 via-amber-950/70 to-slate-900 text-white cursor-pointer list-none flex flex-col md:flex-row md:items-center justify-between gap-3 transition-colors">
           <div className="flex items-center gap-2">
             <ChevronDown className="w-4 h-4 text-amber-300 transition-transform duration-200 group-open:rotate-180" />

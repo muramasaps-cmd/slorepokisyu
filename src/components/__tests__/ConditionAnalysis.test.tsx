@@ -2,8 +2,6 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { ConditionAnalysis } from '../ConditionAnalysis';
-import { DayOfWeekAnalysis } from '../DayOfWeekAnalysis';
-import { TailNumberAnalysis } from '../TailNumberAnalysis';
 import { HighPayoutAnalysis } from '../HighPayoutAnalysis';
 import { ModelDeepAnalysis } from '../ModelDeepAnalysis';
 import { SettingDistributionPanel } from '../SettingDistributionPanel';
@@ -247,10 +245,11 @@ describe('ConditionAnalysis Component & Utilities', () => {
     expect(zoroStat.totalMachines).toBe(30);
     expect(zoroStat.totalDiffCoins).toBe(16000);
 
-    // Wrap with TailNumberAnalysis
+    // Render ConditionAnalysis with tail dimension
     const htmlWrapper = renderToString(
-      <TailNumberAnalysis
+      <ConditionAnalysis
         dailyRecords={sampleRecords}
+        initialDimension="tail"
         perspective="player"
         unit="coins"
       />
@@ -258,16 +257,18 @@ describe('ConditionAnalysis Component & Utilities', () => {
     expect(htmlWrapper).toContain('+433.3');
     expect(htmlWrapper).toContain('+533.3');
 
-    // Wrap with DayOfWeekAnalysis
+    // Dow stats
     const dowStats = calculateConditionStats(sampleRecords, 'dow');
     const tuesdayStat = dowStats.find((s) => s.key === '火')!;
     // 火: 2025-01-07 (500), 2025-01-14 (-100), 2025-01-21 (300) -> avg = 700 / 3 = 233.3
     expect(tuesdayStat.count).toBe(3);
     expect(tuesdayStat.avgDiffCoins).toBe(233.3);
 
+    // Render ConditionAnalysis with dow dimension
     const htmlDowWrapper = renderToString(
-      <DayOfWeekAnalysis
+      <ConditionAnalysis
         dailyRecords={sampleRecords}
+        initialDimension="dow"
         perspective="player"
         unit="coins"
       />

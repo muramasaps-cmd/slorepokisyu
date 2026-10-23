@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { StoreProfile, CategoryRateOverride } from '../data/types';
 import { ConfirmModal } from './ConfirmModal';
 import {
@@ -52,6 +52,7 @@ interface StoreManagerModalProps {
   onUpdateStore?: (store: StoreProfile) => void;
   onDeleteStore: (id: string) => void;
   onResetAllStores: () => void;
+  initialTab?: 'import' | 'list' | 'backup';
 }
 
 export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
@@ -65,8 +66,17 @@ export const StoreManagerModal: React.FC<StoreManagerModalProps> = ({
   onUpdateStore,
   onDeleteStore,
   onResetAllStores,
+  initialTab,
 }) => {
-  const [activeTab, setActiveTab] = useState<'import' | 'list' | 'backup'>('import');
+  const [activeTab, setActiveTab] = useState<'import' | 'list' | 'backup'>(
+    initialTab || 'import'
+  );
+
+  useEffect(() => {
+    if (initialTab && isOpen) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab, isOpen]);
 
   // HTML import state
   const [inputMode, setInputMode] = useState<'file' | 'paste'>('file');

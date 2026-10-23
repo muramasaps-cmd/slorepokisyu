@@ -998,7 +998,7 @@ export const SettingDistributionPanel: React.FC<SettingDistributionPanelProps> =
       {/* 4. 「詳細」の折りたたみ群（既定はすべて閉じる） */}
       <div className="space-y-3">
         {/* 詳細 1: 仕様テーブルの登録・編集とJSONインポート */}
-        <details className="border border-slate-200 rounded-xl bg-white p-4 group transition-all" data-testid="foldable-specs">
+        <details id="setting-specs-section" className="border border-slate-200 rounded-xl bg-white p-4 group transition-all" data-testid="foldable-specs">
           <summary className="font-bold text-slate-800 text-xs sm:text-sm cursor-pointer flex items-center justify-between select-none list-none">
             <div className="flex items-center gap-2 flex-wrap">
               <Settings2 className="w-4 h-4 text-emerald-600 shrink-0" />

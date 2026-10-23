@@ -71,6 +71,7 @@ interface CrossStoreTargetProps {
   onSelectStore?: (storeId: string) => void;
   activeFilterLabel?: string;
   isModelFilterActive?: boolean;
+  targetSection?: string;
 }
 
 export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
@@ -80,6 +81,7 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
   onTargetDateChange,
   activeFilterLabel,
   isModelFilterActive,
+  targetSection,
 }) => {
   // Read initial values from URL hash if available (e.g. #cross?crossDate=2026-05-17&crossStores=store1,store2)
   const getHashParams = () => {
@@ -176,8 +178,36 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
 
   // Active view: 'targetList' | 'models' | 'machines'
   const [rankingView, setRankingView] = useState<'targetList' | 'models' | 'machines'>(() => {
+    if (typeof window !== 'undefined' && window.location.hash.includes('section=models')) {
+      return 'models';
+    }
+    if (typeof window !== 'undefined' && window.location.hash.includes('section=machines')) {
+      return 'machines';
+    }
     return savedSettings.rankingView || 'targetList';
   });
+
+  // Sync rankingView from targetSection prop or hash change
+  useEffect(() => {
+    if (targetSection === 'models') {
+      setRankingView('models');
+    } else if (targetSection === 'machines') {
+      setRankingView('machines');
+    }
+  }, [targetSection]);
+
+  useEffect(() => {
+    const handleHash = () => {
+      const hash = typeof window !== 'undefined' ? window.location.hash : '';
+      if (hash.includes('section=models')) {
+        setRankingView('models');
+      } else if (hash.includes('section=machines')) {
+        setRankingView('machines');
+      }
+    };
+    window.addEventListener('hashchange', handleHash);
+    return () => window.removeEventListener('hashchange', handleHash);
+  }, []);
 
   // Prompt 33: 絞り込み条件 (Filter criteria)
   const [filterCriteria, setFilterCriteria] = useState<CrossStoreFilterCriteria>(() => {
@@ -1069,7 +1099,7 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
       </div>
 
       {/* 2. 来店日の候補スキャン (今後14日間・店×日マトリクス) */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3.5">
+      <div id="target-calendar-scan" className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3.5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
           <div className="space-y-0.5">
             <div className="flex items-center gap-2">
@@ -1284,7 +1314,7 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
       </div>
 
       {/* 3. どの店に行くか？ 店舗ランキング (Prompt 32: 機種・台番ランキングの上に追加) */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3.5">
+      <div id="target-store-ranking" className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3.5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
           <div className="space-y-0.5">
             <div className="flex items-center gap-2">
@@ -2227,10 +2257,11 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
             )}
 
             {/* 4. Models Ranking View (Prompt 40: TargetRankingTable共通化) */}
+            <div id="target-model-ranking">
             {rankingView === 'models' && (
               <TargetRankingTable
                 rankingType="model"
-                showStoreColumn={stores.length > 1 && selectedStoreIds.length === stores.length}
+                showStoreColumn={true}
                 expandedIds={expandedModelKeys}
                 onToggleExpand={(id) => {
                   const parts = id.split('___');
@@ -2316,6 +2347,8 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                   exportStoreName:
                     stores.length > 1 && selectedStoreIds.length === stores.length
                       ? '全店横断'
+                      : selectedStoreIds.length > 1
+                      ? '複数店選択'
                       : stores.find((s) => selectedStoreIds.includes(s.id))?.name || '店舗',
                   exportTargetDate: targetDate,
                   totalCount: rankingResult.modelRankings.length,
@@ -2328,12 +2361,14 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                 }
               />
             )}
+            </div>
 
             {/* 5. Individual Machines Ranking View (Prompt 40: TargetRankingTable共通化) */}
+            <div id="target-machine-ranking">
             {rankingView === 'machines' && (
               <TargetRankingTable
                 rankingType="machine"
-                showStoreColumn={stores.length > 1 && selectedStoreIds.length === stores.length}
+                showStoreColumn={true}
                 rows={filteredMachineRankings.map((mach) => {
                   const edge = edgeCache[mach.storeId];
                   const isTesting = testingStoreId === mach.storeId;
@@ -2405,6 +2440,8 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                   exportStoreName:
                     stores.length > 1 && selectedStoreIds.length === stores.length
                       ? '全店横断'
+                      : selectedStoreIds.length > 1
+                      ? '複数店選択'
                       : stores.find((s) => selectedStoreIds.includes(s.id))?.name || '店舗',
                   exportTargetDate: targetDate,
                   totalCount: rankingResult.machineRankings.length,
@@ -2419,6 +2456,7 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                 }
               />
             )}
+            </div>
           </>
         );
       })()}

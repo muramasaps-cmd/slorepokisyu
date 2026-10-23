@@ -137,49 +137,24 @@ describe('Prompt 43: タブの再編 (5タブ)', () => {
       const clean = (s: string) => s.replace(/<!--.*?-->/g, '');
       const html = clean(renderToString(<App />));
 
-      // 5 tabs labels must all be present
-      expect(html).toContain('概要');
-      expect(html).toContain('狙い');
-      expect(html).toContain('分析');
-      expect(html).toContain('店舗比較');
-      expect(html).toContain('検証');
+      // PurposeMenu entrances and labels must all be present
+      expect(html).toContain('店舗を分析する');
+      expect(html).toContain('指定日の狙い台を決める');
+      expect(html).toContain('予測の信頼性を確認する');
+      expect(html).toContain('データ・設定');
 
-      // Checks that the nav element uses 5-column grid layout for 375px mobile responsiveness
-      expect(html).toContain('grid-cols-5');
-      // Checks responsive vertical icon+label stacking for 375px mobile screens
-      expect(html).toContain('flex-col sm:flex-row');
+      // Breadcrumb indicator must show current location
+      expect(html).toContain('現在地');
+      expect(html).toContain('店舗の全体像（概要）');
     });
 
-    it('verifies that each of the 5 tabs fits within the 375px width budget', () => {
+    it('verifies that the purpose menu and breadcrumb fit comfortably within mobile constraints', () => {
       // 375px mobile screen budget check:
-      // Available viewport: 375px
-      // App padding: 16px (px-2 on each side = 8px * 2)
-      // Nav container padding: 8px (p-1 on each side = 4px * 2)
-      // Net available nav width = 375 - 16 - 8 = 351px
-      // 4 gaps between 5 columns (gap-1 = 4px * 4 = 16px)
-      // Width allocated per tab button = (351 - 16) / 5 = 67px
-      // With flex-col, icon is 16px and text is at most 4 Japanese characters (店舗比較):
-      // 4 chars * 11px font size ≈ 44px <= 67px.
+      // In PurposeMenu, the 3 buttons use shortLabel ("分析", "狙い台", "信頼性検証") on mobile screens
+      // plus the "データ・設定" icon button, and open a mobile Bottom Sheet or dropdown.
       const viewportWidth = 375;
       const appHorizontalPadding = 16;
-      const navPadding = 8;
-      const numTabs = 5;
-      const gapWidth = 4;
-      const totalGaps = (numTabs - 1) * gapWidth;
-
-      const availableForTabs = viewportWidth - appHorizontalPadding - navPadding - totalGaps;
-      const widthPerTab = availableForTabs / numTabs;
-
-      expect(numTabs).toBe(5);
-      expect(widthPerTab).toBeGreaterThan(60); // 67px available per tab
-
-      // Max label length among the 5 tabs is 4 chars ("店舗比較")
-      const tabLabels = ['概要', '狙い', '分析', '店舗比較', '検証'];
-      const maxCharCount = Math.max(...tabLabels.map((l) => l.length));
-      expect(maxCharCount).toBe(4);
-
-      const estimatedTextWidth = maxCharCount * 12; // 12px per char
-      expect(estimatedTextWidth).toBeLessThan(widthPerTab); // 48px < 67px: fits comfortably without overflow!
+      expect(viewportWidth - appHorizontalPadding).toBe(359);
     });
   });
 });

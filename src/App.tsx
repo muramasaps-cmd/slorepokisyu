@@ -3,6 +3,7 @@ import { StoreProfile, MonthlyStat, DailyRecord, RankingWeights, MachineRankingW
 import { Header, ProfitModelType, UnitMode } from './components/Header';
 import { KpiCards } from './components/KpiCards';
 import { StorageToast } from './components/StorageToast';
+import { PurposeMenu } from './components/PurposeMenu';
 
 const ProfitChart = React.lazy(() =>
   import('./components/ProfitChart').then((m) => ({ default: m.ProfitChart }))
@@ -12,15 +13,6 @@ const HighPayoutAnalysis = React.lazy(() =>
 );
 const ConditionAnalysis = React.lazy(() =>
   import('./components/ConditionAnalysis').then((m) => ({ default: m.ConditionAnalysis }))
-);
-const TailNumberAnalysis = React.lazy(() =>
-  import('./components/TailNumberAnalysis').then((m) => ({ default: m.TailNumberAnalysis }))
-);
-const DayOfWeekAnalysis = React.lazy(() =>
-  import('./components/DayOfWeekAnalysis').then((m) => ({ default: m.DayOfWeekAnalysis }))
-);
-const SpecialDayPatterns = React.lazy(() =>
-  import('./components/SpecialDayPatterns').then((m) => ({ default: m.SpecialDayPatterns }))
 );
 const MonthlyTable = React.lazy(() =>
   import('./components/MonthlyTable').then((m) => ({ default: m.MonthlyTable }))
@@ -120,6 +112,7 @@ export interface ParsedHashResult {
   date?: string;
   viewMode?: 'chart' | 'table';
   subTab?: AnalysisSubTab;
+  section?: string;
 }
 
 export function parseHash(hashStr: string): ParsedHashResult {
@@ -128,17 +121,18 @@ export function parseHash(hashStr: string): ParsedHashResult {
 
   const [pathPart, queryPart] = raw.split('?');
   const params = new URLSearchParams(queryPart || (pathPart.includes('&') ? pathPart : ''));
+  const section = params.get('section') || undefined;
 
   // Legacy #forecast -> #target (scope: store)
   if (pathPart === 'forecast') {
     const date = params.get('date') || params.get('targetDate') || undefined;
-    return { tab: 'target', scope: 'store', date };
+    return { tab: 'target', scope: 'store', date, section };
   }
 
   // Legacy #cross -> #target (scope: all)
   if (pathPart === 'cross') {
     const date = params.get('crossDate') || params.get('date') || params.get('targetDate') || undefined;
-    return { tab: 'target', scope: 'all', date };
+    return { tab: 'target', scope: 'all', date, section };
   }
 
   // Unified #target
@@ -146,56 +140,58 @@ export function parseHash(hashStr: string): ParsedHashResult {
     const scopeParam = params.get('scope');
     const scope: TargetScope = scopeParam === 'all' ? 'all' : 'store';
     const date = params.get('date') || params.get('targetDate') || params.get('crossDate') || undefined;
-    return { tab: 'target', scope, date };
+    return { tab: 'target', scope, date, section };
   }
 
   // Legacy #models -> analysis (sub: models)
   if (pathPart === 'models' || pathPart === 'model') {
-    return { tab: 'analysis', subTab: 'models', scope: 'store' };
+    return { tab: 'analysis', subTab: 'models', scope: 'store', section };
   }
 
   // Legacy #trends -> analysis (sub: conditions)
   if (pathPart === 'trends' || pathPart === 'conditions' || pathPart === 'condition') {
-    return { tab: 'analysis', subTab: 'conditions', scope: 'store' };
+    return { tab: 'analysis', subTab: 'conditions', scope: 'store', section };
   }
 
   // Legacy #high_payout / #highPayout -> analysis (sub: high_payout)
   if (pathPart === 'high_payout' || pathPart === 'highPayout' || pathPart === 'payout') {
-    return { tab: 'analysis', subTab: 'high_payout', scope: 'store' };
+    return { tab: 'analysis', subTab: 'high_payout', scope: 'store', section };
   }
 
-  // Unified #analysis
-  if (pathPart === 'analysis') {
-    const subParam = params.get('sub');
+  // Unified #analysis & slash-paths (#analysis/conditions, #analysis/models, #analysis/high_payout)
+  if (pathPart.startsWith('analysis')) {
+    const parts = pathPart.split('/');
+    const subRoute = parts[1];
     let subTab: AnalysisSubTab = 'models';
+    const subParam = subRoute || params.get('sub');
     if (subParam === 'conditions' || subParam === 'trends' || subParam === 'condition') {
       subTab = 'conditions';
     } else if (subParam === 'high_payout' || subParam === 'highPayout' || subParam === 'payout') {
       subTab = 'high_payout';
     }
-    return { tab: 'analysis', subTab, scope: 'store' };
+    return { tab: 'analysis', subTab, scope: 'store', section };
   }
 
   // Legacy #tables -> overview (with table view mode)
   if (pathPart === 'tables') {
-    return { tab: 'overview', scope: 'store', viewMode: 'table' };
+    return { tab: 'overview', scope: 'store', viewMode: 'table', section };
   }
 
   // Verification tab (validation)
   if (pathPart === 'validation') {
-    return { tab: 'validation', scope: 'store' };
+    return { tab: 'validation', scope: 'store', section };
   }
 
   // Store comparison tab (compare)
   if (pathPart === 'compare') {
-    return { tab: 'compare', scope: 'store' };
+    return { tab: 'compare', scope: 'store', section };
   }
 
   if (pathPart === 'overview') {
-    return { tab: 'overview', scope: 'store' };
+    return { tab: 'overview', scope: 'store', section };
   }
 
-  return { tab: 'overview', scope: 'store' };
+  return { tab: 'overview', scope: 'store', section };
 }
 
 export default function App() {
@@ -271,31 +267,140 @@ export default function App() {
   const [analysisSubTab, setAnalysisSubTab] = useState<AnalysisSubTab>(
     initialHashInfo.subTab || 'models'
   );
+  const [activeSection, setActiveSection] = useState<string | undefined>(
+    initialHashInfo.section
+  );
+  const [storeModalTab, setStoreModalTab] = useState<'import' | 'list' | 'backup'>('list');
+
+  const handleOpenStoreManager = (tab: 'import' | 'list' | 'backup' = 'list') => {
+    setStoreModalTab(tab);
+    setIsStoreModalOpen(true);
+  };
+
+  const handleOpenModelSpecs = () => {
+    setActiveTab('analysis');
+    setAnalysisSubTab('models');
+    window.location.hash = '#analysis/models';
+    setTimeout(() => {
+      const details = document.getElementById('setting-specs-section') as HTMLDetailsElement | null;
+      if (details) {
+        details.open = true;
+        details.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 150);
+  };
+
+  const handleNavigatePurpose = (
+    tab: ActiveTab,
+    options?: {
+      subTab?: AnalysisSubTab;
+      scope?: TargetScope;
+      section?: string;
+    }
+  ) => {
+    setActiveTab(tab);
+    if (options?.subTab) {
+      setAnalysisSubTab(options.subTab);
+    }
+    if (options?.scope) {
+      setTargetScope(options.scope);
+    }
+    setActiveSection(options?.section);
+
+    if (tab === 'overview') {
+      window.location.hash = '#overview';
+    } else if (tab === 'analysis') {
+      const sub = options?.subTab || analysisSubTab || 'models';
+      window.location.hash = `#analysis/${sub}`;
+    } else if (tab === 'compare') {
+      window.location.hash = '#compare';
+    } else if (tab === 'validation') {
+      if (options?.section) {
+        const sec = options.section.includes('model')
+          ? 'models'
+          : options.section.includes('machine')
+          ? 'machines'
+          : options.section;
+        window.location.hash = `#validation?section=${sec}`;
+      } else {
+        window.location.hash = '#validation';
+      }
+    } else if (tab === 'target') {
+      const effScope = options?.scope || targetScope || 'store';
+      const params = new URLSearchParams();
+      params.set('scope', effScope);
+      if (targetDate) {
+        params.set('date', targetDate);
+      }
+      if (options?.section) {
+        const sec = options.section.includes('calendar')
+          ? 'calendar'
+          : options.section.includes('store')
+          ? 'stores'
+          : options.section.includes('model')
+          ? 'models'
+          : options.section.includes('machine')
+          ? 'machines'
+          : options.section;
+        params.set('section', sec);
+      }
+      window.location.hash = `#target?${params.toString()}`;
+    }
+
+    if (options?.section) {
+      setTimeout(() => {
+        const targetId =
+          options.section === 'calendar'
+            ? 'target-calendar-scan'
+            : options.section === 'stores'
+            ? 'target-store-ranking'
+            : options.section === 'models'
+            ? 'target-model-ranking'
+            : options.section === 'machines'
+            ? 'target-machine-ranking'
+            : options.section;
+        const el = document.getElementById(targetId || '');
+        if (el) {
+          if (el.tagName.toLowerCase() === 'details') {
+            (el as HTMLDetailsElement).open = true;
+          }
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }, 150);
+    }
+  };
 
   // Synchronize activeTab, targetScope, targetDate, and analysisSubTab with URL hash (also migrates legacy URLs)
   useEffect(() => {
+    const currentHash = window.location.hash;
     if (activeTab === 'target') {
       const params = new URLSearchParams();
       params.set('scope', targetScope);
       if (targetDate) {
         params.set('date', targetDate);
       }
+      if (activeSection) {
+        params.set('section', activeSection);
+      }
       const newHash = `#target?${params.toString()}`;
-      if (window.location.hash !== newHash) {
+      if (currentHash !== newHash && !currentHash.startsWith('#target')) {
         window.location.hash = newHash;
       }
     } else if (activeTab === 'analysis') {
-      const newHash = `#analysis?sub=${analysisSubTab}`;
-      if (window.location.hash !== newHash) {
-        window.location.hash = newHash;
+      const validHashes = [
+        `#analysis/${analysisSubTab}`,
+        `#analysis?sub=${analysisSubTab}`,
+      ];
+      if (!validHashes.includes(currentHash)) {
+        window.location.hash = `#analysis/${analysisSubTab}`;
       }
     } else {
-      const currentTab = window.location.hash.replace('#', '').split('?')[0].split('&')[0];
+      const currentTab = currentHash.replace('#', '').split('?')[0].split('&')[0];
       if (currentTab !== activeTab) {
         window.location.hash = `#${activeTab}`;
       }
     }
-  }, [activeTab, targetScope, targetDate, analysisSubTab]);
+  }, [activeTab, targetScope, targetDate, analysisSubTab, activeSection]);
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -312,6 +417,28 @@ export default function App() {
         if (parsed.date) {
           setTargetDate(parsed.date);
         }
+      }
+      setActiveSection(parsed.section);
+      if (parsed.section) {
+        setTimeout(() => {
+          const targetId =
+            parsed.section === 'calendar'
+              ? 'target-calendar-scan'
+              : parsed.section === 'stores'
+              ? 'target-store-ranking'
+              : parsed.section === 'models'
+              ? 'target-model-ranking'
+              : parsed.section === 'machines'
+              ? 'target-machine-ranking'
+              : parsed.section;
+          const el = document.getElementById(targetId || '');
+          if (el) {
+            if (el.tagName.toLowerCase() === 'details') {
+              (el as HTMLDetailsElement).open = true;
+            }
+            el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+        }, 150);
       }
     };
     window.addEventListener('hashchange', handleHashChange);
@@ -968,12 +1095,27 @@ export default function App() {
         years={years}
         totalDays={filteredDailyRecords.length}
         totalMonths={filteredMonthlyStats.length}
-        onOpenStoreManager={() => setIsStoreModalOpen(true)}
+        onOpenStoreManager={() => handleOpenStoreManager('list')}
         onChangeOldEventDays={handleChangeOldEventDays}
         targetDate={targetDate}
         setTargetDate={setTargetDate}
         latestDataDate={latestDataDate}
       />
+
+      {/* Purpose-driven Navigation & Breadcrumb (目的別メニュー・プルダウン) */}
+      <div className="bg-white border-b border-slate-200/90 shadow-2xs sticky top-[57px] z-20">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-2">
+          <PurposeMenu
+            activeTab={activeTab}
+            analysisSubTab={analysisSubTab}
+            targetScope={targetScope}
+            activeSection={activeSection}
+            onNavigate={handleNavigatePurpose}
+            onOpenStoreManager={handleOpenStoreManager}
+            onOpenModelSpecs={handleOpenModelSpecs}
+          />
+        </div>
+      </div>
 
       {/* Main Content Area */}
       <main className="max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-3.5 space-y-3.5 flex-1">
@@ -1247,37 +1389,7 @@ export default function App() {
           </div>
         )}
 
-        {/* Navigation Bar: 5 Tabs (375px mobile friendly grid) */}
-        <nav aria-label="メインナビゲーション" className="grid grid-cols-5 gap-1 bg-white p-1 sm:p-1.5 rounded-xl border border-slate-200 shadow-2xs w-full max-w-full">
-          {[
-            { id: 'overview' as const, label: '概要', icon: BarChart3, desc: 'KPI・月別推移・総合ヒートマップ' },
-            { id: 'target' as const, label: '狙い', icon: Target, desc: '来店日・機種・台番 狙い予測（この店／全店）' },
-            { id: 'analysis' as const, label: '分析', icon: Cpu, desc: '機種・条件別・高出率台' },
-            { id: 'compare' as const, label: '店舗比較', icon: Building2, desc: '複数ホールの横断比較' },
-            { id: 'validation' as const, label: '検証', icon: ShieldCheck, desc: 'バックテスト・自動調整' },
-          ].map((tab) => {
-            const Icon = tab.icon;
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 py-1.5 sm:py-2 px-1 sm:px-2 rounded-lg transition-all cursor-pointer text-center select-none ${
-                  isActive
-                    ? 'bg-amber-500 text-slate-950 font-black shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100 font-bold'
-                }`}
-                title={tab.desc}
-              >
-                <Icon className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 ${isActive ? 'text-slate-950' : 'text-slate-500'}`} />
-                <span className="text-[11px] sm:text-xs md:text-sm tracking-tight whitespace-nowrap">
-                  {tab.label}
-                </span>
-              </button>
-            );
-          })}
-        </nav>
+
 
         {/* Tab Contents with React.Suspense for Code-Split Lazy Loaded Modules */}
         <React.Suspense
@@ -1434,8 +1546,9 @@ export default function App() {
             activeFilterLabel={activeFilterLabel}
             isModelFilterActive={isModelFilterActive}
             onSelectStore={(id) => handleSelectStore(id)}
-            onNavigateToValidation={() => setActiveTab('validation')}
-            onOpenStoreManager={() => setIsStoreModalOpen(true)}
+            onNavigateToValidation={() => handleNavigatePurpose('validation')}
+            onOpenStoreManager={() => handleOpenStoreManager('list')}
+            targetSection={activeSection}
           />
         )}
 
@@ -1455,7 +1568,7 @@ export default function App() {
                   <button
                     key={sub.id}
                     type="button"
-                    onClick={() => setAnalysisSubTab(sub.id)}
+                    onClick={() => handleNavigatePurpose('analysis', { subTab: sub.id })}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap ${
                       isSubActive
                         ? 'bg-white text-slate-900 shadow-2xs'
@@ -1581,6 +1694,7 @@ export default function App() {
             onUpdateStore={handleUpdateStore}
             onDeleteStore={handleDeleteStore}
             onResetAllStores={handleResetAllStores}
+            initialTab={storeModalTab}
           />
         </React.Suspense>
       )}

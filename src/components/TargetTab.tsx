@@ -27,6 +27,7 @@ export interface TargetTabProps {
   onSelectStore: (storeId: string) => void;
   onNavigateToValidation?: () => void;
   onOpenStoreManager?: () => void;
+  targetSection?: string;
 }
 
 export const TargetTab: React.FC<TargetTabProps> = ({
@@ -47,6 +48,7 @@ export const TargetTab: React.FC<TargetTabProps> = ({
   onSelectStore,
   onNavigateToValidation,
   onOpenStoreManager,
+  targetSection,
 }) => {
   // Effective date falls back to latestDataDate or today if not set
   const effectiveTargetDate = useMemo(() => {
@@ -308,6 +310,7 @@ export const TargetTab: React.FC<TargetTabProps> = ({
             activeFilterLabel={activeFilterLabel}
             isModelFilterActive={isModelFilterActive}
             onSelectStore={onSelectStore}
+            targetSection={targetSection}
           />
         </div>
       )}

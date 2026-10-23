@@ -236,4 +236,130 @@ describe('TargetRankingTable Component', () => {
     expect(html).toContain('【渋谷本館】「スマスロ北斗の拳」の対象台番一覧');
     expect(html).toContain('101番台');
   });
+
+  describe('Prompt 45: Store column always displayed in cross-store rankings & mobile badge', () => {
+    it('renders store column in table headers and rows, and displays mobile badge with sm:hidden', () => {
+      const html = clean(
+        renderToString(
+          <TargetRankingTable
+            rankingType="machine"
+            showStoreColumn={true}
+            rows={sampleMachineRows}
+          />
+        )
+      );
+
+      // Store column header with hidden sm:table-cell
+      expect(html).toContain('hidden sm:table-cell');
+      expect(html).toContain('店舗名');
+
+      // Row store values in desktop column
+      expect(html).toContain('渋谷本館');
+      expect(html).toContain('新宿南口店');
+
+      // Mobile store badges
+      expect(html).toContain('data-testid="mobile-store-badge"');
+      expect(html).toContain('sm:hidden');
+    });
+
+    it('does not render mobile store badge or store column when showStoreColumn is false', () => {
+      const html = clean(
+        renderToString(
+          <TargetRankingTable
+            rankingType="machine"
+            showStoreColumn={false}
+            rows={sampleMachineRows}
+          />
+        )
+      );
+
+      expect(html).not.toContain('data-testid="mobile-store-badge"');
+      expect(html).not.toContain('店舗名');
+      expect(html).not.toContain('渋谷本館');
+      expect(html).not.toContain('新宿南口店');
+    });
+
+    it('renders store column and mobile badge for model rankings', () => {
+      const html = clean(
+        renderToString(
+          <TargetRankingTable
+            rankingType="model"
+            showStoreColumn={true}
+            rows={sampleModelRows}
+          />
+        )
+      );
+
+      expect(html).toContain('店舗名');
+      expect(html).toContain('渋谷本館');
+      expect(html).toContain('data-testid="mobile-store-badge"');
+      expect(html).toContain('sm:hidden');
+      // Submachines header preserved
+      expect(html).toContain('スマスロ北斗の拳');
+    });
+
+    it('multi-store scenario: when 3 stores exist and only 2 are selected, showStoreColumn is true', () => {
+      const stores = [
+        { id: 's1', name: '店舗A' },
+        { id: 's2', name: '店舗B' },
+        { id: 's3', name: '店舗C' },
+      ];
+      const selectedStoreIds = ['s1', 's2']; // 2 selected out of 3
+
+      // Under Prompt 45, CrossStoreTarget always passes showStoreColumn={true}
+      // Simulate rows with the selected stores
+      const multiStoreRows: TargetRankingRow[] = [
+        {
+          id: 's1-101',
+          rank: 1,
+          storeId: 's1',
+          storeName: '店舗A',
+          modelName: 'マイジャグラーV',
+          machineNum: 101,
+          confidence: '高',
+          expectedDiff: 600,
+          score: 40,
+          reasons: ['特日実績'],
+        },
+        {
+          id: 's2-202',
+          rank: 2,
+          storeId: 's2',
+          storeName: '店舗B',
+          modelName: 'アイムジャグラーEX',
+          machineNum: 202,
+          confidence: '中',
+          expectedDiff: 400,
+          score: 30,
+          reasons: ['末尾傾向'],
+        },
+      ];
+
+      const html = clean(
+        renderToString(
+          <TargetRankingTable
+            rankingType="machine"
+            showStoreColumn={true}
+            rows={multiStoreRows}
+            toolbar={{
+              enabled: true,
+              exportStoreName:
+                stores.length > 1 && selectedStoreIds.length === stores.length
+                  ? '全店横断'
+                  : selectedStoreIds.length > 1
+                  ? '複数店選択'
+                  : stores.find((s) => selectedStoreIds.includes(s.id))?.name || '店舗',
+            }}
+          />
+        )
+      );
+
+      // Store column and both store names are rendered
+      expect(html).toContain('店舗名');
+      expect(html).toContain('店舗A');
+      expect(html).toContain('店舗B');
+      expect(html).toContain('data-testid="mobile-store-badge"');
+    });
+  });
 });
+

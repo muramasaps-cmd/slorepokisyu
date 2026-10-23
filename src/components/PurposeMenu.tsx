@@ -240,14 +240,26 @@ export const PurposeMenu: React.FC<PurposeMenuProps> = ({
         activeTab === 'compare',
       items: [
         {
+          id: 'analyze_home',
+          title: '何を知りたいか選ぶ（ホーム）',
+          desc: '質問カードから知りたい目的（条件・機種・高出率・比較・概要）を選択',
+          icon: HelpCircle,
+          hash: '#analysis/home',
+          isActive: isHome && activeTab !== 'target',
+          onSelect: () => {
+            onNavigate('overview', { isHome: true });
+            setOpenMenuId(null);
+          },
+        },
+        {
           id: 'overview',
           title: '店舗の全体像（概要）',
           desc: 'KPI・月別推移・総合ヒートマップでホールの全体傾向を把握',
           icon: BarChart3,
           hash: '#overview',
-          isActive: activeTab === 'overview',
+          isActive: !isHome && activeTab === 'overview',
           onSelect: () => {
-            onNavigate('overview');
+            onNavigate('overview', { isHome: false });
             setOpenMenuId(null);
           },
         },
@@ -257,9 +269,9 @@ export const PurposeMenu: React.FC<PurposeMenuProps> = ({
           desc: '曜日・のつく日・特日・末尾ごとの出玉の強さ',
           icon: Calendar,
           hash: '#analysis/conditions',
-          isActive: activeTab === 'analysis' && analysisSubTab === 'conditions',
+          isActive: !isHome && activeTab === 'analysis' && analysisSubTab === 'conditions',
           onSelect: () => {
-            onNavigate('analysis', { subTab: 'conditions' });
+            onNavigate('analysis', { subTab: 'conditions', isHome: false });
             setOpenMenuId(null);
           },
         },
@@ -269,9 +281,9 @@ export const PurposeMenu: React.FC<PurposeMenuProps> = ({
           desc: '機種ごとの出玉傾向と機械割・設定推定分布',
           icon: Cpu,
           hash: '#analysis/models',
-          isActive: activeTab === 'analysis' && analysisSubTab === 'models',
+          isActive: !isHome && activeTab === 'analysis' && analysisSubTab === 'models',
           onSelect: () => {
-            onNavigate('analysis', { subTab: 'models' });
+            onNavigate('analysis', { subTab: 'models', isHome: false });
             setOpenMenuId(null);
           },
         },
@@ -281,9 +293,9 @@ export const PurposeMenu: React.FC<PurposeMenuProps> = ({
           desc: '高出率台が投入されやすい曜日や日付パターンの特徴',
           icon: Flame,
           hash: '#analysis/high_payout',
-          isActive: activeTab === 'analysis' && analysisSubTab === 'high_payout',
+          isActive: !isHome && activeTab === 'analysis' && analysisSubTab === 'high_payout',
           onSelect: () => {
-            onNavigate('analysis', { subTab: 'high_payout' });
+            onNavigate('analysis', { subTab: 'high_payout', isHome: false });
             setOpenMenuId(null);
           },
         },
@@ -293,9 +305,9 @@ export const PurposeMenu: React.FC<PurposeMenuProps> = ({
           desc: '登録されている複数ホールの出玉実績を横断比較',
           icon: Building2,
           hash: '#compare',
-          isActive: activeTab === 'compare',
+          isActive: !isHome && activeTab === 'compare',
           onSelect: () => {
-            onNavigate('compare');
+            onNavigate('compare', { isHome: false });
             setOpenMenuId(null);
           },
         },
@@ -311,12 +323,25 @@ export const PurposeMenu: React.FC<PurposeMenuProps> = ({
       isActive: activeTab === 'target',
       items: [
         {
+          id: 'target_home',
+          title: '何を知りたいか選ぶ（ホーム）',
+          desc: '質問カードから意思決定ステップ（いつ・どの店・どの機種・どの台）を選択',
+          icon: HelpCircle,
+          hash: '#target/home',
+          isActive: isHome && activeTab === 'target',
+          onSelect: () => {
+            onNavigate('target', { isHome: true });
+            setOpenMenuId(null);
+          },
+        },
+        {
           id: 'when',
           title: 'いつ行くか',
           desc: '全店舗をスキャンして期待値の高い来店候補日を発見（全店）',
           icon: Calendar,
           hash: '#target?scope=all&section=calendar',
           isActive:
+            !isHome &&
             activeTab === 'target' &&
             targetScope === 'all' &&
             activeSection === 'calendar',
@@ -324,6 +349,7 @@ export const PurposeMenu: React.FC<PurposeMenuProps> = ({
             onNavigate('target', {
               scope: 'all',
               section: 'target-calendar-scan',
+              isHome: false,
             });
             setOpenMenuId(null);
           },
@@ -335,6 +361,7 @@ export const PurposeMenu: React.FC<PurposeMenuProps> = ({
           icon: Building2,
           hash: '#target?scope=all&section=stores',
           isActive:
+            !isHome &&
             activeTab === 'target' &&
             targetScope === 'all' &&
             activeSection === 'stores',
@@ -342,6 +369,7 @@ export const PurposeMenu: React.FC<PurposeMenuProps> = ({
             onNavigate('target', {
               scope: 'all',
               section: 'target-store-ranking',
+              isHome: false,
             });
             setOpenMenuId(null);
           },
@@ -575,19 +603,64 @@ export const PurposeMenu: React.FC<PurposeMenuProps> = ({
                   aria-haspopup="menu"
                   aria-expanded={isOpen}
                   aria-controls={`purpose-menu-${group.id}`}
-                  onClick={() => {
-                    if (isOpen) {
-                      setOpenMenuId(null);
+                  onClick={(e) => {
+                    const target = e.target as HTMLElement;
+                    if (target.closest('.chevron-trigger-area')) {
+                      if (isOpen) {
+                        setOpenMenuId(null);
+                      } else {
+                        setOpenMenuId(group.id);
+                        setFocusedIndex(-1);
+                      }
+                      return;
+                    }
+
+                    // Heading clicked directly
+                    setOpenMenuId(null);
+                    if (group.id === 'analyze') {
+                      if (skipHome) {
+                        onNavigate('overview', { isHome: false });
+                      } else {
+                        onNavigate('overview', { isHome: true });
+                      }
+                    } else if (group.id === 'target') {
+                      if (skipHome) {
+                        onNavigate('target', { scope: targetScope, isHome: false });
+                      } else {
+                        onNavigate('target', { isHome: true });
+                      }
+                    } else if (group.id === 'validation') {
+                      onNavigate('validation');
                     } else {
-                      setOpenMenuId(group.id);
-                      setFocusedIndex(-1);
+                      setOpenMenuId(isOpen ? null : group.id);
                     }
                   }}
                   onKeyDown={(e) => {
-                    if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+                    if (e.key === 'ArrowDown') {
                       e.preventDefault();
                       setOpenMenuId(group.id);
                       setFocusedIndex(0);
+                    } else if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setOpenMenuId(null);
+                      if (group.id === 'analyze') {
+                        if (skipHome) {
+                          onNavigate('overview', { isHome: false });
+                        } else {
+                          onNavigate('overview', { isHome: true });
+                        }
+                      } else if (group.id === 'target') {
+                        if (skipHome) {
+                          onNavigate('target', { scope: targetScope, isHome: false });
+                        } else {
+                          onNavigate('target', { isHome: true });
+                        }
+                      } else if (group.id === 'validation') {
+                        onNavigate('validation');
+                      } else {
+                        setOpenMenuId(isOpen ? null : group.id);
+                        setFocusedIndex(0);
+                      }
                     }
                   }}
                   className={`flex items-center gap-1.5 py-1.5 px-2.5 sm:px-3 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap select-none border ${
@@ -597,7 +670,7 @@ export const PurposeMenu: React.FC<PurposeMenuProps> = ({
                       ? 'bg-slate-800 text-white border-slate-700 shadow-2xs'
                       : 'bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 border-slate-200'
                   }`}
-                  title={`${group.label}のメニューを開く`}
+                  title={`${group.label} (クリックで${skipHome ? '直前の画面' : 'ホーム'}へ移動、矢印でメニュー表示)`}
                 >
                   <Icon
                     className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 ${
@@ -606,11 +679,16 @@ export const PurposeMenu: React.FC<PurposeMenuProps> = ({
                   />
                   <span className="hidden sm:inline">{group.label}</span>
                   <span className="inline sm:hidden">{group.shortLabel || group.label}</span>
-                  <ChevronDown
-                    className={`w-3 h-3 transition-transform duration-200 ${
-                      isOpen ? 'rotate-180' : ''
-                    }`}
-                  />
+                  <span
+                    className="chevron-trigger-area p-0.5 -mr-1 rounded hover:bg-black/10 transition-colors cursor-pointer"
+                    title={`${group.label}のメニューを展開`}
+                  >
+                    <ChevronDown
+                      className={`w-3 h-3 transition-transform duration-200 ${
+                        isOpen ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </span>
                 </button>
 
                 {/* Desktop Dropdown Popover */}

@@ -104,8 +104,9 @@ export const PurposeHome: React.FC<PurposeHomeProps> = ({
     // Find highest average diff day of week
     const bestDow = [...validDows].sort((a, b) => b.avgDiffCoins - a.avgDiffCoins)[0];
     const diffSign = bestDow.avgDiffCoins >= 0 ? '+' : '';
+    const dowLabel = bestDow.shortLabel ? `${bestDow.shortLabel}曜` : bestDow.label;
     return {
-      text: `最も強い曜日: ${bestDow.label} (${diffSign}${formatNumber(bestDow.avgDiffCoins)}枚)`,
+      text: `最も強い曜日: ${dowLabel} (${diffSign}${formatNumber(bestDow.avgDiffCoins)}枚)`,
     };
   }, [dailyRecords, perspective, currentStore]);
 

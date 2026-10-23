@@ -1,9 +1,9 @@
-import React, { useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { StoreProfile } from '../data/types';
 import { UnitMode } from './Header';
 import { TargetDateRanking } from './TargetDateRanking';
 import { CrossStoreTarget } from './CrossStoreTarget';
-import { Target, Building2, Sparkles, Calendar, Flame } from 'lucide-react';
+import { Target, Building2, Sparkles, Calendar, Flame, X, Cpu } from 'lucide-react';
 import { isDateSpecialDay } from '../utils/dataEngine';
 import { isJapaneseHoliday } from '../utils/holidayUtils';
 
@@ -50,6 +50,52 @@ export const TargetTab: React.FC<TargetTabProps> = ({
   onOpenStoreManager,
   targetSection,
 }) => {
+  // Cascading funnel states (Prompt 47)
+  const [funnelStoreId, setFunnelStoreId] = useState<string | null>(null);
+  const [funnelModelName, setFunnelModelName] = useState<string | null>(null);
+
+  // Clear funnelStoreId when explicitly switching to single-store scope
+  useEffect(() => {
+    if (scope === 'store') {
+      setFunnelStoreId(null);
+    }
+  }, [scope]);
+
+  // Smooth scroll to a step ID
+  const scrollToStep = (stepId: string) => {
+    const el = document.getElementById(stepId);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  // Sync targetSection from URL or PurposeMenu navigation (Prompt 46 & 47)
+  useEffect(() => {
+    if (!targetSection) return;
+    const sectionMap: Record<string, string> = {
+      calendar: 'target-step-1',
+      'target-calendar-scan': 'target-step-1',
+      stores: 'target-step-2',
+      'target-store-ranking': 'target-step-2',
+      models: 'target-step-3',
+      'target-model-ranking': 'target-step-3',
+      machines: 'target-step-4',
+      'target-machine-ranking': 'target-step-4',
+      checklist: 'target-step-5',
+      'target-checklist': 'target-step-5',
+      'target-step-1': 'target-step-1',
+      'target-step-2': 'target-step-2',
+      'target-step-3': 'target-step-3',
+      'target-step-4': 'target-step-4',
+      'target-step-5': 'target-step-5',
+    };
+    const targetId = sectionMap[targetSection] || targetSection;
+    const timer = setTimeout(() => {
+      scrollToStep(targetId);
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [targetSection, scope]);
+
   // Effective date falls back to latestDataDate or today if not set
   const effectiveTargetDate = useMemo(() => {
     if (targetDate) return targetDate;
@@ -100,22 +146,191 @@ export const TargetTab: React.FC<TargetTabProps> = ({
     };
   }, [effectiveTargetDate, currentStore]);
 
+  // Resolved store object for funnel chip
+  const funnelStoreObj = useMemo(() => {
+    if (scope === 'store') return currentStore;
+    if (!funnelStoreId) return null;
+    return stores.find((s) => s.id === funnelStoreId) || null;
+  }, [scope, currentStore, funnelStoreId, stores]);
+
   return (
-    <div className="space-y-5 animate-in fade-in duration-150" data-testid="target-tab">
-      {/* Unified Top Control Bar: Target Date & Scope Switcher */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3.5">
+    <div className="space-y-4 animate-in fade-in duration-150" data-testid="target-tab">
+      {/* Sticky Step Navigation Bar (①〜⑤) & Funnel Chips (Prompt 47) */}
+      <div
+        className="sticky top-0 z-20 bg-white/95 backdrop-blur-md border border-slate-200 rounded-2xl p-2.5 sm:p-3 shadow-xs space-y-2"
+        data-testid="step-navigation-bar"
+      >
+        <div className="flex items-center justify-between gap-1 overflow-x-auto no-scrollbar py-0.5 text-xs">
+          <button
+            type="button"
+            onClick={() => scrollToStep('target-step-1')}
+            className="px-2.5 sm:px-3 py-1.5 rounded-xl font-bold bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors whitespace-nowrap flex items-center gap-1.5 cursor-pointer shrink-0"
+            data-testid="nav-step-1"
+          >
+            <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-700 text-[10px] font-black flex items-center justify-center">
+              ①
+            </span>
+            <span>来店日・範囲</span>
+          </button>
+
+          <span className="text-slate-300 font-bold shrink-0 hidden sm:inline">›</span>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (scope !== 'all') {
+                onScopeChange('all');
+                setTimeout(() => scrollToStep('target-step-2'), 100);
+              } else {
+                scrollToStep('target-step-2');
+              }
+            }}
+            className={`px-2.5 sm:px-3 py-1.5 rounded-xl font-bold border transition-colors whitespace-nowrap flex items-center gap-1.5 cursor-pointer shrink-0 ${
+              scope === 'all'
+                ? 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                : 'bg-slate-100/60 text-slate-400 border-dashed border-slate-200 hover:text-slate-600'
+            }`}
+            data-testid="nav-step-2"
+            title={scope === 'all' ? 'どの店に行くか' : '全店表示に切り替えて店舗選択'}
+          >
+            <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-700 text-[10px] font-black flex items-center justify-center">
+              ②
+            </span>
+            <span>どの店に行くか</span>
+            {scope === 'store' && (
+              <span className="text-[10px] bg-slate-200 text-slate-600 px-1 rounded font-normal">
+                全店時
+              </span>
+            )}
+          </button>
+
+          <span className="text-slate-300 font-bold shrink-0 hidden sm:inline">›</span>
+
+          <button
+            type="button"
+            onClick={() => scrollToStep('target-step-3')}
+            className="px-2.5 sm:px-3 py-1.5 rounded-xl font-bold bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors whitespace-nowrap flex items-center gap-1.5 cursor-pointer shrink-0"
+            data-testid="nav-step-3"
+          >
+            <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-700 text-[10px] font-black flex items-center justify-center">
+              ③
+            </span>
+            <span>どの機種を狙うか</span>
+          </button>
+
+          <span className="text-slate-300 font-bold shrink-0 hidden sm:inline">›</span>
+
+          <button
+            type="button"
+            onClick={() => scrollToStep('target-step-4')}
+            className="px-2.5 sm:px-3 py-1.5 rounded-xl font-bold bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors whitespace-nowrap flex items-center gap-1.5 cursor-pointer shrink-0"
+            data-testid="nav-step-4"
+          >
+            <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-700 text-[10px] font-black flex items-center justify-center">
+              ④
+            </span>
+            <span>どの台を狙うか</span>
+          </button>
+
+          <span className="text-slate-300 font-bold shrink-0 hidden sm:inline">›</span>
+
+          <button
+            type="button"
+            onClick={() => scrollToStep('target-step-5')}
+            className="px-2.5 sm:px-3 py-1.5 rounded-xl font-bold bg-amber-500 hover:bg-amber-600 text-slate-950 font-black border border-amber-500 transition-colors whitespace-nowrap flex items-center gap-1.5 cursor-pointer shrink-0 shadow-2xs"
+            data-testid="nav-step-5"
+          >
+            <span className="w-4 h-4 rounded-full bg-slate-950 text-amber-400 text-[10px] font-black flex items-center justify-center">
+              ⑤
+            </span>
+            <span>当日のチェック</span>
+          </button>
+        </div>
+
+        {/* Selected chips row (Prompt 47 Requirement 3) */}
+        {(funnelStoreObj || funnelModelName) && (
+          <div
+            className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-1.5 text-xs animate-in fade-in"
+            data-testid="funnel-chips-bar"
+          >
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] font-bold text-slate-500">選択中:</span>
+              {funnelStoreObj && (
+                <span
+                  className="inline-flex items-center gap-1 bg-amber-50 text-amber-900 font-bold px-2 py-0.5 rounded-lg border border-amber-200 text-2xs"
+                  data-testid="funnel-chip-store"
+                >
+                  <Building2 className="w-3 h-3 text-amber-700" />
+                  <span>{funnelStoreObj.name}</span>
+                  {scope === 'all' && (
+                    <button
+                      type="button"
+                      onClick={() => setFunnelStoreId(null)}
+                      className="ml-0.5 text-amber-500 hover:text-rose-600 transition-colors cursor-pointer"
+                      aria-label="店舗選択を解除"
+                      data-testid="clear-funnel-store"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </span>
+              )}
+              {funnelStoreObj && funnelModelName && (
+                <span className="text-slate-300 font-bold text-2xs">›</span>
+              )}
+              {funnelModelName && (
+                <span
+                  className="inline-flex items-center gap-1 bg-indigo-50 text-indigo-900 font-bold px-2 py-0.5 rounded-lg border border-indigo-200 text-2xs"
+                  data-testid="funnel-chip-model"
+                >
+                  <Cpu className="w-3 h-3 text-indigo-700" />
+                  <span>{funnelModelName}</span>
+                  <button
+                    type="button"
+                    onClick={() => setFunnelModelName(null)}
+                    className="ml-0.5 text-indigo-500 hover:text-rose-600 transition-colors cursor-pointer"
+                    aria-label="機種選択を解除"
+                    data-testid="clear-funnel-model"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              )}
+            </div>
+
+            {(funnelStoreId || funnelModelName) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFunnelStoreId(null);
+                  setFunnelModelName(null);
+                }}
+                className="text-2xs font-bold text-slate-400 hover:text-rose-600 underline cursor-pointer"
+              >
+                全解除
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Step ①: Unified Top Control Bar: Target Date & Scope Switcher */}
+      <div id="target-step-1" className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3.5 scroll-mt-28">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          {/* Left: Tab Title & Scope Switcher */}
+          {/* Left: Step ① Icon, Tab Title & Scope Switcher */}
           <div className="space-y-2">
             <div className="flex items-center gap-2">
+              <span className="w-7 h-7 rounded-lg bg-indigo-600 text-white font-black text-sm flex items-center justify-center shrink-0">
+                ①
+              </span>
               <span className="p-1.5 rounded-lg bg-amber-500/10 text-amber-600 border border-amber-500/20">
-                <Target className="w-5 h-5 text-amber-600" />
+                <Target className="w-4 h-4 text-amber-600" />
               </span>
               <div>
                 <h2 className="text-base sm:text-lg font-black text-slate-900 tracking-tight flex items-center gap-2">
                   <span>狙い予測</span>
                   <span className="text-xs font-normal text-slate-500 hidden sm:inline">
-                    （来店日・機種・台番 期待差枚予測）
+                    （① 来店日と範囲: この店／全店）
                   </span>
                 </h2>
                 <p className="text-2xs text-slate-500">
@@ -293,6 +508,9 @@ export const TargetTab: React.FC<TargetTabProps> = ({
               onNavigateToValidation={onNavigateToValidation}
               onOpenStoreManager={onOpenStoreManager}
               storeId={currentStore.id}
+              funnelModelName={funnelModelName}
+              onSelectFunnelModel={setFunnelModelName}
+              targetSection={targetSection}
             />
           </div>
         ) : (
@@ -311,6 +529,10 @@ export const TargetTab: React.FC<TargetTabProps> = ({
             isModelFilterActive={isModelFilterActive}
             onSelectStore={onSelectStore}
             targetSection={targetSection}
+            funnelStoreId={funnelStoreId}
+            onSelectFunnelStore={setFunnelStoreId}
+            funnelModelName={funnelModelName}
+            onSelectFunnelModel={setFunnelModelName}
           />
         </div>
       )}

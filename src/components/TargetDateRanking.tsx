@@ -9,8 +9,18 @@ import {
 } from '../utils/targetRankingEngine';
 import { formatYen, formatCoins, formatNumber } from '../utils/formatters';
 import { UnitMode } from './Header';
-import { TargetMachineRanking } from './TargetMachineRanking';
+import { TargetMachineRanking, formatMachineReasons } from './TargetMachineRanking';
 import { TargetRankingTable } from './TargetRankingTable';
+import { calculateTargetMachineRanking } from '../utils/targetMachineRanking';
+import {
+  loadTargetCheckStatus,
+  saveTargetCheckStatus,
+  filterAndRollupTargetList,
+  generateTargetListCopyText,
+  generateTargetListCsv,
+  MachineCheckStatus,
+  CrossStoreMachineRank,
+} from '../utils/crossStoreRanking';
 import {
   Target,
   Trophy,
@@ -31,6 +41,13 @@ import {
   CheckCircle2,
   SlidersHorizontal,
   Lightbulb,
+  Copy,
+  Download,
+  Ban,
+  Gamepad2,
+  RotateCcw,
+  Check,
+  CheckSquare,
 } from 'lucide-react';
 
 interface TargetDateRankingProps {
@@ -51,6 +68,9 @@ interface TargetDateRankingProps {
   onNavigateToValidation?: () => void;
   onOpenStoreManager?: () => void;
   storeId?: string;
+  funnelModelName?: string | null;
+  onSelectFunnelModel?: (modelName: string | null) => void;
+  targetSection?: string;
 }
 
 type ModelFilterType = 'all' | 'main' | 'smart_slot' | 'juggler_a' | 'small';
@@ -74,11 +94,35 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
   onNavigateToValidation,
   onOpenStoreManager,
   storeId,
+  funnelModelName,
+  onSelectFunnelModel,
+  targetSection,
 }) => {
   const [modelFilter, setModelFilter] = useState<ModelFilterType>('all');
   const [modelSort, setModelSort] = useState<ModelSortType>('score');
   const [expandedModel, setExpandedModel] = useState<string | null>(null);
   const [includeReusedState, setIncludeReusedState] = useState<boolean>(includeReusedMachines);
+
+  // Step expansion states (Prompt 47)
+  const [isStep3Expanded, setIsStep3Expanded] = useState<boolean>(() => {
+    return targetSection === 'models' || targetSection === 'target-model-ranking';
+  });
+  const [isStep4Expanded, setIsStep4Expanded] = useState<boolean>(() => {
+    return targetSection === 'machines' || targetSection === 'target-machine-ranking';
+  });
+  const [isStep5Expanded, setIsStep5Expanded] = useState<boolean>(() => {
+    return targetSection === 'checklist' || targetSection === 'target-checklist';
+  });
+
+  useEffect(() => {
+    if (targetSection === 'models' || targetSection === 'target-model-ranking') {
+      setIsStep3Expanded(true);
+    } else if (targetSection === 'machines' || targetSection === 'target-machine-ranking') {
+      setIsStep4Expanded(true);
+    } else if (targetSection === 'checklist' || targetSection === 'target-checklist') {
+      setIsStep5Expanded(true);
+    }
+  }, [targetSection]);
 
   // Sync state if prop changes
   useEffect(() => {
@@ -110,6 +154,159 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
       }
     );
   }, [targetDate, dailyRecords, specialDayRules, oldEventDays, customWeights, includeReusedState, aliasDictionary, sharedFeatureIndex]);
+
+  // Machine ranking for Step ④ & ⑤
+  const machineRankingResult = useMemo(() => {
+    if (!dailyRecords || dailyRecords.length === 0 || !targetDate) return null;
+    const hasMach = dailyRecords.some((r) => r.machines && r.machines.length > 0);
+    if (!hasMach) return null;
+    return calculateTargetMachineRanking(targetDate, dailyRecords, specialDayRules, customMachineWeights, {
+      rankingWeights: customWeights,
+      includeReusedMachines: includeReusedState,
+      aliasDictionary,
+      featureIndex: sharedFeatureIndex,
+    });
+  }, [targetDate, dailyRecords, specialDayRules, customWeights, customMachineWeights, includeReusedState, aliasDictionary, sharedFeatureIndex]);
+
+  // Step ④ machines filtered by funnelModelName
+  const step4Machines = useMemo(() => {
+    if (!machineRankingResult) return [];
+    if (!funnelModelName) return machineRankingResult.rankings;
+    return machineRankingResult.rankings.filter((m) => m.modelName === funnelModelName);
+  }, [machineRankingResult, funnelModelName]);
+
+  // Step ⑤ checklist candidates & state
+  const [checkedMap, setCheckedMap] = useState<Record<number, MachineCheckStatus>>(() => {
+    const sId = storeId || 'single-store';
+    return loadTargetCheckStatus(targetDate, sId);
+  });
+
+  useEffect(() => {
+    const sId = storeId || 'single-store';
+    setCheckedMap(loadTargetCheckStatus(targetDate, sId));
+  }, [targetDate, storeId]);
+
+  const handleToggleCheck = (machineNum: number, status: MachineCheckStatus) => {
+    const sId = storeId || 'single-store';
+    setCheckedMap((prev) => {
+      const next = { ...prev };
+      if (next[machineNum] === status) {
+        delete next[machineNum];
+      } else {
+        next[machineNum] = status;
+      }
+      saveTargetCheckStatus(targetDate, sId, next);
+      return next;
+    });
+  };
+
+  const handleUncheckMachine = (machineNum: number) => {
+    const sId = storeId || 'single-store';
+    setCheckedMap((prev) => {
+      const next = { ...prev };
+      delete next[machineNum];
+      saveTargetCheckStatus(targetDate, sId, next);
+      return next;
+    });
+  };
+
+  const handleResetChecks = () => {
+    const sId = storeId || 'single-store';
+    setCheckedMap({});
+    saveTargetCheckStatus(targetDate, sId, {});
+  };
+
+  const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  const [showCheckedList, setShowCheckedList] = useState<boolean>(false);
+
+  const singleStoreCandidates = useMemo<CrossStoreMachineRank[]>(() => {
+    if (!machineRankingResult) return [];
+    const list: CrossStoreMachineRank[] = machineRankingResult.rankings.map((mach) => ({
+      storeId: storeId || 'store',
+      storeName: '',
+      rateExchange: rateExchange,
+      modelName: mach.modelName,
+      machineNum: mach.machineNum,
+      rank: mach.rank,
+      originalRank: mach.rank,
+      confidence: mach.confidence,
+      evidenceDays: mach.evidenceDays,
+      cohortEvidenceDays: mach.evidenceDays,
+      cohortAvgDiff: mach.stats.cohortAvgDiff ?? 0,
+      cohortWinRate: mach.stats.cohortWinRate ?? 50,
+      highSettingRate: mach.stats.highSettingRate ?? 0,
+      isTailMatch: false,
+      isZoro: false,
+      expectedDiffCoins: mach.stats.expectedDiffStd ?? mach.stats.shrunkDiff,
+      shrunkDiff: mach.stats.expectedDiffStd ?? mach.stats.shrunkDiff,
+      expectedYenProfit: 0,
+      reasons: formatMachineReasons(mach),
+      interval80: mach.interval80,
+      totalScore: mach.totalScore,
+      uncertainty80: mach.stats.standardError
+        ? {
+            min: Math.round((mach.stats.expectedDiffStd ?? mach.stats.shrunkDiff) - 1.28 * mach.stats.standardError),
+            max: Math.round((mach.stats.expectedDiffStd ?? mach.stats.shrunkDiff) + 1.28 * mach.stats.standardError),
+            margin: Math.round(1.28 * mach.stats.standardError),
+            isWide: false,
+          }
+        : {
+            min: (mach.stats.expectedDiffStd ?? mach.stats.shrunkDiff) - 300,
+            max: (mach.stats.expectedDiffStd ?? mach.stats.shrunkDiff) + 300,
+            margin: 300,
+            isWide: false,
+          },
+    }));
+    if (funnelModelName) {
+      return list.filter((m) => m.modelName === funnelModelName);
+    }
+    return list;
+  }, [machineRankingResult, storeId, rateExchange, funnelModelName]);
+
+  const { activeCandidates, checkedCandidates, rolledUpCount } = useMemo(() => {
+    return filterAndRollupTargetList(singleStoreCandidates, checkedMap, 10);
+  }, [singleStoreCandidates, checkedMap]);
+
+  const handleCopyText = (items: CrossStoreMachineRank[]) => {
+    try {
+      const text = generateTargetListCopyText('当店舗', targetDate, items);
+      if (navigator?.clipboard?.writeText) {
+        navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopyFeedback('テキストをコピーしました！');
+      setTimeout(() => setCopyFeedback(null), 2500);
+    } catch (err) {
+      console.error('Failed to copy text:', err);
+      setCopyFeedback('コピーに失敗しました');
+      setTimeout(() => setCopyFeedback(null), 2500);
+    }
+  };
+
+  const handleDownloadCsv = (items: CrossStoreMachineRank[]) => {
+    try {
+      const csv = generateTargetListCsv('当店舗', targetDate, items);
+      const blob = new Blob([new Uint8Array([0xef, 0xbb, 0xbf]), csv], {
+        type: 'text/csv;charset=utf-8;',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `狙い台リスト_${targetDate}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to export CSV:', err);
+    }
+  };
 
   if (!targetDate || !forecast) {
     return null;
@@ -370,211 +567,750 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
         </div>
       </div>
 
-      {/* Strategy Briefing (立ち回り指南) */}
-      <div className="p-4 sm:p-5 bg-indigo-50/70 border-b border-indigo-100 flex flex-col md:flex-row gap-4 items-stretch">
-        <div className="flex-1 space-y-2">
-          <div className="flex items-center gap-2 text-indigo-900 font-bold text-xs">
-            <Lightbulb className="w-4 h-4 text-amber-600" />
-            <span>【{forecast.targetDate} 立ち回り戦略サマリー】</span>
+      {/* Step ①: 来店日と範囲（この店） */}
+      <div id="target-step-1" className="space-y-0">
+        {/* Strategy Briefing (立ち回り指南) */}
+        <div className="p-4 sm:p-5 bg-indigo-50/70 border-b border-indigo-100 flex flex-col md:flex-row gap-4 items-stretch">
+          <div className="flex-1 space-y-2">
+            <div className="flex items-center gap-2 text-indigo-900 font-bold text-xs">
+              <Lightbulb className="w-4 h-4 text-amber-600" />
+              <span>【{forecast.targetDate} 立ち回り戦略サマリー】</span>
+            </div>
+            <p className="text-xs text-slate-700 leading-relaxed">
+              {forecast.tacticalAdvice.summary}
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 text-xs">
+              <div className="bg-white p-2.5 rounded-lg border border-indigo-200 shadow-2xs">
+                <span className="font-bold text-emerald-800 block text-[11px] mb-0.5">① 朝イチ最優先</span>
+                <span className="text-slate-700 text-[11px]">{forecast.tacticalAdvice.morningPriority}</span>
+              </div>
+              <div className="bg-white p-2.5 rounded-lg border border-indigo-200 shadow-2xs">
+                <span className="font-bold text-blue-800 block text-[11px] mb-0.5">② 対抗・後ヅモ</span>
+                <span className="text-slate-700 text-[11px]">{forecast.tacticalAdvice.secondOption}</span>
+              </div>
+              <div className="bg-white p-2.5 rounded-lg border border-indigo-200 shadow-2xs">
+                <span className="font-bold text-purple-800 block text-[11px] mb-0.5">③ 末尾戦略</span>
+                <span className="text-slate-700 text-[11px]">{forecast.tacticalAdvice.tailStrategy}</span>
+              </div>
+            </div>
           </div>
-          <p className="text-xs text-slate-700 leading-relaxed">
-            {forecast.tacticalAdvice.summary}
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 text-xs">
-            <div className="bg-white p-2.5 rounded-lg border border-indigo-200 shadow-2xs">
-              <span className="font-bold text-emerald-800 block text-[11px] mb-0.5">① 朝イチ最優先</span>
-              <span className="text-slate-700 text-[11px]">{forecast.tacticalAdvice.morningPriority}</span>
+
+          {/* Top 3 Target Tails Widget */}
+          <div className="w-full md:w-80 bg-white p-3.5 rounded-xl border border-indigo-200 shadow-xs flex flex-col justify-between shrink-0">
+            <div>
+              <div className="flex items-center justify-between text-xs font-bold text-slate-800 mb-2">
+                <span className="flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                  狙い台番末尾 TOP 3
+                </span>
+                <span className="text-[10px] text-slate-500 font-normal">
+                  (全10末尾中)
+                </span>
+              </div>
+              <div className="space-y-1.5">
+                {forecast.tailRankings.slice(0, 3).map((tail, idx) => (
+                  <div
+                    key={`top-tail-${tail.tailName}`}
+                    className={`flex items-center justify-between p-1.5 px-2.5 rounded-lg text-xs ${
+                      idx === 0
+                        ? 'bg-amber-50 border border-amber-300 font-bold text-amber-950'
+                        : 'bg-slate-50 border border-slate-200 text-slate-800'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-black ${
+                        idx === 0 ? 'bg-amber-500 text-white' : 'bg-slate-300 text-slate-700'
+                      }`}>
+                        {idx + 1}
+                      </span>
+                      <span className="font-bold">{tail.tailName}</span>
+                      {tail.isDateTailMatch && (
+                        <span className="bg-rose-500 text-white text-[9px] px-1 py-0.2 rounded font-black">
+                          日付一致
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <span className={`font-bold ${tail.expectedDiffCoins > 0 ? 'text-indigo-600' : 'text-slate-600'}`}>
+                        {tail.expectedDiffCoins > 0 ? `+${tail.expectedDiffCoins}` : tail.expectedDiffCoins}枚
+                      </span>
+                      <span className="text-[10px] text-slate-400 ml-1.5">
+                        勝率{tail.winRate}%
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className="bg-white p-2.5 rounded-lg border border-indigo-200 shadow-2xs">
-              <span className="font-bold text-blue-800 block text-[11px] mb-0.5">② 対抗・後ヅモ</span>
-              <span className="text-slate-700 text-[11px]">{forecast.tacticalAdvice.secondOption}</span>
-            </div>
-            <div className="bg-white p-2.5 rounded-lg border border-indigo-200 shadow-2xs">
-              <span className="font-bold text-purple-800 block text-[11px] mb-0.5">③ 末尾戦略</span>
-              <span className="text-slate-700 text-[11px]">{forecast.tacticalAdvice.tailStrategy}</span>
+            <div className="text-[10px] text-slate-400 text-right mt-2">
+              ※ 狙い機種と好調末尾が重複する台番が最有力
             </div>
           </div>
         </div>
+      </div>
 
-        {/* Top 3 Target Tails Widget */}
-        <div className="w-full md:w-80 bg-white p-3.5 rounded-xl border border-indigo-200 shadow-xs flex flex-col justify-between shrink-0">
-          <div>
-            <div className="flex items-center justify-between text-xs font-bold text-slate-800 mb-2">
-              <span className="flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                狙い台番末尾 TOP 3
+      {/* Step ③: どの機種を狙うか */}
+      <div id="target-step-3" className="border-t border-slate-200 bg-white p-4 sm:p-5 space-y-3.5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="w-5 h-5 rounded-full bg-indigo-600 text-white text-xs font-black flex items-center justify-center shrink-0">
+                3
               </span>
-              <span className="text-[10px] text-slate-500 font-normal">
-                (全10末尾中)
-              </span>
+              <h3 className="text-sm sm:text-base font-black text-slate-900 tracking-tight flex items-center gap-2">
+                <span>どの機種を狙うか</span>
+                <span className="text-xs font-normal text-slate-500">（機種別 期待差枚予測ランキング）</span>
+              </h3>
             </div>
-            <div className="space-y-1.5">
-              {forecast.tailRankings.slice(0, 3).map((tail, idx) => (
+            <p className="text-2xs text-slate-500">
+              類似営業日の実績・機械割・投入傾向から算出した機種別期待値。上位機種を選択すると台番ランキングが連動します。
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsStep3Expanded((prev) => !prev)}
+            className="self-start sm:self-auto px-3 py-1.5 rounded-lg text-xs font-bold border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+            data-testid="step3-toggle-expand"
+          >
+            {isStep3Expanded ? (
+              <>
+                <ChevronUp className="w-3.5 h-3.5" />
+                <span>全件を折りたたむ</span>
+              </>
+            ) : (
+              <>
+                <ChevronDown className="w-3.5 h-3.5" />
+                <span>全件を見る ({sortedModels.length}機種)</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Step ③ Top 3 Models Summary */}
+        <div className="space-y-2">
+          <div className="text-2xs font-bold text-slate-500 flex items-center justify-between">
+            <span className="flex items-center gap-1">
+              <Sparkles className="w-3 h-3 text-amber-500" />
+              上位3機種の要約（クリックで台番へ絞り込み）
+            </span>
+            {funnelModelName && (
+              <span className="text-indigo-600 font-bold">
+                選択中: {funnelModelName}
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3" data-testid="step3-top3-cards">
+            {sortedModels.slice(0, 3).map((model, idx) => {
+              const isSelected = funnelModelName === model.modelName;
+              return (
                 <div
-                  key={`top-tail-${tail.tailName}`}
-                  className={`flex items-center justify-between p-1.5 px-2.5 rounded-lg text-xs ${
-                    idx === 0
-                      ? 'bg-amber-50 border border-amber-300 font-bold text-amber-950'
-                      : 'bg-slate-50 border border-slate-200 text-slate-800'
+                  key={`top-model-${model.modelName}`}
+                  className={`p-3.5 rounded-xl border transition-all flex flex-col justify-between ${
+                    isSelected
+                      ? 'bg-indigo-50/90 border-indigo-500 ring-2 ring-indigo-500 shadow-xs'
+                      : 'bg-slate-50/80 hover:bg-slate-100/80 border-slate-200'
                   }`}
                 >
-                  <div className="flex items-center gap-2">
-                    <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-black ${
-                      idx === 0 ? 'bg-amber-500 text-white' : 'bg-slate-300 text-slate-700'
-                    }`}>
-                      {idx + 1}
-                    </span>
-                    <span className="font-bold">{tail.tailName}</span>
-                    {tail.isDateTailMatch && (
-                      <span className="bg-rose-500 text-white text-[9px] px-1 py-0.2 rounded font-black">
-                        日付一致
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-black ${
+                        idx === 0 ? 'bg-amber-500 text-slate-950' : idx === 1 ? 'bg-slate-300 text-slate-800' : 'bg-amber-700 text-white'
+                      }`}>
+                        {idx + 1}
                       </span>
-                    )}
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-black ${getGradeStyle(model.rankGrade)}`}>
+                        {model.rankGrade}
+                      </span>
+                    </div>
+
+                    <div>
+                      <h4 className="font-bold text-xs text-slate-900 truncate" title={model.modelName}>
+                        {model.modelName}
+                      </h4>
+                      <div className="text-[10px] text-slate-500">
+                        設置 {model.totalMachines}台
+                      </div>
+                    </div>
+
+                    <div className="pt-1 flex items-baseline justify-between border-t border-slate-200/60 text-xs">
+                      <span className="text-2xs text-slate-500">期待差枚:</span>
+                      <span className={`font-mono font-black ${model.expectedDiffCoins >= 0 ? 'text-indigo-600' : 'text-rose-600'}`}>
+                        {formatProfitValue(model.expectedDiffCoins)}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1 text-[10px] text-slate-600 bg-white/80 p-1.5 rounded-lg border border-slate-200/60">
+                      <div>勝率: <strong className="text-slate-800">{model.predictedWinRate}%</strong></div>
+                      <div>出率: <strong className="text-slate-800">{model.predictedPayoutRate.toFixed(1)}%</strong></div>
+                      <div className="col-span-2 text-slate-500">根拠: {model.matchingDaysCount > 0 ? model.matchingDaysCount : model.sampleDays}日分</div>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <span className={`font-bold ${tail.expectedDiffCoins > 0 ? 'text-indigo-600' : 'text-slate-600'}`}>
-                      {tail.expectedDiffCoins > 0 ? `+${tail.expectedDiffCoins}` : tail.expectedDiffCoins}枚
-                    </span>
-                    <span className="text-[10px] text-slate-400 ml-1.5">
-                      勝率{tail.winRate}%
-                    </span>
+
+                  <div className="pt-2.5 mt-2 border-t border-slate-200/60">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isSelected) {
+                          onSelectFunnelModel?.(null);
+                        } else {
+                          onSelectFunnelModel?.(model.modelName);
+                          const el = document.getElementById('target-step-4');
+                          if (el) el.scrollIntoView({ behavior: 'smooth' });
+                        }
+                      }}
+                      className={`w-full py-1 px-2 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center justify-center gap-1 ${
+                        isSelected
+                          ? 'bg-indigo-600 text-white shadow-xs'
+                          : 'bg-white hover:bg-slate-200 text-indigo-700 border border-indigo-200'
+                      }`}
+                      data-testid={`select-model-${idx + 1}`}
+                    >
+                      {isSelected ? (
+                        <>
+                          <Check className="w-3 h-3" />
+                          <span>選択中 (解除)</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>この機種を選択 →</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Step ③ Expanded Full View */}
+        {isStep3Expanded && (
+          <div className="space-y-3 pt-2 border-t border-slate-200">
+            {/* Model Filter & Sort Bar */}
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+              {/* Filter Pills */}
+              <div className="flex items-center gap-1 flex-wrap">
+                <span className="font-bold text-slate-600 mr-1 flex items-center gap-1">
+                  <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-500" />
+                  機種絞り込み:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setModelFilter('all')}
+                  className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer text-xs ${
+                    modelFilter === 'all'
+                      ? 'bg-indigo-600 text-white font-bold shadow-xs'
+                      : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                  }`}
+                >
+                  全機種 ({forecast.modelRankings.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModelFilter('main')}
+                  className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer text-xs ${
+                    modelFilter === 'main'
+                      ? 'bg-indigo-600 text-white font-bold shadow-xs'
+                      : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                  }`}
+                >
+                  多台数メイン (4台以上)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModelFilter('smart_slot')}
+                  className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer text-xs ${
+                    modelFilter === 'smart_slot'
+                      ? 'bg-indigo-600 text-white font-bold shadow-xs'
+                      : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                  }`}
+                >
+                  スマスロ限定
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModelFilter('juggler_a')}
+                  className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer text-xs ${
+                    modelFilter === 'juggler_a'
+                      ? 'bg-indigo-600 text-white font-bold shadow-xs'
+                      : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                  }`}
+                >
+                  ジャグラー / Aタイプ
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModelFilter('small')}
+                  className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer text-xs ${
+                    modelFilter === 'small'
+                      ? 'bg-indigo-600 text-white font-bold shadow-xs'
+                      : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                  }`}
+                >
+                  少台数・バラエティ
+                </button>
+              </div>
+
+              {/* Sort Select */}
+              <div className="flex items-center gap-1.5 shrink-0">
+                <span className="text-slate-500 text-xs">並び順:</span>
+                <select
+                  value={modelSort}
+                  onChange={(e) => setModelSort(e.target.value as ModelSortType)}
+                  className="bg-white border border-slate-300 rounded-md px-2 py-1 text-xs text-slate-700 font-semibold focus:outline-hidden focus:border-indigo-500"
+                >
+                  <option value="score">総合期待スコア順</option>
+                  <option value="diff">予測期待差枚 順</option>
+                  <option value="winRate">予測勝率 順</option>
+                  <option value="payout">予測機械割 順</option>
+                  <option value="machines">設置台数 順</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Model Recommendations Table (Unified Component) */}
+            <TargetRankingTable
+              rankingType="model"
+              showStoreColumn={false}
+              formatProfitValue={formatProfitValue}
+              rows={sortedModels.map((model) => ({
+                id: `model-${model.modelName}`,
+                rank: model.rank,
+                rankGrade: model.rankGrade,
+                modelName: model.modelName,
+                totalMachines: model.totalMachines,
+                tags: model.tags,
+                allHighDaysCount: model.allHighDaysCount,
+                expectedDiff: model.expectedDiffCoins,
+                payoutRate: Number(model.predictedPayoutRate.toFixed(2)),
+                winRate: model.predictedWinRate,
+                evidenceDays: model.matchingDaysCount > 0 ? model.matchingDaysCount : model.sampleDays,
+                reasons:
+                  model.matchingDaysCount > 0
+                    ? [
+                        `過去${model.matchingDaysCount}回中 平均 ${model.matchingAvgDiffCoins > 0 ? '+' : ''}${model.matchingAvgDiffCoins}枚 (勝率 ${model.matchingWinRate}%)`,
+                      ]
+                    : [],
+                tacticalReason: model.tacticalReason,
+                sampleRecords: model.sampleRecords,
+              }))}
+              emptyMessage="該当する機種データがありません。絞り込み条件を変更してください。"
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Step ④: どの台を狙うか */}
+      <div id="target-step-4" className="border-t border-slate-200 bg-white p-4 sm:p-5 space-y-3.5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="w-5 h-5 rounded-full bg-indigo-600 text-white text-xs font-black flex items-center justify-center shrink-0">
+                4
+              </span>
+              <h3 className="text-sm sm:text-base font-black text-slate-900 tracking-tight flex items-center gap-2">
+                <span>どの台を狙うか</span>
+                <span className="text-xs font-normal text-slate-500">（台番号別 狙い台ランキング）</span>
+              </h3>
+              {funnelModelName && (
+                <span className="px-2 py-0.5 rounded-full text-2xs font-extrabold bg-indigo-100 text-indigo-900 border border-indigo-200">
+                  機種: {funnelModelName}
+                </span>
+              )}
+            </div>
+            <p className="text-2xs text-slate-500">
+              据え置き・上げ狙い・末尾特徴・過去類似日の実績から台番単位の期待差枚を予測
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsStep4Expanded((prev) => !prev)}
+            className="self-start sm:self-auto px-3 py-1.5 rounded-lg text-xs font-bold border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+            data-testid="step4-toggle-expand"
+          >
+            {isStep4Expanded ? (
+              <>
+                <ChevronUp className="w-3.5 h-3.5" />
+                <span>全件を折りたたむ</span>
+              </>
+            ) : (
+              <>
+                <ChevronDown className="w-3.5 h-3.5" />
+                <span>全件を見る ({step4Machines.length}台)</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Step ④ Top 3 Machines Summary */}
+        <div className="space-y-2">
+          <div className="text-2xs font-bold text-slate-500 flex items-center justify-between">
+            <span className="flex items-center gap-1">
+              <Layers className="w-3 h-3 text-indigo-500" />
+              上位3台の要約（店名・機種・台番・期待差枚・信頼度）
+            </span>
+            <span className="text-[10px] text-slate-400">
+              候補計 {step4Machines.length}台
+            </span>
+          </div>
+
+          {step4Machines.length === 0 ? (
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-center text-xs text-slate-500">
+              該当する台番データがありません。
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3" data-testid="step4-top3-cards">
+              {step4Machines.slice(0, 3).map((mach, idx) => {
+                const diffVal = mach.stats.expectedDiffStd ?? mach.stats.shrunkDiff ?? 0;
+                return (
+                  <div
+                    key={`top-mach-${mach.machineNum}`}
+                    className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/80 hover:bg-slate-100/80 transition-all flex flex-col justify-between"
+                  >
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-black ${
+                          idx === 0 ? 'bg-amber-500 text-slate-950' : idx === 1 ? 'bg-slate-300 text-slate-800' : 'bg-amber-700 text-white'
+                        }`}>
+                          {idx + 1}
+                        </span>
+                        <span className="font-mono font-black text-sm text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
+                          #{mach.machineNum}
+                        </span>
+                      </div>
+
+                      <div>
+                        <h4 className="font-bold text-xs text-slate-900 truncate" title={mach.modelName}>
+                          {mach.modelName}
+                        </h4>
+                        <div className="text-[10px] text-slate-500">
+                          末尾 {mach.machineNum % 10}
+                        </div>
+                      </div>
+
+                      <div className="pt-1 flex items-baseline justify-between border-t border-slate-200/60 text-xs">
+                        <span className="text-2xs text-slate-500">期待差枚:</span>
+                        <span className={`font-mono font-black ${diffVal >= 0 ? 'text-indigo-600' : 'text-rose-600'}`}>
+                          {diffVal >= 0 ? `+${diffVal}` : diffVal}枚
+                        </span>
+                      </div>
+
+                      <div className="text-[10px] text-slate-600 bg-white/80 p-1.5 rounded-lg border border-slate-200/60 space-y-0.5">
+                        <div>信頼度: <strong className="text-slate-800">{mach.confidence}</strong></div>
+                        <div className="text-slate-500">根拠: {mach.evidenceDays}日分</div>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 mt-2 border-t border-slate-200/60 flex items-center justify-between gap-1 text-[11px]">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleCheck(mach.machineNum, 'unavailable')}
+                        className="flex-1 py-1 px-1.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold border border-slate-300 text-center cursor-pointer"
+                        title="チェックリストで「空いていない」にマーク"
+                      >
+                        空いてない
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleCheck(mach.machineNum, 'played')}
+                        className="flex-1 py-1 px-1.5 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold border border-emerald-300 text-center cursor-pointer"
+                        title="チェックリストで「打った」にマーク"
+                      >
+                        打った
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Step ④ Expanded Full View */}
+        {isStep4Expanded && (
+          <div id="target-machine-ranking" className="pt-2 border-t border-slate-200">
+            <TargetMachineRanking
+              targetDate={targetDate}
+              dailyRecords={dailyRecords}
+              specialDayRules={specialDayRules}
+              customWeights={customWeights}
+              customMachineWeights={customMachineWeights}
+              islandConfig={islandConfig}
+              includeReusedMachines={includeReusedState}
+              aliasDictionary={aliasDictionary}
+              onOpenStoreManager={onOpenStoreManager}
+              storeId={storeId}
+              featureIndex={sharedFeatureIndex}
+              funnelModelName={funnelModelName}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Step ⑤: 当日のチェックリスト */}
+      <div id="target-step-5" className="border-t border-slate-200 bg-white p-4 sm:p-5 space-y-3.5">
+        <div id="target-checklist" className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="w-5 h-5 rounded-full bg-emerald-600 text-white text-xs font-black flex items-center justify-center shrink-0">
+                5
+              </span>
+              <h3 className="text-sm sm:text-base font-black text-slate-900 tracking-tight flex items-center gap-2">
+                <span>当日のチェックリスト</span>
+                <span className="text-xs font-normal text-slate-500">（来店中スマホ管理）</span>
+              </h3>
+            </div>
+            <p className="text-2xs text-slate-500">
+              狙い台の確保状況をリアルタイムでチェック。空いていない台を除外すると自動で次候補が繰り上がります。
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            <button
+              type="button"
+              onClick={() => setIsStep5Expanded((prev) => !prev)}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              data-testid="step5-toggle-expand"
+            >
+              {isStep5Expanded ? (
+                <>
+                  <ChevronUp className="w-3.5 h-3.5" />
+                  <span>全件を折りたたむ</span>
+                </>
+              ) : (
+                <>
+                  <ChevronDown className="w-3.5 h-3.5" />
+                  <span>全件を見る ({activeCandidates.length}台)</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Step ⑤ Top 3 Candidates Summary */}
+        <div className="space-y-2">
+          <div className="text-2xs font-bold text-slate-500 flex items-center justify-between">
+            <span className="flex items-center gap-1">
+              <CheckSquare className="w-3 h-3 text-emerald-600" />
+              未チェック候補 上位3台
+            </span>
+            <span className="text-[10px] text-slate-400">
+              未チェック {activeCandidates.length}台 / チェック済 {checkedCandidates.length}台
+            </span>
+          </div>
+
+          {activeCandidates.length === 0 ? (
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-center text-xs text-slate-500">
+              未チェックの候補台はありません。
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3" data-testid="step5-top3-cards">
+              {activeCandidates.slice(0, 3).map((cand, idx) => (
+                <div
+                  key={`top-check-${cand.machineNum}`}
+                  className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/80 hover:bg-slate-100/80 transition-all flex flex-col justify-between"
+                >
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-black ${
+                        idx === 0 ? 'bg-amber-500 text-slate-950' : idx === 1 ? 'bg-slate-300 text-slate-800' : 'bg-amber-700 text-white'
+                      }`}>
+                        {idx + 1}
+                      </span>
+                      <span className="font-mono font-black text-sm text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
+                        #{cand.machineNum}
+                      </span>
+                    </div>
+
+                    <div>
+                      <h4 className="font-bold text-xs text-slate-900 truncate" title={cand.modelName}>
+                        {cand.modelName}
+                      </h4>
+                      <div className="text-[10px] text-slate-500">
+                        末尾 {cand.machineNum % 10}
+                      </div>
+                    </div>
+
+                    <div className="pt-1 flex items-baseline justify-between border-t border-slate-200/60 text-xs">
+                      <span className="text-2xs text-slate-500">期待差枚:</span>
+                      <span className="font-mono font-black text-indigo-600">
+                        {cand.expectedDiffCoins >= 0 ? `+${cand.expectedDiffCoins}` : cand.expectedDiffCoins}枚
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="pt-2.5 mt-2 border-t border-slate-200/60 flex items-center gap-1.5 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => handleToggleCheck(cand.machineNum, 'unavailable')}
+                      className="flex-1 py-1 px-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold border border-slate-300 text-center cursor-pointer transition-colors"
+                    >
+                      空いてない
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleCheck(cand.machineNum, 'played')}
+                      className="flex-1 py-1 px-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-center cursor-pointer shadow-2xs transition-colors"
+                    >
+                      打った
+                    </button>
                   </div>
                 </div>
               ))}
             </div>
+          )}
+        </div>
+
+        {/* Step ⑤ Expanded Full Checklist */}
+        {isStep5Expanded && (
+          <div className="space-y-3 pt-3 border-t border-slate-200">
+            {/* Action Bar: Copy / CSV / Reset */}
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200 text-xs">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleCopyText(activeCandidates)}
+                  className="px-2.5 py-1 rounded-lg bg-white hover:bg-slate-100 text-slate-700 font-bold border border-slate-200 flex items-center gap-1 cursor-pointer transition-colors"
+                >
+                  <Copy className="w-3.5 h-3.5 text-slate-500" />
+                  <span>テキストコピー</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDownloadCsv(activeCandidates)}
+                  className="px-2.5 py-1 rounded-lg bg-white hover:bg-slate-100 text-slate-700 font-bold border border-slate-200 flex items-center gap-1 cursor-pointer transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5 text-slate-500" />
+                  <span>CSV保存</span>
+                </button>
+                {copyFeedback && (
+                  <span className="text-emerald-600 font-bold animate-in fade-in">
+                    {copyFeedback}
+                  </span>
+                )}
+              </div>
+
+              {Object.keys(checkedMap).length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleResetChecks}
+                  className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold border border-rose-200 flex items-center gap-1 cursor-pointer transition-colors text-2xs"
+                >
+                  <RotateCcw className="w-3 h-3 text-rose-500" />
+                  <span>チェック全解除</span>
+                </button>
+              )}
+            </div>
+
+            {/* Candidate List Table */}
+            <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-2xs">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-100 text-slate-600 text-2xs border-b border-slate-200">
+                  <tr>
+                    <th className="px-3 py-2 text-center w-12">順位</th>
+                    <th className="px-3 py-2 font-bold w-20">台番</th>
+                    <th className="px-4 py-2 font-bold">機種名</th>
+                    <th className="px-3 py-2 text-right font-bold">期待差枚</th>
+                    <th className="px-3 py-2 text-center font-bold">信頼度</th>
+                    <th className="px-4 py-2 font-bold">推奨理由</th>
+                    <th className="px-3 py-2 text-center font-bold w-36">当日操作</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {activeCandidates.map((cand, idx) => (
+                    <tr key={`cand-${cand.machineNum}`} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-3 py-2 text-center font-black text-slate-700">
+                        #{idx + 1}
+                      </td>
+                      <td className="px-3 py-2 font-mono font-black text-slate-900">
+                        #{cand.machineNum}
+                      </td>
+                      <td className="px-4 py-2 font-bold text-slate-800">
+                        {cand.modelName}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono font-black text-indigo-600">
+                        +{cand.expectedDiffCoins}枚
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700">
+                          {cand.confidence}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-[11px] text-slate-500">
+                        {cand.reasons[0] || '-'}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <div className="flex items-center justify-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleCheck(cand.machineNum, 'unavailable')}
+                            className="px-2 py-0.5 rounded text-2xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 cursor-pointer"
+                          >
+                            空きなし
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleCheck(cand.machineNum, 'played')}
+                            className="px-2 py-0.5 rounded text-2xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
+                          >
+                            着席
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Checked items summary / toggle */}
+            {checkedCandidates.length > 0 && (
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-700">
+                    チェック済みの台 ({checkedCandidates.length}台):
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowCheckedList((prev) => !prev)}
+                    className="text-indigo-600 font-bold hover:underline cursor-pointer text-2xs"
+                  >
+                    {showCheckedList ? '非表示' : '表示する'}
+                  </button>
+                </div>
+                {showCheckedList && (
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {checkedCandidates.map((c) => (
+                      <span
+                        key={`chk-${c.machineNum}`}
+                        className={`inline-flex items-center gap-1 px-2 py-1 rounded text-2xs font-bold border ${
+                          c.checkStatus === 'played'
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                            : 'bg-slate-200 text-slate-700 border-slate-300'
+                        }`}
+                      >
+                        <span>#{c.machineNum} {c.modelName}</span>
+                        <span className="text-[10px] opacity-75">
+                          ({c.checkStatus === 'played' ? '着席' : '空きなし'})
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleUncheckMachine(c.machineNum)}
+                          className="hover:text-rose-600 ml-1 cursor-pointer"
+                          title="チェック解除"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
-          <div className="text-[10px] text-slate-400 text-right mt-2">
-            ※ 狙い機種と好調末尾が重複する台番が最有力
-          </div>
-        </div>
-      </div>
-
-      {/* Model Filter & Sort Bar */}
-      <div className="p-4 bg-slate-50 border-b border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-        {/* Filter Pills */}
-        <div className="flex items-center gap-1 flex-wrap">
-          <span className="font-bold text-slate-600 mr-1 flex items-center gap-1">
-            <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-500" />
-            機種絞り込み:
-          </span>
-          <button
-            type="button"
-            onClick={() => setModelFilter('all')}
-            className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
-              modelFilter === 'all'
-                ? 'bg-indigo-600 text-white font-bold shadow-xs'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            全機種 ({forecast.modelRankings.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setModelFilter('main')}
-            className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
-              modelFilter === 'main'
-                ? 'bg-indigo-600 text-white font-bold shadow-xs'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            多台数メイン (4台以上)
-          </button>
-          <button
-            type="button"
-            onClick={() => setModelFilter('smart_slot')}
-            className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
-              modelFilter === 'smart_slot'
-                ? 'bg-indigo-600 text-white font-bold shadow-xs'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            スマスロ限定
-          </button>
-          <button
-            type="button"
-            onClick={() => setModelFilter('juggler_a')}
-            className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
-              modelFilter === 'juggler_a'
-                ? 'bg-indigo-600 text-white font-bold shadow-xs'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            ジャグラー / Aタイプ
-          </button>
-          <button
-            type="button"
-            onClick={() => setModelFilter('small')}
-            className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
-              modelFilter === 'small'
-                ? 'bg-indigo-600 text-white font-bold shadow-xs'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            少台数・バラエティ
-          </button>
-        </div>
-
-        {/* Sort Select */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          <span className="text-slate-500">並び順:</span>
-          <select
-            value={modelSort}
-            onChange={(e) => setModelSort(e.target.value as ModelSortType)}
-            className="bg-white border border-slate-300 rounded-md px-2 py-1 text-xs text-slate-700 font-semibold focus:outline-hidden focus:border-indigo-500"
-          >
-            <option value="score">総合期待スコア順</option>
-            <option value="diff">予測期待差枚 順</option>
-            <option value="winRate">予測勝率 順</option>
-            <option value="payout">予測機械割 順</option>
-            <option value="machines">設置台数 順</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Model Recommendations Table (Unified Component) */}
-      <TargetRankingTable
-        rankingType="model"
-        showStoreColumn={false}
-        formatProfitValue={formatProfitValue}
-        rows={sortedModels.map((model) => ({
-          id: `model-${model.modelName}`,
-          rank: model.rank,
-          rankGrade: model.rankGrade,
-          modelName: model.modelName,
-          totalMachines: model.totalMachines,
-          tags: model.tags,
-          allHighDaysCount: model.allHighDaysCount,
-          expectedDiff: model.expectedDiffCoins,
-          payoutRate: Number(model.predictedPayoutRate.toFixed(2)),
-          winRate: model.predictedWinRate,
-          evidenceDays: model.matchingDaysCount > 0 ? model.matchingDaysCount : model.sampleDays,
-          reasons:
-            model.matchingDaysCount > 0
-              ? [
-                  `過去${model.matchingDaysCount}回中 平均 ${model.matchingAvgDiffCoins > 0 ? '+' : ''}${model.matchingAvgDiffCoins}枚 (勝率 ${model.matchingWinRate}%)`,
-                ]
-              : [],
-          tacticalReason: model.tacticalReason,
-          sampleRecords: model.sampleRecords,
-        }))}
-        emptyMessage="該当する機種データがありません。絞り込み条件を変更してください。"
-      />
-
-      {/* Target Machine Ranking Component (台番号別 狙い台ランキング) */}
-      <div id="target-machine-ranking">
-        <TargetMachineRanking
-          targetDate={targetDate}
-          dailyRecords={dailyRecords}
-          specialDayRules={specialDayRules}
-          customWeights={customWeights}
-          customMachineWeights={customMachineWeights}
-          islandConfig={islandConfig}
-          includeReusedMachines={includeReusedState}
-          aliasDictionary={aliasDictionary}
-          onOpenStoreManager={onOpenStoreManager}
-          storeId={storeId}
-          featureIndex={sharedFeatureIndex}
-        />
+        )}
       </div>
 
       {/* Footer Disclaimer */}

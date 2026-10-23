@@ -54,6 +54,7 @@ interface TargetMachineRankingProps {
   aliasDictionary?: Record<string, string>;
   storeId?: string;
   featureIndex?: FeatureIndex;
+  funnelModelName?: string | null;
 }
 
 /**
@@ -125,8 +126,17 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
   aliasDictionary,
   storeId,
   featureIndex,
+  funnelModelName,
 }) => {
-  const [selectedModel, setSelectedModel] = useState<string>('all');
+  const [selectedModel, setSelectedModel] = useState<string>(() => funnelModelName || 'all');
+
+  useEffect(() => {
+    if (funnelModelName) {
+      setSelectedModel(funnelModelName);
+    } else {
+      setSelectedModel('all');
+    }
+  }, [funnelModelName]);
   const [selectedTail, setSelectedTail] = useState<string>('all');
   const [selectedIsland, setSelectedIsland] = useState<string>('all');
   const [expandedMachine, setExpandedMachine] = useState<number | null>(null);

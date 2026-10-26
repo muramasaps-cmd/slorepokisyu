@@ -161,10 +161,12 @@ describe('Prompt 54: 店舗比較の分析横断表示統合テスト', () => {
       // Compute condition stats for storeA using calculateConditionStats (tail)
       const tailStatsA = calculateConditionStats(storeA.dailyRecords, 'tail', {
         perspective: 'player',
+        includeMonthDayZoro: false,
       });
       // Compute condition stats for storeB using calculateConditionStats (tail)
       const tailStatsB = calculateConditionStats(storeB.dailyRecords, 'tail', {
         perspective: 'player',
+        includeMonthDayZoro: false,
       });
 
       // 7のつく日 check (key is '7')
@@ -214,7 +216,7 @@ describe('Prompt 54: 店舗比較の分析横断表示統合テスト', () => {
       expect(satA?.count).toBe(sampleDates.length);
       expect(satB?.count).toBe(sampleDates.length);
       expect(satA?.avgDiffCoins).toBe(satB?.avgDiffCoins);
-      expect(satA?.winRate).toBe(satB?.winRate);
+      expect(satA?.playerWinRate).toBe(satB?.playerWinRate);
     });
   });
 });

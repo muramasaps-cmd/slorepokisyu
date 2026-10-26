@@ -573,16 +573,14 @@ export default function App() {
       // Legacy tab: redirect to analysis/compare?scope=all
       setActiveTab('analysis');
       setAnalysisSubTab('compare');
-      const effScope = analysisScope === 'store' ? 'all' : analysisScope;
+      const effScope: AnalysisScope = analysisScope === 'store' ? 'all' : analysisScope;
       setAnalysisScope(effScope);
       const params = new URLSearchParams();
       if (uniqueStores.length > 1) {
         params.set('scope', effScope);
-        if (effScope !== 'store') {
-          params.set('period', analysisPeriod);
-          if (effScope === 'custom' && selectedAnalysisStoreIds.length > 0) {
-            params.set('stores', selectedAnalysisStoreIds.join(','));
-          }
+        params.set('period', analysisPeriod);
+        if (effScope === 'custom' && selectedAnalysisStoreIds.length > 0) {
+          params.set('stores', selectedAnalysisStoreIds.join(','));
         }
       }
       const qs = params.toString();

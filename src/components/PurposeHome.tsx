@@ -274,7 +274,7 @@ export const PurposeHome: React.FC<PurposeHomeProps> = ({
       badge: '店舗比較',
       icon: Building2,
       accentColor: 'cyan',
-      onClick: () => onSelectQuestion('compare'),
+      onClick: () => onSelectQuestion('analysis', { subTab: 'compare' }),
     },
     {
       id: 'overview',

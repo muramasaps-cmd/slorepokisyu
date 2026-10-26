@@ -69,8 +69,21 @@ describe('Prompt 46: 目的別メニュー（プルダウン）テストスイ�
       expect(html).toContain('高出率台の特徴');
     });
 
-    it('displays "店舗を分析する › 他の店との比較" when in compare', () => {
-      const html = clean(
+    it('displays "店舗を分析する › 他の店との比較" when in compare subtab or compare tab', () => {
+      const htmlSub = clean(
+        renderToString(
+          <PurposeMenu
+            activeTab="analysis"
+            analysisSubTab="compare"
+            targetScope="store"
+            onNavigate={vi.fn()}
+          />
+        )
+      );
+      expect(htmlSub).toContain('店舗を分析する');
+      expect(htmlSub).toContain('他の店との比較');
+
+      const htmlLegacy = clean(
         renderToString(
           <PurposeMenu
             activeTab="compare"
@@ -80,8 +93,8 @@ describe('Prompt 46: 目的別メニュー（プルダウン）テストスイ�
           />
         )
       );
-      expect(html).toContain('店舗を分析する');
-      expect(html).toContain('他の店との比較');
+      expect(htmlLegacy).toContain('店舗を分析する');
+      expect(htmlLegacy).toContain('他の店との比較');
     });
 
     it('displays "指定日の狙い台を決める › この店だけで見る" when in target scope=store', () => {

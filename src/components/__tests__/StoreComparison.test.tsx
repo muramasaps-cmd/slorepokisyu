@@ -70,7 +70,7 @@ describe('StoreComparison Component', () => {
   const storeB = createMockStore('storeB', 'ホールB店', sampleDates);
   const storeC = createMockStore('storeC', 'ホールC店', sampleDates);
 
-  it('renders digit day heatmap section and does NOT render deleted significance section', () => {
+  it('renders summary, metrics table, condition guide, monthly trend, and common models in specified order', () => {
     const html = renderToString(<StoreComparison stores={[storeA, storeB]} />);
 
     // Check main title
@@ -79,41 +79,23 @@ describe('StoreComparison Component', () => {
     // Verify statistical significance section is removed
     expect(html).not.toContain('店間差の統計的有意性判定');
 
-    // Verify digit day heatmap title is present
-    expect(html).toContain('店舗 × のつく日 ヒートマップ（台あたり平均差枚）');
+    // Verify 5 core sections are present in order
+    const posSummary = html.indexOf('データに基づく各店舗の傾向要約（客観数値自動生成）');
+    const posMetrics = html.indexOf('主要指標 比較一覧表（台あたり基準）');
+    const posConditionGuide = html.indexOf('店舗 × のつく日 / 曜日 ヒートマップ');
+    const posMonthly = html.indexOf('月次推移の重ね合わせ折れ線（台あたり平均差枚）');
+    const posCategory = html.indexOf('機種カテゴリ構成比');
+    const posCommonModels = html.indexOf('共通機種ランキング（同一機種の店別成績）');
 
-    // Verify Day of Week heatmap title is also present
-    expect(html).toContain('店舗 × 曜日 ヒートマップ（台あたり平均差枚）');
+    expect(posSummary).toBeGreaterThan(-1);
+    expect(posMetrics).toBeGreaterThan(posSummary);
+    expect(posConditionGuide).toBeGreaterThan(posMetrics);
+    expect(posMonthly).toBeGreaterThan(posConditionGuide);
+    expect(posCategory).toBeGreaterThan(posMonthly);
+    expect(posCommonModels).toBeGreaterThan(posMonthly);
 
-    // Verify definition text is present under the header
-    expect(html).toContain('「Nのつく日」は、日付の一の位が N の日とする');
-    expect(html).toContain('ゾロ目は日の十の位と一の位が同じ日（11・22日）');
-  });
-
-  it('renders all 11 columns in digit day heatmap table', () => {
-    const html = renderToString(<StoreComparison stores={[storeA, storeB]} />);
-
-    // Columns: 1のつく日 .. 0のつく日, ゾロ目の日
-    expect(html).toContain('1のつく日');
-    expect(html).toContain('2のつく日');
-    expect(html).toContain('3のつく日');
-    expect(html).toContain('4のつく日');
-    expect(html).toContain('5のつく日');
-    expect(html).toContain('6のつく日');
-    expect(html).toContain('7のつく日');
-    expect(html).toContain('8のつく日');
-    expect(html).toContain('9のつく日');
-    expect(html).toContain('0のつく日');
-    expect(html).toContain('ゾロ目の日');
-  });
-
-  it('displays tooltip with daysCount, totalDiff, totalMachines, and avgDiff on cells', () => {
-    const html = renderToString(<StoreComparison stores={[storeA, storeB]} />);
-
-    expect(html).toContain('・該当日数:');
-    expect(html).toContain('・総差枚:');
-    expect(html).toContain('・総台数:');
-    expect(html).toContain('・台あたり平均差枚:');
+    // Verify condition guide text links to condition analysis
+    expect(html).toContain('「条件別」サブタブの横断表示に統合されました');
   });
 
   it('handles multiple stores (e.g. 3 or more) without crash and shows store names', () => {
@@ -127,26 +109,6 @@ describe('StoreComparison Component', () => {
   it('renders empty state message when less than 2 stores are provided', () => {
     const html = renderToString(<StoreComparison stores={[storeA]} />);
     expect(html).toContain('店舗比較には2店舗以上の登録が必要です');
-  });
-
-  it('renders sections in the specified order: summary -> metrics table -> digit day heatmap -> dow heatmap -> monthly trend chart -> category/common models', () => {
-    const html = renderToString(<StoreComparison stores={[storeA, storeB]} />);
-
-    const posSummary = html.indexOf('データに基づく各店舗の傾向要約（客観数値自動生成）');
-    const posMetrics = html.indexOf('主要指標 比較一覧表（台あたり基準）');
-    const posDigit = html.indexOf('店舗 × のつく日 ヒートマップ（台あたり平均差枚）');
-    const posDow = html.indexOf('店舗 × 曜日 ヒートマップ（台あたり平均差枚）');
-    const posMonthly = html.indexOf('月次推移の重ね合わせ折れ線（台あたり平均差枚）');
-    const posCategory = html.indexOf('機種カテゴリ構成比');
-    const posCommonModels = html.indexOf('共通機種ランキング（同一機種の店別成績）');
-
-    expect(posSummary).toBeGreaterThan(-1);
-    expect(posMetrics).toBeGreaterThan(posSummary);
-    expect(posDigit).toBeGreaterThan(posMetrics);
-    expect(posDow).toBeGreaterThan(posDigit);
-    expect(posMonthly).toBeGreaterThan(posDow);
-    expect(posCategory).toBeGreaterThan(posMonthly);
-    expect(posCommonModels).toBeGreaterThan(posMonthly);
   });
 
   it('formats monthly trend tooltip with signed 1-decimal value and store name', () => {

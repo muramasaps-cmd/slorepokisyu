@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { AnalysisScopeBar } from '../AnalysisScopeBar';
 import { ConditionAnalysis } from '../ConditionAnalysis';
+import { ModelCrossStoreAnalysis } from '../ModelCrossStoreAnalysis';
 import App, { parseHash } from '../../App';
 import { StoreProfile, DailyRecord } from '../../data/types';
 
@@ -293,9 +294,9 @@ describe('Prompt 50: 分析の対象店舗スイッチ (AnalysisScopeBar & Integ
     });
   });
 
-  // 6. App全体でのサブタブと横断準備中表示の統合テスト
-  describe('6. 機種・高出率台サブタブでの横断分析準備中表示と条件別での複数店舗行表示', () => {
-    it('displays "店舗を横断した表示は準備中です" on models and high_payout subtabs when scope="all"', () => {
+  // 6. App全体でのサブタブと横断分析表示の統合テスト
+  describe('6. 機種・高出率台サブタブでの横断分析表示と条件別での複数店舗行表示', () => {
+    it('displays cross-store models on models subtab and cross-store high payout analysis on high_payout subtab when scope="all"', () => {
       // Mock multiple stores in localStorage
       localStorage.setItem('SLOT_ANALYZER_HTML_STORES_V2', JSON.stringify([storeA, storeB]));
       localStorage.setItem('SLOT_ANALYZER_HTML_ACTIVE_ID_V2', storeA.id);
@@ -303,14 +304,17 @@ describe('Prompt 50: 分析の対象店舗スイッチ (AnalysisScopeBar & Integ
       // Models subtab with scope=all
       (window as any).location.hash = '#analysis/models?scope=all';
       const htmlModels = renderToString(<App />);
-      expect(htmlModels).toContain('店舗を横断した表示は準備中です');
+      expect(htmlModels).toContain('機種×店舗 横断比較分析');
       expect(htmlModels).toContain('対象店舗:');
       expect(htmlModels).toContain('全店');
 
       // High payout subtab with scope=all
       (window as any).location.hash = '#analysis/high_payout?scope=all';
       const htmlPayout = renderToString(<App />);
-      expect(htmlPayout).toContain('店舗を横断した表示は準備中です');
+      expect(htmlPayout).toContain('高出率台 横断比較分析');
+      expect(htmlPayout).toContain('マルハン新宿店');
+      expect(htmlPayout).toContain('エスパス秋葉原本館');
+      expect(htmlPayout).toContain('全店合計');
 
       // Conditions subtab with scope=all should render both store names as rows
       (window as any).location.hash = '#analysis/conditions?scope=all';

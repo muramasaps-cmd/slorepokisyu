@@ -950,7 +950,7 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                             <span className={row.isTotal ? 'font-black' : ''}>{row.storeName}</span>
                             {row.totalDays !== undefined && (
                               <span className="text-[10px] font-normal text-slate-500 shrink-0">
-                                ({row.totalDays}日)
+                                {`(${row.totalDays}日)`}
                               </span>
                             )}
                           </div>

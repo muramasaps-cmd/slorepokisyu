@@ -149,6 +149,12 @@ export const PurposeMenu: React.FC<PurposeMenuProps> = ({
           item: '高出率台の特徴',
         };
       }
+      if (analysisSubTab === 'compare') {
+        return {
+          parent: '店舗を分析する',
+          item: '他の店との比較',
+        };
+      }
       return {
         parent: '店舗を分析する',
         item: '機種別の傾向と設定推定',
@@ -304,10 +310,13 @@ export const PurposeMenu: React.FC<PurposeMenuProps> = ({
           title: '他の店との比較',
           desc: '登録されている複数ホールの出玉実績を横断比較',
           icon: Building2,
-          hash: '#compare',
-          isActive: !isHome && activeTab === 'compare',
+          hash: '#analysis/compare?scope=all',
+          isActive:
+            !isHome &&
+            ((activeTab === 'analysis' && analysisSubTab === 'compare') ||
+              activeTab === 'compare'),
           onSelect: () => {
-            onNavigate('compare', { isHome: false });
+            onNavigate('analysis', { subTab: 'compare', scope: 'all' as any, isHome: false });
             setOpenMenuId(null);
           },
         },

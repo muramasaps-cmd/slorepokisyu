@@ -52,10 +52,18 @@ describe('Prompt 43: タブの再編 (5タブ)', () => {
       expect(parsed.scope).toBe('store');
     });
 
-    it('routes #compare to compare tab', () => {
+    it('routes legacy #compare to analysis tab with compare subtab and scope=all', () => {
       const parsed = parseHash('#compare');
-      expect(parsed.tab).toBe('compare');
-      expect(parsed.scope).toBe('store');
+      expect(parsed.tab).toBe('analysis');
+      expect(parsed.subTab).toBe('compare');
+      expect(parsed.analysisScope).toBe('all');
+    });
+
+    it('routes #analysis/compare to analysis tab with compare subtab', () => {
+      const parsed = parseHash('#analysis/compare');
+      expect(parsed.tab).toBe('analysis');
+      expect(parsed.subTab).toBe('compare');
+      expect(parsed.analysisScope).toBe('all');
     });
 
     it('redirects legacy #tables to overview tab with table viewMode', () => {

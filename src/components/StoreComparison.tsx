@@ -5,8 +5,6 @@ import {
   StoreComparisonResult,
   StorePerMachineMetrics,
 } from '../utils/storeComparison';
-import { ConditionAnalysis } from './ConditionAnalysis';
-
 import { formatNumber, formatYen } from '../utils/formatters';
 import {
   Building2,
@@ -38,6 +36,7 @@ import {
 interface StoreComparisonProps {
   stores: StoreProfile[];
   onSelectStore?: (storeId: string) => void;
+  onNavigateToConditions?: () => void;
   activeFilterLabel?: string;
   isModelFilterActive?: boolean;
 }
@@ -60,6 +59,7 @@ export function formatMonthlyTrendTooltip(val: any, name: any): [string, string]
 export const StoreComparison: React.FC<StoreComparisonProps> = ({
   stores,
   onSelectStore,
+  onNavigateToConditions,
   activeFilterLabel,
   isModelFilterActive,
 }) => {
@@ -343,25 +343,28 @@ export const StoreComparison: React.FC<StoreComparisonProps> = ({
             </div>
           </div>
 
-          {/* 3. Digit Day Heatmap Grid (店舗 × のつく日) */}
-          <ConditionAnalysis
-            stores={comparedStores}
-            fixedDimension="tail"
-            period={periodMode === 'common' ? comparisonResult.commonPeriod : null}
-            perspective="player"
-            initialViewMode="heatmap"
-            initialMetric="avgDiff"
-          />
-
-          {/* 4. Day of Week Heatmap Grid (店 × 曜日) */}
-          <ConditionAnalysis
-            stores={comparedStores}
-            fixedDimension="dow"
-            period={periodMode === 'common' ? comparisonResult.commonPeriod : null}
-            perspective="player"
-            initialViewMode="heatmap"
-            initialMetric="avgDiff"
-          />
+          {/* 3. Condition Heatmaps Guide (Unified with ConditionAnalysis Subtab) */}
+          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+            <div className="space-y-1">
+              <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <Calendar className="w-4 h-4 text-indigo-600" />
+                <span>店舗 × のつく日 / 曜日 ヒートマップ</span>
+              </div>
+              <p className="text-xs text-slate-500">
+                「のつく日（末尾日付）」および「曜日」別の店舗横断ヒートマップ・出玉傾向は、「条件別」サブタブの横断表示に統合されました。
+              </p>
+            </div>
+            {onNavigateToConditions && (
+              <button
+                type="button"
+                onClick={onNavigateToConditions}
+                className="px-3 py-1.5 bg-white hover:bg-slate-100 text-indigo-600 border border-indigo-200 rounded-xl font-bold text-xs cursor-pointer flex items-center gap-1.5 shrink-0 self-start sm:self-auto shadow-2xs transition-colors"
+              >
+                <span>条件別（のつく日・曜日）を見る</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
 
           {/* 5. Monthly Trend Overlaid Chart */}
           <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3">

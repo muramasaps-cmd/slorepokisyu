@@ -14,9 +14,30 @@ import {
   getStoreColor,
   ALL_STORES_COLOR,
   ALL_STORES_ID,
+  ALL_STORES_NAME,
 } from '../../utils/storeColors';
 import { DailyRecord, StoreProfile } from '../../data/types';
 import { StoreCommonPeriod } from '../../utils/storeComparison';
+
+function createMockStore(
+  id: string,
+  name: string,
+  totalMachinesApprox: number,
+  dailyRecords: DailyRecord[]
+): StoreProfile {
+  return {
+    id,
+    name,
+    totalMachinesApprox,
+    dailyRecords,
+    address: '東京都',
+    oldEventDays: '7のつく日',
+    exchangeRate: '50枚/50枚',
+    rateLend: 20,
+    rateExchange: 20,
+    dataRange: '2025-01',
+  };
+}
 
 function createMockDailyRecord(
   date: string,
@@ -77,18 +98,8 @@ describe('Prompt 51: 条件別の横断（全店合計の行と色の統一）',
         createMockDailyRecord('2025-01-06', '月', -100, 3000, 20, 8),
       ];
 
-      const store1: StoreProfile = {
-        id: 'store-1',
-        name: '店舗1',
-        totalMachinesApprox: 10,
-        dailyRecords: store1Records,
-      };
-      const store2: StoreProfile = {
-        id: 'store-2',
-        name: '店舗2',
-        totalMachinesApprox: 20,
-        dailyRecords: store2Records,
-      };
+      const store1 = createMockStore('store-1', '店舗1', 10, store1Records);
+      const store2 = createMockStore('store-2', '店舗2', 20, store2Records);
 
       const rows = calculateMultiStoreConditions([store1, store2], 'dow');
       expect(rows.length).toBe(3); // Store 1, Store 2, and 全店合計
@@ -125,18 +136,12 @@ describe('Prompt 51: 条件別の横断（全店合計の行と色の統一）',
     it('verifies asymmetric IN weighting and machine-day weighting on Tuesday', () => {
       // Store 1: 10 machines, +300 diff, 5000 games -> diff = +3000, IN = 150,000, OUT = 153,000
       // Store 2: 30 machines, +100 diff, 7000 games -> diff = +3000, IN = 630,000, OUT = 633,000
-      const store1: StoreProfile = {
-        id: 's1',
-        name: 'エスワン',
-        totalMachinesApprox: 10,
-        dailyRecords: [createMockDailyRecord('2025-01-07', '火', 300, 5000, 10, 7)],
-      };
-      const store2: StoreProfile = {
-        id: 's2',
-        name: 'エスツー',
-        totalMachinesApprox: 30,
-        dailyRecords: [createMockDailyRecord('2025-01-07', '火', 100, 7000, 30, 18)],
-      };
+      const store1 = createMockStore('s1', 'エスワン', 10, [
+        createMockDailyRecord('2025-01-07', '火', 300, 5000, 10, 7),
+      ]);
+      const store2 = createMockStore('s2', 'エスツー', 30, [
+        createMockDailyRecord('2025-01-07', '火', 100, 7000, 30, 18),
+      ]);
 
       const rows = calculateMultiStoreConditions([store1, store2], 'dow');
       const totalRow = rows.find((r) => r.isTotal);
@@ -164,26 +169,16 @@ describe('Prompt 51: 条件別の横断（全店合計の行と色の統一）',
   describe('2. Common period days & few days badge (共通期間の日数と日数少注記)', () => {
     it('displays target days for each store and dims cells with < 3 days with "日数少"', () => {
       // 2 stores with overlapping dates
-      const store1: StoreProfile = {
-        id: 'store-a',
-        name: '店A',
-        totalMachinesApprox: 10,
-        dailyRecords: [
-          createMockDailyRecord('2025-01-06', '月', 100, 5000, 10),
-          createMockDailyRecord('2025-01-13', '月', 150, 5000, 10),
-        ], // Only 2 Mondays! (< 3 days threshold)
-      };
+      const store1 = createMockStore('store-a', '店A', 10, [
+        createMockDailyRecord('2025-01-06', '月', 100, 5000, 10),
+        createMockDailyRecord('2025-01-13', '月', 150, 5000, 10),
+      ]); // Only 2 Mondays! (< 3 days threshold)
 
-      const store2: StoreProfile = {
-        id: 'store-b',
-        name: '店B',
-        totalMachinesApprox: 10,
-        dailyRecords: [
-          createMockDailyRecord('2025-01-06', '月', 50, 5000, 10),
-          createMockDailyRecord('2025-01-13', '月', 80, 5000, 10),
-          createMockDailyRecord('2025-01-20', '月', 90, 5000, 10),
-        ], // 3 Mondays
-      };
+      const store2 = createMockStore('store-b', '店B', 10, [
+        createMockDailyRecord('2025-01-06', '月', 50, 5000, 10),
+        createMockDailyRecord('2025-01-13', '月', 80, 5000, 10),
+        createMockDailyRecord('2025-01-20', '月', 90, 5000, 10),
+      ]); // 3 Mondays
 
       const commonPeriod: StoreCommonPeriod = {
         startDate: '2025-01-06',
@@ -251,24 +246,14 @@ describe('Prompt 51: 条件別の横断（全店合計の行と色の統一）',
 
   // Test 4: Multi-store UI components (Heatmap, Chart, Table with 全店合計)
   describe('4. Multi-store UI components (ヒートマップ・表・グラフに全店合計の行/系列)', () => {
-    const storeA: StoreProfile = {
-      id: 'store-1',
-      name: 'メガA',
-      totalMachinesApprox: 10,
-      dailyRecords: [
-        createMockDailyRecord('2025-01-06', '月', 200, 6000, 10, 6),
-        createMockDailyRecord('2025-01-07', '火', 100, 5000, 10, 5),
-      ],
-    };
-    const storeB: StoreProfile = {
-      id: 'store-2',
-      name: 'ギガB',
-      totalMachinesApprox: 20,
-      dailyRecords: [
-        createMockDailyRecord('2025-01-06', '月', -100, 3000, 20, 8),
-        createMockDailyRecord('2025-01-07', '火', 50, 4000, 20, 11),
-      ],
-    };
+    const storeA = createMockStore('store-1', 'メガA', 10, [
+      createMockDailyRecord('2025-01-06', '月', 200, 6000, 10, 6),
+      createMockDailyRecord('2025-01-07', '火', 100, 5000, 10, 5),
+    ]);
+    const storeB = createMockStore('store-2', 'ギガB', 20, [
+      createMockDailyRecord('2025-01-06', '月', -100, 3000, 20, 8),
+      createMockDailyRecord('2025-01-07', '火', 50, 4000, 20, 11),
+    ]);
 
     it('renders "全店合計" row in Heatmap view', () => {
       const html = renderToString(
@@ -308,21 +293,16 @@ describe('Prompt 51: 条件別の横断（全店合計の行と色の統一）',
       expect(html).toContain('全店合計');
       expect(html).toContain('メガA');
       expect(html).toContain('ギガB');
-      expect(html).toContain('全条件 合計／平均');
+      expect(html).toContain('全店・全条件 合計／加重平均');
     });
   });
 
   // Test 5: Single-store compatibility
   describe('5. Single store compatibility (1店舗のときの表示が変わらない)', () => {
     it('does not render multi-store switches or total rows when only 1 store is provided', () => {
-      const singleStore: StoreProfile = {
-        id: 'store-single',
-        name: '単独店舗',
-        totalMachinesApprox: 10,
-        dailyRecords: [
-          createMockDailyRecord('2025-01-06', '月', 120, 5000, 10, 6),
-        ],
-      };
+      const singleStore = createMockStore('store-single', '単独店舗', 10, [
+        createMockDailyRecord('2025-01-06', '月', 120, 5000, 10, 6),
+      ]);
 
       const html = renderToString(
         <ConditionAnalysis

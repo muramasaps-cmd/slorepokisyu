@@ -42,6 +42,8 @@ const StoreComparison = React.lazy(() =>
 const ModelDeepAnalysis = React.lazy(() =>
   import('./components/ModelDeepAnalysis').then((m) => ({ default: m.ModelDeepAnalysis }))
 );
+import { ModelCrossStoreAnalysis } from './components/ModelCrossStoreAnalysis';
+import { HighPayoutCrossStoreAnalysis } from './components/HighPayoutCrossStoreAnalysis';
 const HeatmapAnalysis = React.lazy(() =>
   import('./components/HeatmapAnalysis').then((m) => ({ default: m.HeatmapAnalysis }))
 );
@@ -106,7 +108,7 @@ import {
 } from 'lucide-react';
 
 export type ActiveTab = 'overview' | 'target' | 'analysis' | 'compare' | 'validation';
-export type AnalysisSubTab = 'models' | 'conditions' | 'high_payout';
+export type AnalysisSubTab = 'models' | 'conditions' | 'high_payout' | 'compare';
 export type TargetScope = 'store' | 'all';
 export type { AnalysisScope, AnalysisPeriodMode };
 
@@ -280,12 +282,18 @@ export function parseHash(hashStr: string): ParsedHashResult {
       subTab = 'conditions';
     } else if (subParam === 'high_payout' || subParam === 'highPayout' || subParam === 'payout') {
       subTab = 'high_payout';
+    } else if (subParam === 'compare') {
+      subTab = 'compare';
+    }
+    const aParams = parseAnalysisParams();
+    if (subTab === 'compare' && !params.get('scope')) {
+      aParams.analysisScope = 'all';
     }
     return {
       tab: 'analysis',
       subTab,
       scope: 'store',
-      ...parseAnalysisParams(),
+      ...aParams,
       ...(section ? { section } : {}),
       ...(isHomeParam ? { isHome: true } : {}),
     };
@@ -311,12 +319,18 @@ export function parseHash(hashStr: string): ParsedHashResult {
     };
   }
 
-  // Store comparison tab (compare)
+  // Store comparison tab (legacy #compare -> #analysis/compare?scope=all)
   if (pathPart === 'compare') {
+    const aParams = parseAnalysisParams();
     return {
-      tab: 'compare',
+      tab: 'analysis',
+      subTab: 'compare',
       scope: 'store',
+      analysisScope: params.get('scope') === 'store' ? 'store' : (params.get('scope') === 'custom' ? 'custom' : 'all'),
+      analysisPeriod: aParams.analysisPeriod,
+      analysisStores: aParams.analysisStores,
       ...(section ? { section } : {}),
+      ...(isHomeParam ? { isHome: true } : {}),
     };
   }
 
@@ -539,12 +553,16 @@ export default function App() {
       window.location.hash = '#overview';
     } else if (tab === 'analysis') {
       const sub = options?.subTab || analysisSubTab || 'models';
+      const effScope = sub === 'compare' ? (options?.scope === 'store' ? 'store' : (analysisScope === 'store' ? 'all' : analysisScope)) : analysisScope;
+      if (sub === 'compare' && effScope !== analysisScope) {
+        setAnalysisScope(effScope);
+      }
       const params = new URLSearchParams();
       if (uniqueStores.length > 1) {
-        params.set('scope', analysisScope);
-        if (analysisScope !== 'store') {
+        params.set('scope', effScope);
+        if (effScope !== 'store') {
           params.set('period', analysisPeriod);
-          if (analysisScope === 'custom' && selectedAnalysisStoreIds.length > 0) {
+          if (effScope === 'custom' && selectedAnalysisStoreIds.length > 0) {
             params.set('stores', selectedAnalysisStoreIds.join(','));
           }
         }
@@ -552,7 +570,23 @@ export default function App() {
       const qs = params.toString();
       window.location.hash = `#analysis/${sub}${qs ? `?${qs}` : ''}`;
     } else if (tab === 'compare') {
-      window.location.hash = '#compare';
+      // Legacy tab: redirect to analysis/compare?scope=all
+      setActiveTab('analysis');
+      setAnalysisSubTab('compare');
+      const effScope = analysisScope === 'store' ? 'all' : analysisScope;
+      setAnalysisScope(effScope);
+      const params = new URLSearchParams();
+      if (uniqueStores.length > 1) {
+        params.set('scope', effScope);
+        if (effScope !== 'store') {
+          params.set('period', analysisPeriod);
+          if (effScope === 'custom' && selectedAnalysisStoreIds.length > 0) {
+            params.set('stores', selectedAnalysisStoreIds.join(','));
+          }
+        }
+      }
+      const qs = params.toString();
+      window.location.hash = `#analysis/compare${qs ? `?${qs}` : ''}`;
     } else if (tab === 'validation') {
       if (options?.section) {
         const sec = options.section.includes('model')
@@ -710,17 +744,18 @@ export default function App() {
     } else if (activeTab === 'analysis') {
       const params = new URLSearchParams();
       if (uniqueStores.length > 1) {
-        params.set('scope', analysisScope);
-        if (analysisScope !== 'store') {
+        const effScope = analysisSubTab === 'compare' ? (analysisScope === 'store' ? 'all' : analysisScope) : analysisScope;
+        params.set('scope', effScope);
+        if (effScope !== 'store') {
           params.set('period', analysisPeriod);
-          if (analysisScope === 'custom' && selectedAnalysisStoreIds.length > 0) {
+          if (effScope === 'custom' && selectedAnalysisStoreIds.length > 0) {
             params.set('stores', selectedAnalysisStoreIds.join(','));
           }
         }
       }
       const qs = params.toString();
       const targetHash = `#analysis/${analysisSubTab}${qs ? `?${qs}` : ''}`;
-      if (currentHash !== targetHash && (!currentHash.startsWith('#analysis') || currentHash.includes('home'))) {
+      if (currentHash !== targetHash && (!currentHash.startsWith('#analysis') || currentHash.includes('home') || currentHash.startsWith('#compare'))) {
         window.location.hash = targetHash;
       }
     } else {
@@ -742,9 +777,17 @@ export default function App() {
     uniqueStores.length,
   ]);
 
+  // Ensure compare subtab is not selected when only 1 store exists
+  useEffect(() => {
+    if (uniqueStores.length <= 1 && analysisSubTab === 'compare') {
+      setAnalysisSubTab('models');
+    }
+  }, [uniqueStores.length, analysisSubTab]);
+
   useEffect(() => {
     const handleHashChange = () => {
-      const parsed = parseHash(window.location.hash);
+      const currentHash = window.location.hash;
+      const parsed = parseHash(currentHash);
       setIsHome(Boolean(parsed.isHome));
       setActiveTab(parsed.tab);
       if (parsed.viewMode) {
@@ -752,6 +795,12 @@ export default function App() {
       }
       if (parsed.subTab) {
         setAnalysisSubTab(parsed.subTab);
+      }
+      if (currentHash.startsWith('#compare')) {
+        const redirectHash = '#analysis/compare?scope=all';
+        if (currentHash !== redirectHash) {
+          window.location.hash = redirectHash;
+        }
       }
       if (parsed.tab === 'target') {
         setTargetScope(parsed.scope);
@@ -1969,6 +2018,9 @@ export default function App() {
                 { id: 'models' as const, label: '機種', icon: Cpu, desc: '機種別深掘り・台番号末尾詳細分析' },
                 { id: 'conditions' as const, label: '条件別', icon: Calendar, desc: '曜日・祝日・のつく日・ゾロ目・特日・通常日' },
                 { id: 'high_payout' as const, label: '高出率台', icon: Flame, desc: '出率が高い台の特徴・投入傾向分析' },
+                ...(uniqueStores.length > 1
+                  ? [{ id: 'compare' as const, label: '店舗比較', icon: Building2, desc: '複数ホールの出玉実績・指標の横断比較' }]
+                  : []),
               ].map((sub) => {
                 const SubIcon = sub.icon;
                 const isSubActive = analysisSubTab === sub.id;
@@ -1993,26 +2045,36 @@ export default function App() {
 
             {/* Subtab 1: 機種 */}
             {analysisSubTab === 'models' && (
-              analysisScope !== 'store' ? (
-                <div
-                  data-testid="cross-store-pending-models"
-                  className="bg-white rounded-2xl border border-slate-200 p-8 sm:p-12 text-center space-y-3 shadow-2xs"
-                >
-                  <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto border border-amber-200/60">
-                    <Cpu className="w-6 h-6" />
-                  </div>
-                  <h3 className="text-base font-bold text-slate-800">店舗を横断した表示は準備中です</h3>
-                  <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
-                    複数店舗を横断した機種別分析機能は現在準備中です。店舗別の詳細を確認するには上部のスイッチで「この店」を選択してください。
-                  </p>
-                </div>
-              ) : (
-                <ModelDeepAnalysis
-                  dailyRecords={filteredDailyRecords}
+              analysisTargetStores && analysisTargetStores.length > 1 ? (
+                <ModelCrossStoreAnalysis
+                  stores={analysisTargetStores}
+                  currentStore={currentStore!}
                   perspective={perspective}
                   unit={unit}
-                  rateLend={currentStore.rateLend}
-                  rateExchange={currentStore.rateExchange}
+                  rateLend={currentStore?.rateLend}
+                  rateExchange={currentStore?.rateExchange}
+                  specialDayRules={currentStore?.specialDayRules}
+                  period={analysisPeriod === 'common' ? analysisCommonPeriod : null}
+                  onSelectStore={(id) => handleSelectStore(id)}
+                  onNavigateToConditions={handleNavigateToConditions}
+                />
+              ) : (
+                <ModelDeepAnalysis
+                  dailyRecords={
+                    analysisTargetStores && analysisTargetStores.length === 1
+                      ? (analysisPeriod === 'common' && analysisCommonPeriod?.startDate && analysisCommonPeriod?.endDate
+                          ? analysisTargetStores[0].dailyRecords.filter(
+                              (r) =>
+                                r.date >= analysisCommonPeriod.startDate! &&
+                                r.date <= analysisCommonPeriod.endDate!
+                            )
+                          : analysisTargetStores[0].dailyRecords)
+                      : filteredDailyRecords
+                  }
+                  perspective={perspective}
+                  unit={unit}
+                  rateLend={currentStore?.rateLend}
+                  rateExchange={currentStore?.rateExchange}
                   specialDayRules={currentStore?.specialDayRules}
                   globalModelPreset={modelPreset}
                   globalSelectedModelNames={selectedModelNames}
@@ -2049,19 +2111,19 @@ export default function App() {
 
             {/* Subtab 3: 高出率台 */}
             {analysisSubTab === 'high_payout' && (
-              analysisScope !== 'store' ? (
-                <div
-                  data-testid="cross-store-pending-high-payout"
-                  className="bg-white rounded-2xl border border-slate-200 p-8 sm:p-12 text-center space-y-3 shadow-2xs"
-                >
-                  <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto border border-amber-200/60">
-                    <Flame className="w-6 h-6" />
-                  </div>
-                  <h3 className="text-base font-bold text-slate-800">店舗を横断した表示は準備中です</h3>
-                  <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
-                    複数店舗を横断した高出率台分析機能は現在準備中です。店舗別の詳細を確認するには上部のスイッチで「この店」を選択してください。
-                  </p>
-                </div>
+              analysisScope !== 'store' && analysisTargetStores && analysisTargetStores.length > 1 ? (
+                <HighPayoutCrossStoreAnalysis
+                  stores={analysisTargetStores}
+                  currentStore={currentStore!}
+                  perspective={perspective}
+                  unit={unit}
+                  rateLend={rateLend}
+                  rateExchange={rateExchange}
+                  specialDayRules={currentStore?.specialDayRules}
+                  period={analysisPeriod === 'common' ? analysisCommonPeriod : null}
+                  onSelectStore={(id) => handleSelectStore(id)}
+                  onNavigateToConditions={handleNavigateToConditions}
+                />
               ) : (
                 <HighPayoutAnalysis
                   dailyRecords={filteredDailyRecords}
@@ -2069,24 +2131,23 @@ export default function App() {
                   unit={unit}
                   rateLend={rateLend}
                   rateExchange={rateExchange}
-                  oldEventDays={currentStore.oldEventDays}
-                  specialDayRules={currentStore.specialDayRules}
+                  oldEventDays={currentStore?.oldEventDays}
+                  specialDayRules={currentStore?.specialDayRules}
                   onNavigateToConditions={handleNavigateToConditions}
                 />
               )
             )}
-          </div>
-        )}
 
-        {/* TAB 4: 店舗比較 (複数ホールの横断比較) */}
-        {!isHome && activeTab === 'compare' && (
-          <div className="space-y-6 animate-in fade-in duration-150">
-            <StoreComparison
-              stores={filteredStoresByModel}
-              activeFilterLabel={activeFilterLabel}
-              isModelFilterActive={isModelFilterActive}
-              onSelectStore={(id) => handleSelectStore(id)}
-            />
+            {/* Subtab 4: 店舗比較 */}
+            {analysisSubTab === 'compare' && uniqueStores.length > 1 && (
+              <StoreComparison
+                stores={filteredStoresByModel}
+                activeFilterLabel={activeFilterLabel}
+                isModelFilterActive={isModelFilterActive}
+                onSelectStore={(id) => handleSelectStore(id)}
+                onNavigateToConditions={handleNavigateToConditions}
+              />
+            )}
           </div>
         )}
 

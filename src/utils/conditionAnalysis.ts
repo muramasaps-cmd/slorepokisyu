@@ -608,10 +608,201 @@ export function calculateConditionStats(
   });
 }
 
+export const ALL_STORES_TOTAL_STORE_ID = '__all_stores_total__';
+export const ALL_STORES_TOTAL_NAME = '全店合計';
+
 export interface StoreConditionRow {
   storeId: string;
   storeName: string;
+  isTotal?: boolean;
+  totalDays?: number;
   stats: ConditionBucketStat[];
+}
+
+/**
+ * Calculates weighted aggregate condition stats for "全店合計" across multiple stores.
+ * - 台あたり差枚 = 全台の差枚の合計 ÷ 全台の台日数
+ * - 出率 = IN加重 (Total OUT ÷ Total IN * 100)
+ * - 高出率台の率 = 高出率台数の合計 ÷ 総台数の合計 * 100
+ */
+export function calculateAllStoresTotalConditionStats(
+  storeRows: StoreConditionRow[],
+  dimension: ConditionDimension,
+  options: {
+    perspective?: 'hall' | 'player';
+  } = {}
+): ConditionBucketStat[] {
+  const { perspective = 'player' } = options;
+  const columns = getConditionColumns(dimension);
+
+  return columns.map((col) => {
+    let totalInCoins = 0;
+    let totalOutCoins = 0;
+    let totalDiffCoins = 0;
+    let totalMachineDays = 0;
+    let totalGamesMachine = 0;
+    let totalWinMachines = 0;
+    let totalMachinesForWin = 0;
+    let totalHallProfit = 0;
+    let totalPlayerProfit = 0;
+    const uniqueDates = new Set<string>();
+    const allRecords: DailyRecord[] = [];
+    let isStoreEvent = false;
+
+    storeRows.forEach((row) => {
+      if (row.isTotal) return;
+
+      const stat = row.stats.find((s) => s.key === col.key);
+      if (!stat || stat.count === 0) return;
+
+      if (stat.isStoreEvent) {
+        isStoreEvent = true;
+      }
+
+      stat.records.forEach((r) => {
+        const machs = r.totalMachines > 0 ? r.totalMachines : 500;
+        const diff =
+          r.totalDiffCoins !== undefined && r.totalDiffCoins !== 0
+            ? r.totalDiffCoins
+            : Math.round((r.avgDiffCoins || 0) * machs);
+        const games = r.avgGames || 0;
+        const inCoins =
+          r.inCoins !== undefined && r.inCoins > 0 ? r.inCoins : games * 3 * machs;
+        const outCoins =
+          r.outCoins !== undefined && r.outCoins > 0 ? r.outCoins : inCoins + diff;
+
+        totalInCoins += inCoins;
+        totalOutCoins += outCoins;
+        totalDiffCoins += diff;
+        totalMachineDays += machs;
+        totalGamesMachine += games * machs;
+
+        if (r.winMachines !== undefined && machs > 0) {
+          totalWinMachines += r.winMachines;
+          totalMachinesForWin += machs;
+        } else if (r.winRate !== undefined && machs > 0) {
+          totalWinMachines += Math.round(machs * (r.winRate / 100));
+          totalMachinesForWin += machs;
+        } else if (r.avgDiffCoins > 0) {
+          totalWinMachines += machs;
+          totalMachinesForWin += machs;
+        }
+
+        totalHallProfit +=
+          r.gModelHallProfit !== undefined ? r.gModelHallProfit : -diff * 20;
+        totalPlayerProfit +=
+          r.gModelPlayerProfit !== undefined ? r.gModelPlayerProfit : diff * 20;
+        uniqueDates.add(r.date);
+        allRecords.push(r);
+      });
+    });
+
+    const count = uniqueDates.size;
+    const isWeekend = col.key === '土' || col.key === '日';
+    const isHoliday = col.key === '祝';
+
+    if (count === 0 || totalMachineDays === 0) {
+      return {
+        key: col.key,
+        label: col.label,
+        shortLabel: col.shortLabel,
+        sampleDays: col.sampleDays,
+        count: 0,
+        isWeekend,
+        isHoliday,
+        isStoreEvent,
+        avgDiffCoins: 0,
+        payoutRate: 100,
+        highPayoutRate: 0,
+        avgGames: 0,
+        totalDiffCoins: 0,
+        totalMachines: 0,
+        totalHallProfit: 0,
+        dailyHallProfit: 0,
+        totalPlayerProfit: 0,
+        dailyPlayerProfit: 0,
+        perMachineDailyProfit: 0,
+        perMachineDailyPlayerProfit: 0,
+        playerWinDays: 0,
+        playerWinRate: 0,
+        displayDiffCoins: 0,
+        displayTotalCoins: 0,
+        displayDailyProfit: 0,
+        displayTotalProfit: 0,
+        displayPerMachineDailyProfit: 0,
+        displayPerMachineTotalProfit: 0,
+        records: [],
+      };
+    }
+
+    const avgDiffCoins = Math.round((totalDiffCoins / totalMachineDays) * 10) / 10;
+    const payoutRate =
+      totalInCoins > 0 ? Math.round((totalOutCoins / totalInCoins) * 10000) / 100 : 100;
+    const highPayoutRate =
+      totalMachinesForWin > 0
+        ? Math.round((totalWinMachines / totalMachinesForWin) * 1000) / 10
+        : 0;
+    const avgGames = Math.round(totalGamesMachine / totalMachineDays);
+
+    const dailyHallProfit = Math.round(totalHallProfit / count);
+    const dailyPlayerProfit = Math.round(totalPlayerProfit / count);
+    const avgMachines = Math.round(totalMachineDays / count);
+    const perMachineDailyProfit = avgMachines > 0 ? Math.round(dailyHallProfit / avgMachines) : 0;
+    const perMachineDailyPlayerProfit =
+      avgMachines > 0 ? Math.round(dailyPlayerProfit / avgMachines) : 0;
+
+    const playerWinDays = Array.from(uniqueDates).filter((date) => {
+      const dateRecords = allRecords.filter((r) => r.date === date);
+      const dayDiff = dateRecords.reduce(
+        (sum, r) =>
+          sum + (r.totalDiffCoins || (r.avgDiffCoins || 0) * (r.totalMachines || 500)),
+        0
+      );
+      return dayDiff > 0;
+    }).length;
+    const playerWinRate = Math.round((playerWinDays / count) * 1000) / 10;
+
+    const displayDiffCoins =
+      perspective === 'hall' ? Math.round(-avgDiffCoins * 10) / 10 : avgDiffCoins;
+    const displayTotalCoins = perspective === 'hall' ? -totalDiffCoins : totalDiffCoins;
+    const displayDailyProfit = perspective === 'hall' ? dailyHallProfit : dailyPlayerProfit;
+    const displayTotalProfit = perspective === 'hall' ? totalHallProfit : totalPlayerProfit;
+    const displayPerMachineDailyProfit =
+      perspective === 'hall' ? perMachineDailyProfit : perMachineDailyPlayerProfit;
+    const displayPerMachineTotalProfit = displayPerMachineDailyProfit * count;
+
+    return {
+      key: col.key,
+      label: col.label,
+      shortLabel: col.shortLabel,
+      sampleDays: col.sampleDays,
+      count,
+      isWeekend,
+      isHoliday,
+      isStoreEvent,
+      avgDiffCoins,
+      payoutRate,
+      highPayoutRate,
+      avgGames,
+      totalDiffCoins,
+      totalMachines: totalMachineDays,
+      totalHallProfit,
+      dailyHallProfit,
+      totalPlayerProfit,
+      dailyPlayerProfit,
+      perMachineDailyProfit,
+      perMachineDailyPlayerProfit,
+      playerWinDays,
+      playerWinRate,
+      displayDiffCoins,
+      displayTotalCoins,
+      displayDailyProfit,
+      displayTotalProfit,
+      displayPerMachineDailyProfit,
+      displayPerMachineTotalProfit,
+      records: allRecords.sort((a, b) => b.date.localeCompare(a.date)),
+    };
+  });
 }
 
 export function calculateMultiStoreConditions(
@@ -620,17 +811,20 @@ export function calculateMultiStoreConditions(
   options: {
     period?: StoreCommonPeriod | null;
     perspective?: 'hall' | 'player';
+    includeTotalRow?: boolean;
   } = {}
 ): StoreConditionRow[] {
-  const { period, perspective = 'player' } = options;
+  const { period, perspective = 'player', includeTotalRow = true } = options;
 
-  return stores.map((store) => {
+  const rows: StoreConditionRow[] = stores.map((store) => {
     let records = store.dailyRecords || [];
     if (period && period.startDate && period.endDate && period.hasCommonPeriod !== false) {
       records = records.filter(
         (r) => r.date >= period.startDate && r.date <= period.endDate
       );
     }
+
+    const totalDays = new Set(records.map((r) => r.date)).size;
 
     const stats = calculateConditionStats(records, dimension, {
       perspective,
@@ -643,7 +837,27 @@ export function calculateMultiStoreConditions(
     return {
       storeId: store.id,
       storeName: store.name,
+      totalDays,
       stats,
     };
   });
+
+  if (includeTotalRow && stores.length > 1) {
+    const totalStats = calculateAllStoresTotalConditionStats(rows, dimension, { perspective });
+    const allStoreDates = new Set<string>();
+    rows.forEach((r) => {
+      r.stats.forEach((s) => s.records.forEach((rec) => allStoreDates.add(rec.date)));
+    });
+
+    rows.push({
+      storeId: ALL_STORES_TOTAL_STORE_ID,
+      storeName: ALL_STORES_TOTAL_NAME,
+      isTotal: true,
+      totalDays: allStoreDates.size,
+      stats: totalStats,
+    });
+  }
+
+  return rows;
 }
+

@@ -333,16 +333,16 @@ export const TargetTab: React.FC<TargetTabProps> = ({
       <div id="target-step-1" data-testid="target-step-1-card" className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3.5 scroll-mt-28">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           {/* Left: Step ① Icon, Tab Title & Scope Switcher */}
-          <div className="space-y-2">
+          <div className="space-y-2 min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="w-7 h-7 rounded-lg bg-indigo-600 text-white font-black text-sm flex items-center justify-center shrink-0">
                 ①
               </span>
-              <span className="p-1.5 rounded-lg bg-amber-500/10 text-amber-600 border border-amber-500/20">
+              <span className="p-1.5 rounded-lg bg-amber-500/10 text-amber-600 border border-amber-500/20 shrink-0">
                 <Target className="w-4 h-4 text-amber-600" />
               </span>
-              <div>
-                <h2 className="text-base sm:text-lg font-black text-slate-900 tracking-tight flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <h2 className="text-base sm:text-lg font-black text-slate-900 tracking-tight flex items-center gap-2 min-w-0 break-normal">
                   <span>狙い予測</span>
                   <span className="text-xs font-normal text-slate-500 hidden sm:inline">
                     （① 来店日と範囲: この店／全店）

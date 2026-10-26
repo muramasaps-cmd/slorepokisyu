@@ -172,7 +172,7 @@ const MonthDailyBreakdown: React.FC<MonthDailyBreakdownProps> = ({
     <div className="bg-white rounded-xl border border-indigo-200 shadow-sm p-4 sm:p-5 space-y-4">
       {/* 1. Panel Header & KPI Bar */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between pb-3 border-b border-slate-200 gap-3">
-        <div>
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="bg-indigo-600 text-white text-xs font-bold px-2.5 py-1 rounded flex items-center gap-1.5 shadow-xs">
               <CalendarDays className="w-3.5 h-3.5" />

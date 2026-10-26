@@ -910,12 +910,12 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
       {/* 1. Header Banner & Filter Controls */}
       <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-4">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-100 pb-4">
-          <div className="space-y-1">
+          <div className="space-y-1 min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="p-1 rounded bg-amber-500/10 text-amber-500 border border-amber-500/20">
+              <span className="p-1 rounded bg-amber-500/10 text-amber-500 border border-amber-500/20 shrink-0">
                 <Trophy className="w-4 h-4" />
               </span>
-              <h2 className="text-base sm:text-lg font-black text-slate-900 tracking-tight">
+              <h2 className="text-base sm:text-lg font-black text-slate-900 tracking-tight min-w-0 break-normal">
                 店舗横断 狙い台・狙い機種ランキング
               </h2>
             </div>

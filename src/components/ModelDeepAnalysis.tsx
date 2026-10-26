@@ -375,16 +375,16 @@ export const ModelDeepAnalysis: React.FC<ModelDeepAnalysisProps> = ({
   return (
     <section className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden space-y-0">
       {/* Header with Title & Sub-View Switcher */}
-      <div className="p-5 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-700">
-        <div>
+      <div className="p-5 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white flex flex-col xl:flex-row xl:items-center justify-between gap-4 border-b border-slate-700">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30">
+            <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 shrink-0">
               <Cpu className="w-5 h-5" />
             </div>
-            <div>
-              <h2 className="text-base sm:text-lg font-black tracking-tight text-white flex items-center gap-2">
-                店舗分析深堀り: 機種別・台番号末尾データ
-                <span className="text-xs bg-amber-400 text-slate-950 px-2 py-0.5 rounded font-extrabold">
+            <div className="min-w-0 flex-1">
+              <h2 className="text-base sm:text-lg font-black tracking-tight text-white flex items-center gap-2 min-w-0 break-normal">
+                <span>店舗分析深堀り: 機種別・台番号末尾データ</span>
+                <span className="text-xs bg-amber-400 text-slate-950 px-2 py-0.5 rounded font-extrabold shrink-0">
                   {dailyRecords.length}日分集計
                 </span>
               </h2>

@@ -48,6 +48,8 @@ const HeatmapAnalysis = React.lazy(() =>
 import { processStoreData, aggregateStoreModels } from './utils/dataEngine';
 import { ConditionDimension } from './utils/conditionAnalysis';
 import { parseSlorepoHtml, parseRatesFromExchangeRate } from './utils/htmlParser';
+import { AnalysisScopeBar, AnalysisScope, AnalysisPeriodMode } from './components/AnalysisScopeBar';
+import { calculateCommonPeriod, StoreCommonPeriod } from './utils/storeComparison';
 import { parseSpecialDayRulesFromText } from './utils/specialDayRules';
 import { parseStoresFromBackupJson, mergeImportedStores } from './utils/storeBackup';
 import {
@@ -106,6 +108,7 @@ import {
 export type ActiveTab = 'overview' | 'target' | 'analysis' | 'compare' | 'validation';
 export type AnalysisSubTab = 'models' | 'conditions' | 'high_payout';
 export type TargetScope = 'store' | 'all';
+export type { AnalysisScope, AnalysisPeriodMode };
 
 export interface ParsedHashResult {
   tab: ActiveTab;
@@ -115,6 +118,9 @@ export interface ParsedHashResult {
   subTab?: AnalysisSubTab;
   section?: string;
   isHome?: boolean;
+  analysisScope?: AnalysisScope;
+  analysisPeriod?: AnalysisPeriodMode;
+  analysisStores?: string[];
 }
 
 export function parseHash(hashStr: string): ParsedHashResult {
@@ -126,12 +132,29 @@ export function parseHash(hashStr: string): ParsedHashResult {
   const section = params.get('section') || undefined;
   const isHomeParam = params.get('home') === 'true';
 
+  // Helper to extract analysis scope & period params
+  const parseAnalysisParams = () => {
+    const scopeParam = params.get('scope');
+    let aScope: AnalysisScope = 'store';
+    if (scopeParam === 'all') aScope = 'all';
+    else if (scopeParam === 'custom') aScope = 'custom';
+    else aScope = 'store';
+
+    const periodParam = params.get('period');
+    const aPeriod: AnalysisPeriodMode = periodParam === 'all' ? 'all' : 'common';
+
+    const storesParam = params.get('stores');
+    const aStores = storesParam ? storesParam.split(',').filter(Boolean) : undefined;
+    return { analysisScope: aScope, analysisPeriod: aPeriod, analysisStores: aStores };
+  };
+
   // Analysis / analyze home
   if (pathPart === 'analyze/home' || pathPart === 'analysis/home') {
     return {
       tab: 'analysis',
       subTab: 'models',
       scope: 'store',
+      analysisScope: 'store',
       isHome: true,
       ...(section ? { section } : {}),
     };
@@ -207,6 +230,7 @@ export function parseHash(hashStr: string): ParsedHashResult {
       tab: 'analysis',
       subTab: 'models',
       scope: 'store',
+      ...parseAnalysisParams(),
       ...(section ? { section } : {}),
       ...(isHomeParam ? { isHome: true } : {}),
     };
@@ -218,6 +242,7 @@ export function parseHash(hashStr: string): ParsedHashResult {
       tab: 'analysis',
       subTab: 'conditions',
       scope: 'store',
+      ...parseAnalysisParams(),
       ...(section ? { section } : {}),
       ...(isHomeParam ? { isHome: true } : {}),
     };
@@ -229,6 +254,7 @@ export function parseHash(hashStr: string): ParsedHashResult {
       tab: 'analysis',
       subTab: 'high_payout',
       scope: 'store',
+      ...parseAnalysisParams(),
       ...(section ? { section } : {}),
       ...(isHomeParam ? { isHome: true } : {}),
     };
@@ -243,6 +269,7 @@ export function parseHash(hashStr: string): ParsedHashResult {
         tab: 'analysis',
         subTab: 'models',
         scope: 'store',
+        analysisScope: 'store',
         isHome: true,
         ...(section ? { section } : {}),
       };
@@ -258,6 +285,7 @@ export function parseHash(hashStr: string): ParsedHashResult {
       tab: 'analysis',
       subTab,
       scope: 'store',
+      ...parseAnalysisParams(),
       ...(section ? { section } : {}),
       ...(isHomeParam ? { isHome: true } : {}),
     };
@@ -385,6 +413,19 @@ export default function App() {
   const [activeSection, setActiveSection] = useState<string | undefined>(
     initialHashInfo.section
   );
+  const [analysisScope, setAnalysisScope] = useState<AnalysisScope>(
+    initialHashInfo.analysisScope || 'store'
+  );
+  const [analysisPeriod, setAnalysisPeriod] = useState<AnalysisPeriodMode>(
+    initialHashInfo.analysisPeriod || 'common'
+  );
+  const [selectedAnalysisStoreIds, setSelectedAnalysisStoreIds] = useState<string[]>(() => {
+    if (initialHashInfo.analysisStores && initialHashInfo.analysisStores.length > 0) {
+      return initialHashInfo.analysisStores;
+    }
+    const saved = getSavedStores();
+    return saved.map((s) => s.id);
+  });
   const [skipHome, setSkipHome] = useState<boolean>(() => getSkipPurposeHome());
   const [isHome, setIsHome] = useState<boolean>(() => Boolean(initialHashInfo.isHome));
   const [lastAnalyzeTab, setLastAnalyzeTab] = useState<ActiveTab>('overview');
@@ -498,7 +539,18 @@ export default function App() {
       window.location.hash = '#overview';
     } else if (tab === 'analysis') {
       const sub = options?.subTab || analysisSubTab || 'models';
-      window.location.hash = `#analysis/${sub}`;
+      const params = new URLSearchParams();
+      if (uniqueStores.length > 1) {
+        params.set('scope', analysisScope);
+        if (analysisScope !== 'store') {
+          params.set('period', analysisPeriod);
+          if (analysisScope === 'custom' && selectedAnalysisStoreIds.length > 0) {
+            params.set('stores', selectedAnalysisStoreIds.join(','));
+          }
+        }
+      }
+      const qs = params.toString();
+      window.location.hash = `#analysis/${sub}${qs ? `?${qs}` : ''}`;
     } else if (tab === 'compare') {
       window.location.hash = '#compare';
     } else if (tab === 'validation') {
@@ -557,6 +609,81 @@ export default function App() {
     }
   };
 
+  const handleAnalysisScopeChange = (newScope: AnalysisScope) => {
+    setAnalysisScope(newScope);
+    const params = new URLSearchParams();
+    if (uniqueStores.length > 1) {
+      params.set('scope', newScope);
+      if (newScope !== 'store') {
+        params.set('period', analysisPeriod);
+        if (newScope === 'custom' && selectedAnalysisStoreIds.length > 0) {
+          params.set('stores', selectedAnalysisStoreIds.join(','));
+        }
+      }
+    }
+    const qs = params.toString();
+    window.location.hash = `#analysis/${analysisSubTab}${qs ? `?${qs}` : ''}`;
+  };
+
+  const handleAnalysisPeriodChange = (newPeriod: AnalysisPeriodMode) => {
+    setAnalysisPeriod(newPeriod);
+    const params = new URLSearchParams();
+    if (uniqueStores.length > 1) {
+      params.set('scope', analysisScope);
+      if (analysisScope !== 'store') {
+        params.set('period', newPeriod);
+        if (analysisScope === 'custom' && selectedAnalysisStoreIds.length > 0) {
+          params.set('stores', selectedAnalysisStoreIds.join(','));
+        }
+      }
+    }
+    const qs = params.toString();
+    window.location.hash = `#analysis/${analysisSubTab}${qs ? `?${qs}` : ''}`;
+  };
+
+  const handleToggleAnalysisStoreId = (storeId: string) => {
+    setSelectedAnalysisStoreIds((prev) => {
+      const next = prev.includes(storeId)
+        ? prev.filter((id) => id !== storeId)
+        : [...prev, storeId];
+      const params = new URLSearchParams();
+      if (uniqueStores.length > 1) {
+        params.set('scope', 'custom');
+        params.set('period', analysisPeriod);
+        if (next.length > 0) {
+          params.set('stores', next.join(','));
+        }
+      }
+      const qs = params.toString();
+      window.location.hash = `#analysis/${analysisSubTab}${qs ? `?${qs}` : ''}`;
+      return next;
+    });
+  };
+
+  const handleSelectAllAnalysisStores = () => {
+    const allIds = uniqueStores.map((s) => s.id);
+    setSelectedAnalysisStoreIds(allIds);
+    const params = new URLSearchParams();
+    if (uniqueStores.length > 1) {
+      params.set('scope', 'custom');
+      params.set('period', analysisPeriod);
+      params.set('stores', allIds.join(','));
+    }
+    const qs = params.toString();
+    window.location.hash = `#analysis/${analysisSubTab}${qs ? `?${qs}` : ''}`;
+  };
+
+  const handleClearAnalysisStores = () => {
+    setSelectedAnalysisStoreIds([]);
+    const params = new URLSearchParams();
+    if (uniqueStores.length > 1) {
+      params.set('scope', 'custom');
+      params.set('period', analysisPeriod);
+    }
+    const qs = params.toString();
+    window.location.hash = `#analysis/${analysisSubTab}${qs ? `?${qs}` : ''}`;
+  };
+
   // Synchronize activeTab, targetScope, targetDate, and analysisSubTab with URL hash (also migrates legacy URLs)
   useEffect(() => {
     const currentHash = window.location.hash;
@@ -581,12 +708,20 @@ export default function App() {
         window.location.hash = newHash;
       }
     } else if (activeTab === 'analysis') {
-      const validHashes = [
-        `#analysis/${analysisSubTab}`,
-        `#analysis?sub=${analysisSubTab}`,
-      ];
-      if (!validHashes.includes(currentHash)) {
-        window.location.hash = `#analysis/${analysisSubTab}`;
+      const params = new URLSearchParams();
+      if (uniqueStores.length > 1) {
+        params.set('scope', analysisScope);
+        if (analysisScope !== 'store') {
+          params.set('period', analysisPeriod);
+          if (analysisScope === 'custom' && selectedAnalysisStoreIds.length > 0) {
+            params.set('stores', selectedAnalysisStoreIds.join(','));
+          }
+        }
+      }
+      const qs = params.toString();
+      const targetHash = `#analysis/${analysisSubTab}${qs ? `?${qs}` : ''}`;
+      if (currentHash !== targetHash && (!currentHash.startsWith('#analysis') || currentHash.includes('home'))) {
+        window.location.hash = targetHash;
       }
     } else {
       const currentTab = currentHash.replace('#', '').split('?')[0].split('&')[0];
@@ -594,7 +729,18 @@ export default function App() {
         window.location.hash = `#${activeTab}`;
       }
     }
-  }, [isHome, activeTab, targetScope, targetDate, analysisSubTab, activeSection]);
+  }, [
+    isHome,
+    activeTab,
+    targetScope,
+    targetDate,
+    analysisSubTab,
+    activeSection,
+    analysisScope,
+    analysisPeriod,
+    selectedAnalysisStoreIds,
+    uniqueStores.length,
+  ]);
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -612,6 +758,15 @@ export default function App() {
         if (parsed.date) {
           setTargetDate(parsed.date);
         }
+      }
+      if (parsed.analysisScope) {
+        setAnalysisScope(parsed.analysisScope);
+      }
+      if (parsed.analysisPeriod) {
+        setAnalysisPeriod(parsed.analysisPeriod);
+      }
+      if (parsed.analysisStores && parsed.analysisStores.length > 0) {
+        setSelectedAnalysisStoreIds(parsed.analysisStores);
       }
       setActiveSection(parsed.section);
       if (parsed.section) {
@@ -839,6 +994,27 @@ export default function App() {
       };
     });
   }, [uniqueStores, isModelFilterActive, modelPreset, selectedModelNames]);
+
+  // Selected stores for analysis tab (undefined when scope === 'store' so single-store mode is retained)
+  const analysisTargetStores = useMemo(() => {
+    if (analysisScope === 'store' || uniqueStores.length <= 1) {
+      return undefined;
+    }
+    if (analysisScope === 'all') {
+      return filteredStoresByModel;
+    }
+    // custom
+    const selected = filteredStoresByModel.filter((s) =>
+      selectedAnalysisStoreIds.includes(s.id)
+    );
+    return selected.length > 0 ? selected : (currentStore ? [currentStore] : filteredStoresByModel);
+  }, [analysisScope, uniqueStores.length, filteredStoresByModel, selectedAnalysisStoreIds, currentStore]);
+
+  // Common period for analysis tab
+  const analysisCommonPeriod = useMemo(() => {
+    const target = analysisTargetStores || (currentStore ? [currentStore] : uniqueStores);
+    return calculateCommonPeriod(target);
+  }, [analysisTargetStores, currentStore, uniqueStores]);
 
   // Available years from active store's data
   const years = useMemo(() => {
@@ -1772,6 +1948,21 @@ export default function App() {
         {/* TAB 3: 分析 (サブタブ: 機種／条件別／高出率台) */}
         {!isHome && activeTab === 'analysis' && (
           <div className="space-y-4 sm:space-y-6 animate-in fade-in duration-150">
+            {/* AnalysisScopeBar placed ABOVE subtabs switcher */}
+            <AnalysisScopeBar
+              stores={uniqueStores}
+              currentStore={currentStore}
+              scope={analysisScope}
+              onScopeChange={handleAnalysisScopeChange}
+              selectedStoreIds={selectedAnalysisStoreIds}
+              onToggleStoreId={handleToggleAnalysisStoreId}
+              onSelectAllStores={handleSelectAllAnalysisStores}
+              onClearStores={handleClearAnalysisStores}
+              periodMode={analysisPeriod}
+              onPeriodModeChange={handleAnalysisPeriodChange}
+              commonPeriod={analysisCommonPeriod}
+            />
+
             {/* Subtabs Switcher for 分析 */}
             <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200/80 shadow-2xs self-start text-xs sm:text-sm">
               {[
@@ -1802,27 +1993,44 @@ export default function App() {
 
             {/* Subtab 1: 機種 */}
             {analysisSubTab === 'models' && (
-              <ModelDeepAnalysis
-                dailyRecords={filteredDailyRecords}
-                perspective={perspective}
-                unit={unit}
-                rateLend={currentStore.rateLend}
-                rateExchange={currentStore.rateExchange}
-                specialDayRules={currentStore?.specialDayRules}
-                globalModelPreset={modelPreset}
-                globalSelectedModelNames={selectedModelNames}
-                activeFilterLabel={activeFilterLabel}
-                onSelectPreset={handleSelectModelPreset}
-                onOpenModelModal={() => setIsMultiSelectModalOpen(true)}
-                onToggleModel={handleToggleModelInSelection}
-                onNavigateToConditions={handleNavigateToConditions}
-              />
+              analysisScope !== 'store' ? (
+                <div
+                  data-testid="cross-store-pending-models"
+                  className="bg-white rounded-2xl border border-slate-200 p-8 sm:p-12 text-center space-y-3 shadow-2xs"
+                >
+                  <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto border border-amber-200/60">
+                    <Cpu className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-base font-bold text-slate-800">店舗を横断した表示は準備中です</h3>
+                  <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                    複数店舗を横断した機種別分析機能は現在準備中です。店舗別の詳細を確認するには上部のスイッチで「この店」を選択してください。
+                  </p>
+                </div>
+              ) : (
+                <ModelDeepAnalysis
+                  dailyRecords={filteredDailyRecords}
+                  perspective={perspective}
+                  unit={unit}
+                  rateLend={currentStore.rateLend}
+                  rateExchange={currentStore.rateExchange}
+                  specialDayRules={currentStore?.specialDayRules}
+                  globalModelPreset={modelPreset}
+                  globalSelectedModelNames={selectedModelNames}
+                  activeFilterLabel={activeFilterLabel}
+                  onSelectPreset={handleSelectModelPreset}
+                  onOpenModelModal={() => setIsMultiSelectModalOpen(true)}
+                  onToggleModel={handleToggleModelInSelection}
+                  onNavigateToConditions={handleNavigateToConditions}
+                />
+              )
             )}
 
             {/* Subtab 2: 条件別 */}
             {analysisSubTab === 'conditions' && (
               <ConditionAnalysis
                 dailyRecords={filteredDailyRecords}
+                stores={analysisTargetStores}
+                currentStoreName={currentStore.name}
                 perspective={perspective}
                 unit={unit}
                 setUnit={setUnit}
@@ -1831,21 +2039,41 @@ export default function App() {
                 onSelectDate={(ym) => setSelectedMonthModal(ym)}
                 dimension={conditionDimension}
                 onDimensionChange={setConditionDimension}
+                period={
+                  analysisTargetStores && analysisPeriod === 'common'
+                    ? analysisCommonPeriod
+                    : null
+                }
               />
             )}
 
             {/* Subtab 3: 高出率台 */}
             {analysisSubTab === 'high_payout' && (
-              <HighPayoutAnalysis
-                dailyRecords={filteredDailyRecords}
-                perspective={perspective}
-                unit={unit}
-                rateLend={rateLend}
-                rateExchange={rateExchange}
-                oldEventDays={currentStore.oldEventDays}
-                specialDayRules={currentStore.specialDayRules}
-                onNavigateToConditions={handleNavigateToConditions}
-              />
+              analysisScope !== 'store' ? (
+                <div
+                  data-testid="cross-store-pending-high-payout"
+                  className="bg-white rounded-2xl border border-slate-200 p-8 sm:p-12 text-center space-y-3 shadow-2xs"
+                >
+                  <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto border border-amber-200/60">
+                    <Flame className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-base font-bold text-slate-800">店舗を横断した表示は準備中です</h3>
+                  <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                    複数店舗を横断した高出率台分析機能は現在準備中です。店舗別の詳細を確認するには上部のスイッチで「この店」を選択してください。
+                  </p>
+                </div>
+              ) : (
+                <HighPayoutAnalysis
+                  dailyRecords={filteredDailyRecords}
+                  perspective={perspective}
+                  unit={unit}
+                  rateLend={rateLend}
+                  rateExchange={rateExchange}
+                  oldEventDays={currentStore.oldEventDays}
+                  specialDayRules={currentStore.specialDayRules}
+                  onNavigateToConditions={handleNavigateToConditions}
+                />
+              )
             )}
           </div>
         )}

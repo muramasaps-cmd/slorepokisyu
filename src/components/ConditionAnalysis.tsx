@@ -24,8 +24,17 @@ import {
   getConditionHeatmapColor,
   calculateConditionStats,
   calculateMultiStoreConditions,
+  calculateAllStoresTotalConditionStats,
+  ALL_STORES_TOTAL_STORE_ID,
+  ALL_STORES_TOTAL_NAME,
   StoreConditionRow,
 } from '../utils/conditionAnalysis';
+import {
+  STORE_COLORS,
+  getStoreColor,
+  ALL_STORES_COLOR,
+  ALL_STORES_NAME,
+} from '../utils/storeColors';
 import { SpecialDayPatterns } from './SpecialDayPatterns';
 import {
   Calendar,
@@ -56,6 +65,7 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
+  Legend,
   ReferenceLine,
   Cell,
 } from 'recharts';
@@ -154,15 +164,34 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
   >('rank');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
-  const [selectedStoreIndex, setSelectedStoreIndex] = useState<number>(0);
+  const [selectedStoreIndex, setSelectedStoreIndex] = useState<number>(() => {
+    return stores && stores.length > 1 ? -1 : 0;
+  });
+  const [chartMode, setChartMode] = useState<'multi' | 'single'>('multi');
 
   const isHall = perspective === 'hall';
   const isMultiStore = Boolean(stores && stores.length >= 1);
 
-  // Single store bucket stats (or selected store in multi-store mode)
+  // Multi-store row data (includes each store and weighted '全店合計' row when stores > 1)
+  const multiStoreRows: StoreConditionRow[] = useMemo(() => {
+    if (!stores || stores.length === 0) return [];
+    return calculateMultiStoreConditions(stores, currentDimension, {
+      period,
+      perspective,
+      includeTotalRow: true,
+    });
+  }, [stores, currentDimension, period, perspective]);
+
+  // Single store bucket stats (or selected store in multi-store mode, or all-stores total)
   const singleStats: ConditionBucketStat[] = useMemo(() => {
     if (isMultiStore && stores && stores.length > 0) {
-      const targetStore = stores[selectedStoreIndex] || stores[0];
+      if (selectedStoreIndex === -1 && stores.length > 1) {
+        const totalRow = multiStoreRows.find((r) => r.isTotal);
+        if (totalRow) return totalRow.stats;
+        return calculateAllStoresTotalConditionStats(multiStoreRows, currentDimension, { perspective });
+      }
+      const targetIdx = selectedStoreIndex >= 0 ? selectedStoreIndex : 0;
+      const targetStore = stores[targetIdx] || stores[0];
       let recs = targetStore.dailyRecords || [];
       if (period && period.startDate && period.endDate && period.hasCommonPeriod !== false) {
         recs = recs.filter((r) => r.date >= period.startDate! && r.date <= period.endDate!);
@@ -184,6 +213,7 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
     isMultiStore,
     stores,
     selectedStoreIndex,
+    multiStoreRows,
     period,
     dailyRecords,
     currentDimension,
@@ -192,14 +222,15 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
     specialDayRules,
   ]);
 
-  // Multi-store row data
-  const multiStoreRows: StoreConditionRow[] = useMemo(() => {
-    if (!stores || stores.length === 0) return [];
-    return calculateMultiStoreConditions(stores, currentDimension, {
-      period,
-      perspective,
-    });
-  }, [stores, currentDimension, period, perspective]);
+  const activeSelectedStoreName = useMemo(() => {
+    if (isMultiStore && stores && stores.length > 1) {
+      if (selectedStoreIndex === -1) {
+        return ALL_STORES_TOTAL_NAME;
+      }
+      return stores[selectedStoreIndex]?.name || currentStoreName;
+    }
+    return currentStoreName;
+  }, [isMultiStore, stores, selectedStoreIndex, currentStoreName]);
 
   // Ranking calculation for single stats
   const rankedSingleStats = useMemo(() => {
@@ -506,16 +537,148 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
     return stat.highPayoutRate;
   };
 
+  // Multi-Store Comparison Chart Tooltip
+  const MultiStoreChartTooltip = ({ active, payload, label }: any) => {
+    if (active && payload && payload.length) {
+      const p0 = payload[0]?.payload;
+      const conditionLabel = p0?.label || label;
+      return (
+        <div className="bg-slate-900/95 text-white p-3 rounded-lg shadow-xl border border-slate-700 text-xs min-w-[220px] backdrop-blur-xs space-y-2">
+          <div className="font-bold text-sm text-indigo-300 border-b border-slate-700 pb-1 flex items-center justify-between">
+            <span>{conditionLabel}</span>
+            <span className="text-[10px] text-slate-400">
+              {currentMetric === 'avgDiff'
+                ? '台あたり差枚'
+                : currentMetric === 'payoutRate'
+                ? '出率(機械割)'
+                : '高出率台の率'}
+            </span>
+          </div>
+          <div className="space-y-1 pt-0.5">
+            {payload.map((entry: any) => {
+              const val = entry.value;
+              if (val === null || val === undefined) return null;
+              const isTotal = entry.name === ALL_STORES_NAME;
+              let formattedVal = '';
+              if (currentMetric === 'payoutRate' || currentMetric === 'highPayoutRate') {
+                formattedVal = `${Number(val).toFixed(2)}%`;
+              } else if (unit === 'yen') {
+                formattedVal = formatYen(val);
+              } else {
+                formattedVal = `${val >= 0 ? '+' : ''}${val}枚/台`;
+              }
+
+              return (
+                <div
+                  key={entry.name}
+                  className={`flex items-center justify-between gap-3 text-xs ${
+                    isTotal ? 'font-bold border-t border-slate-700/80 pt-1 text-slate-100' : ''
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span
+                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: entry.color || entry.fill || entry.stroke }}
+                    />
+                    <span className="truncate max-w-[130px]">{entry.name}:</span>
+                  </div>
+                  <span
+                    className="font-mono font-bold shrink-0"
+                    style={{ color: isTotal ? '#ffffff' : entry.color }}
+                  >
+                    {formattedVal}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  const multiStoreChartData = useMemo(() => {
+    if (!isMultiStore || !stores || stores.length <= 1) return [];
+
+    return columns.map((col) => {
+      const entry: Record<string, any> = {
+        key: col.key,
+        label: col.label,
+        shortLabel: col.shortLabel,
+      };
+
+      // Each store
+      stores.forEach((s) => {
+        const sRow = multiStoreRows.find((r) => r.storeId === s.id);
+        const sStat = sRow?.stats.find((st) => st.key === col.key);
+        if (sStat && sStat.count > 0) {
+          entry[s.name] = getMetricRawValue(sStat, currentMetric);
+        } else {
+          entry[s.name] = null;
+        }
+      });
+
+      // All-stores total
+      const totalRow = multiStoreRows.find((r) => r.isTotal);
+      const totalStat = totalRow?.stats.find((st) => st.key === col.key);
+      if (totalStat && totalStat.count > 0) {
+        entry[ALL_STORES_NAME] = getMetricRawValue(totalStat, currentMetric);
+      } else {
+        entry[ALL_STORES_NAME] = null;
+      }
+
+      return entry;
+    });
+  }, [isMultiStore, stores, columns, multiStoreRows, currentMetric, isHall]);
+
+  const tableTotal = useMemo(() => {
+    const valid = singleStats.filter((d) => d.count > 0);
+    if (valid.length === 0) {
+      return {
+        avgDiff: 0,
+        dailyProfit: 0,
+        avgGames: 0,
+        payoutRate: 100,
+        winRate: 0,
+      };
+    }
+    const totalMachDays = valid.reduce(
+      (acc, d) => acc + (d.totalMachines || d.count * 500),
+      0
+    );
+    const totalDiff = valid.reduce((acc, d) => acc + d.displayTotalCoins, 0);
+    const totalDailyProfit = Math.round(
+      valid.reduce((acc, d) => acc + d.displayDailyProfit, 0) / valid.length
+    );
+    const avgDiff =
+      totalMachDays > 0 ? Math.round((totalDiff / totalMachDays) * 10) / 10 : 0;
+    const avgGames = Math.round(
+      valid.reduce((acc, d) => acc + d.avgGames, 0) / valid.length
+    );
+    const payoutRate =
+      valid.reduce((acc, d) => acc + d.payoutRate, 0) / valid.length;
+    const winRate =
+      valid.reduce((acc, d) => acc + d.playerWinRate, 0) / valid.length;
+    return {
+      avgDiff,
+      dailyProfit: totalDailyProfit,
+      avgGames,
+      payoutRate: Math.round(payoutRate * 100) / 100,
+      winRate: Math.round(winRate * 10) / 10,
+    };
+  }, [singleStats]);
+
   return (
     <div
       id={`condition-analysis-${currentDimension}`}
       className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-4"
     >
       {/* Header & Controls */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-100 pb-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <div className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600">
+      <div className="flex flex-col gap-3.5 border-b border-slate-100 pb-4">
+        <div className="w-full min-w-0 space-y-1">
+          <div className="flex items-start gap-2.5">
+            <div className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600 shrink-0 mt-0.5">
               {currentDimension === 'dow' ? (
                 <Calendar className="w-5 h-5" />
               ) : currentDimension === 'tail' ? (
@@ -526,10 +689,12 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                 <Hash className="w-5 h-5" />
               )}
             </div>
-            <h2 className="text-base sm:text-lg font-bold text-slate-900 flex items-center gap-2">
-              <span>{titleText}</span>
+            <div className="min-w-0 flex-1">
+              <h2 className="text-base sm:text-lg font-bold text-slate-900 min-w-0 break-normal">
+                {titleText}
+              </h2>
               {!isMultiStore && (
-                <span className="text-xs font-normal text-slate-500">
+                <div className="text-xs font-normal text-slate-500 mt-0.5">
                   {currentDimension === 'dow'
                     ? '(月〜日曜日 & 国民の祝日)'
                     : currentDimension === 'tail'
@@ -537,171 +702,191 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                     : currentDimension === 'special'
                     ? '(特日 vs 通常日 & 前日・翌日)'
                     : '(末尾0〜9 & 末尾ゾロ目)'}
-                </span>
+                </div>
               )}
-            </h2>
+            </div>
           </div>
           <p className="text-xs text-slate-500 mt-1 leading-relaxed">{descriptionText}</p>
         </div>
 
         {/* Global Switchers */}
         {!hideControls && (
-          <div className="flex flex-wrap items-center gap-2 shrink-0 self-start lg:self-auto text-xs">
+          <div className="flex flex-wrap items-center gap-2 w-full text-xs">
             {/* 1. Dimension Switcher (切り口: 曜日・祝日 / のつく日・ゾロ目 / 特日／通常日 / 末尾) */}
             {!fixedDimension && (
-              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl font-bold">
-                <button
-                  type="button"
-                  onClick={() => handleDimensionChange('dow')}
-                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
-                    currentDimension === 'dow'
-                      ? 'bg-white text-indigo-700 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <Calendar className="w-3.5 h-3.5" />
-                  曜日・祝日
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDimensionChange('tail')}
-                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
-                    currentDimension === 'tail'
-                      ? 'bg-white text-indigo-700 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <CalendarDays className="w-3.5 h-3.5" />
-                  のつく日・ゾロ目
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDimensionChange('special')}
-                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
-                    currentDimension === 'special'
-                      ? 'bg-white text-indigo-700 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  特日／通常日
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDimensionChange('machineTail')}
-                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
-                    currentDimension === 'machineTail'
-                      ? 'bg-white text-indigo-700 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <Hash className="w-3.5 h-3.5" />
-                  末尾
-                </button>
+              <div className="flex items-center gap-1.5">
+                <span className="text-2xs font-bold text-slate-400 select-none hidden sm:inline">
+                  切り口:
+                </span>
+                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl font-bold">
+                  <button
+                    type="button"
+                    onClick={() => handleDimensionChange('dow')}
+                    className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                      currentDimension === 'dow'
+                        ? 'bg-white text-indigo-700 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Calendar className="w-3.5 h-3.5" />
+                    曜日・祝日
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDimensionChange('tail')}
+                    className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                      currentDimension === 'tail'
+                        ? 'bg-white text-indigo-700 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <CalendarDays className="w-3.5 h-3.5" />
+                    のつく日・ゾロ目
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDimensionChange('special')}
+                    className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                      currentDimension === 'special'
+                        ? 'bg-white text-indigo-700 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    特日／通常日
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDimensionChange('machineTail')}
+                    className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                      currentDimension === 'machineTail'
+                        ? 'bg-white text-indigo-700 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Hash className="w-3.5 h-3.5" />
+                    末尾
+                  </button>
+                </div>
               </div>
             )}
 
             {/* 2. Metric Switcher (指標: 台あたり差枚 / 出率 / 高出率台の率) */}
-            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl font-bold">
-              <button
-                type="button"
-                onClick={() => handleMetricChange('avgDiff')}
-                className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
-                  currentMetric === 'avgDiff'
-                    ? 'bg-white text-indigo-700 shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Coins className="w-3.5 h-3.5" />
-                台あたり差枚
-              </button>
-              <button
-                type="button"
-                onClick={() => handleMetricChange('payoutRate')}
-                className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
-                  currentMetric === 'payoutRate'
-                    ? 'bg-white text-indigo-700 shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Percent className="w-3.5 h-3.5" />
-                出率(機械割)
-              </button>
-              <button
-                type="button"
-                onClick={() => handleMetricChange('highPayoutRate')}
-                className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
-                  currentMetric === 'highPayoutRate'
-                    ? 'bg-white text-indigo-700 shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <TrendingUp className="w-3.5 h-3.5" />
-                高出率台の率
-              </button>
+            <div className="flex items-center gap-1.5">
+              <span className="text-2xs font-bold text-slate-400 select-none hidden sm:inline">
+                指標:
+              </span>
+              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl font-bold">
+                <button
+                  type="button"
+                  onClick={() => handleMetricChange('avgDiff')}
+                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                    currentMetric === 'avgDiff'
+                      ? 'bg-white text-indigo-700 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Coins className="w-3.5 h-3.5" />
+                  台あたり差枚
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleMetricChange('payoutRate')}
+                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                    currentMetric === 'payoutRate'
+                      ? 'bg-white text-indigo-700 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Percent className="w-3.5 h-3.5" />
+                  出率(機械割)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleMetricChange('highPayoutRate')}
+                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                    currentMetric === 'highPayoutRate'
+                      ? 'bg-white text-indigo-700 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <TrendingUp className="w-3.5 h-3.5" />
+                  高出率台の率
+                </button>
+              </div>
             </div>
 
             {/* 3. View Mode Switcher (表示: ヒートマップ / 表 / グラフ) */}
-            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl font-bold">
-              <button
-                type="button"
-                onClick={() => handleViewModeChange('heatmap')}
-                className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
-                  currentViewMode === 'heatmap'
-                    ? 'bg-white text-indigo-700 shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <LayoutGrid className="w-3.5 h-3.5" />
-                ヒートマップ
-              </button>
-              <button
-                type="button"
-                onClick={() => handleViewModeChange('table')}
-                className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
-                  currentViewMode === 'table'
-                    ? 'bg-white text-indigo-700 shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <TableIcon className="w-3.5 h-3.5" />
-                表
-              </button>
-              <button
-                type="button"
-                onClick={() => handleViewModeChange('chart')}
-                className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
-                  currentViewMode === 'chart'
-                    ? 'bg-white text-indigo-700 shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <BarChart2 className="w-3.5 h-3.5" />
-                グラフ
-              </button>
+            <div className="flex items-center gap-1.5">
+              <span className="text-2xs font-bold text-slate-400 select-none hidden sm:inline">
+                表示:
+              </span>
+              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl font-bold">
+                <button
+                  type="button"
+                  onClick={() => handleViewModeChange('heatmap')}
+                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                    currentViewMode === 'heatmap'
+                      ? 'bg-white text-indigo-700 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                  ヒートマップ
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleViewModeChange('table')}
+                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                    currentViewMode === 'table'
+                      ? 'bg-white text-indigo-700 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <TableIcon className="w-3.5 h-3.5" />
+                  表
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleViewModeChange('chart')}
+                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                    currentViewMode === 'chart'
+                      ? 'bg-white text-indigo-700 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <BarChart2 className="w-3.5 h-3.5" />
+                  グラフ
+                </button>
+              </div>
             </div>
 
             {/* Optional Unit Mode Switcher */}
             {setUnit && (
-              <div className="hidden sm:flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-2xs font-semibold">
-                <button
-                  type="button"
-                  onClick={() => setUnit('yen')}
-                  className={`px-2 py-1 rounded-md transition-all cursor-pointer ${
-                    unit === 'yen' ? 'bg-white text-indigo-700 shadow-2xs font-bold' : 'text-slate-600'
-                  }`}
-                >
-                  円表記
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setUnit('coins')}
-                  className={`px-2 py-1 rounded-md transition-all cursor-pointer ${
-                    unit === 'coins' ? 'bg-white text-indigo-700 shadow-2xs font-bold' : 'text-slate-600'
-                  }`}
-                >
-                  枚数
-                </button>
+              <div className="hidden sm:flex items-center gap-1.5">
+                <span className="text-2xs font-bold text-slate-400 select-none">
+                  単位:
+                </span>
+                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-2xs font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => setUnit('yen')}
+                    className={`px-2 py-1 rounded-md transition-all cursor-pointer ${
+                      unit === 'yen' ? 'bg-white text-indigo-700 shadow-2xs font-bold' : 'text-slate-600'
+                    }`}
+                  >
+                    円表記
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setUnit('coins')}
+                    className={`px-2 py-1 rounded-md transition-all cursor-pointer ${
+                      unit === 'coins' ? 'bg-white text-indigo-700 shadow-2xs font-bold' : 'text-slate-600'
+                    }`}
+                  >
+                    枚数
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -738,9 +923,37 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                         : null;
 
                     return (
-                      <tr key={row.storeId} className="hover:bg-slate-50">
-                        <td className="p-2.5 text-left font-bold text-slate-900 sticky left-0 bg-white hover:bg-slate-50 z-10 whitespace-nowrap">
-                          {row.storeName}
+                      <tr
+                        key={row.storeId}
+                        className={
+                          row.isTotal
+                            ? 'bg-slate-100/90 font-bold border-t-2 border-slate-300'
+                            : 'hover:bg-slate-50'
+                        }
+                      >
+                        <td
+                          className={`p-2.5 text-left sticky left-0 z-10 whitespace-nowrap ${
+                            row.isTotal
+                              ? 'bg-slate-100 font-black text-slate-900 border-t-2 border-slate-300'
+                              : 'bg-white hover:bg-slate-50 font-bold text-slate-900'
+                          }`}
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className="w-2.5 h-2.5 rounded-full shrink-0"
+                              style={{
+                                backgroundColor: row.isTotal
+                                  ? ALL_STORES_COLOR
+                                  : getStoreColor(row.storeId, stores),
+                              }}
+                            />
+                            <span className={row.isTotal ? 'font-black' : ''}>{row.storeName}</span>
+                            {row.totalDays !== undefined && (
+                              <span className="text-[10px] font-normal text-slate-500 shrink-0">
+                                ({row.totalDays}日)
+                              </span>
+                            )}
+                          </div>
                         </td>
                         {columns.map((col) => {
                           const stat =
@@ -766,6 +979,18 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                           const tooltipText =
                             stat.count === 0
                               ? `${row.storeName} - ${col.label}: 該当日なし`
+                              : row.isTotal
+                              ? `【${row.storeName} - ${col.label}】\n・集計店舗数: ${stores?.length || 0}店舗\n・該当日数: ${stat.count}日\n・総差枚: ${
+                                  stat.totalDiffCoins >= 0 ? '+' : ''
+                                }${formatNumber(stat.totalDiffCoins)}枚\n・総台数: ${formatNumber(
+                                  stat.totalMachines
+                                )}台\n・台あたり平均差枚: ${
+                                  stat.avgDiffCoins >= 0 ? '+' : ''
+                                }${stat.avgDiffCoins}枚/台\n・出玉率(IN加重): ${stat.payoutRate.toFixed(
+                                  2
+                                )}%\n・勝率: ${stat.highPayoutRate.toFixed(1)}%${
+                                  few ? '\n※3日未満のため参考値' : ''
+                                }`
                               : `【${row.storeName} - ${col.label}】\n・該当日数: ${stat.count}日\n・総差枚: ${
                                   stat.totalDiffCoins >= 0 ? '+' : ''
                                 }${formatNumber(stat.totalDiffCoins)}枚\n・総台数: ${formatNumber(
@@ -779,7 +1004,10 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                                 }`;
 
                           return (
-                            <td key={col.key} className="p-1 sm:p-1.5">
+                            <td
+                              key={col.key}
+                              className={`p-1 sm:p-1.5 ${row.isTotal ? 'border-t-2 border-slate-300' : ''}`}
+                            >
                               <div
                                 title={tooltipText}
                                 className={`p-2 rounded-lg text-xs relative transition-all select-none ${bgClass} ${
@@ -788,9 +1016,9 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                                   isMax
                                     ? 'ring-2 ring-indigo-600 ring-offset-1 font-black shadow-xs'
                                     : ''
-                                }`}
+                                } ${row.isTotal ? 'border border-slate-300/80 font-bold' : ''}`}
                               >
-                                <div className={isMax ? 'font-black' : ''}>
+                                <div className={isMax || row.isTotal ? 'font-black' : ''}>
                                   {getMetricDisplayValue(stat as ConditionBucketStat, currentMetric)}
                                 </div>
                                 {few && (
@@ -905,139 +1133,245 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
         <div className="space-y-4">
           {isMultiStore && stores && stores.length > 1 && (
             <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-xl border border-slate-200">
-              <span className="text-2xs font-bold text-slate-500">店舗詳細切替:</span>
+              <span className="text-2xs font-bold text-slate-500">店舗グラフ切替:</span>
               <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setChartMode('multi');
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    chartMode === 'multi'
+                      ? 'bg-slate-900 text-white shadow-2xs'
+                      : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  <BarChart2 className="w-3.5 h-3.5" />
+                  <span>全店横断比較 (全店合計 系列)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setChartMode('single');
+                    setSelectedStoreIndex(-1);
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    chartMode === 'single' && selectedStoreIndex === -1
+                      ? 'bg-slate-900 text-white shadow-2xs'
+                      : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  <span
+                    className="w-2 h-2 rounded-full"
+                    style={{ backgroundColor: ALL_STORES_COLOR }}
+                  />
+                  <span>全店合計 単体詳細</span>
+                </button>
                 {stores.map((s, idx) => (
                   <button
                     key={s.id}
                     type="button"
-                    onClick={() => setSelectedStoreIndex(idx)}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                      selectedStoreIndex === idx
+                    onClick={() => {
+                      setChartMode('single');
+                      setSelectedStoreIndex(idx);
+                    }}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      chartMode === 'single' && selectedStoreIndex === idx
                         ? 'bg-slate-900 text-white shadow-2xs'
                         : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
                     }`}
                   >
-                    {s.name}
+                    <span
+                      className="w-2 h-2 rounded-full"
+                      style={{ backgroundColor: getStoreColor(s.id, stores) }}
+                    />
+                    <span>{s.name}</span>
                   </button>
                 ))}
               </div>
             </div>
           )}
-          <div className="h-64 sm:h-72 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart
-                data={singleStats}
-                margin={{ top: 15, right: 20, left: 10, bottom: 5 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                <XAxis
-                  dataKey="shortLabel"
-                  tick={{ fontSize: 12, fill: '#64748b' }}
-                  axisLine={{ stroke: '#cbd5e1' }}
-                />
-                <YAxis
-                  yAxisId="left"
-                  tick={{ fontSize: 11, fill: '#64748b' }}
-                  axisLine={{ stroke: '#cbd5e1' }}
-                  tickFormatter={(val) => {
-                    if (currentMetric === 'payoutRate' || currentMetric === 'highPayoutRate') {
-                      return `${val}%`;
-                    }
-                    if (unit === 'yen') return `${(val / 10000).toFixed(0)}万`;
-                    if (unit === 'coins')
-                      return `${val > 0 ? '+' : ''}${(val / 10000).toFixed(0)}万枚`;
-                    return `${val > 0 ? '+' : ''}${val}`;
-                  }}
-                />
-                <YAxis
-                  yAxisId="right"
-                  orientation="right"
-                  domain={[0, 'auto']}
-                  tick={{ fontSize: 10, fill: '#94a3b8' }}
-                  axisLine={{ stroke: '#cbd5e1' }}
-                  tickFormatter={(val) => `${val}G`}
-                />
-                <Tooltip content={<CustomChartTooltip />} />
-                <ReferenceLine
-                  yAxisId="left"
-                  y={
-                    currentMetric === 'payoutRate'
-                      ? 100
-                      : currentMetric === 'highPayoutRate'
-                      ? 50
-                      : 0
-                  }
-                  stroke="#94a3b8"
-                  strokeDasharray="3 3"
-                />
 
-                <Bar
-                  yAxisId="left"
-                  dataKey={
-                    currentMetric === 'payoutRate'
-                      ? 'payoutRate'
-                      : currentMetric === 'highPayoutRate'
-                      ? 'highPayoutRate'
-                      : unit === 'yen'
-                      ? 'displayDailyProfit'
-                      : unit === 'coins'
-                      ? 'displayTotalCoins'
-                      : 'displayDiffCoins'
-                  }
-                  radius={[4, 4, 0, 0]}
+          {chartMode === 'multi' && isMultiStore && stores && stores.length > 1 ? (
+            <div className="h-64 sm:h-72 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart
+                  data={multiStoreChartData}
+                  margin={{ top: 15, right: 20, left: 10, bottom: 5 }}
                 >
-                  {singleStats.map((entry, index) => {
-                    let fillColor = '#6366f1';
-                    if (currentMetric === 'payoutRate') {
-                      fillColor = entry.payoutRate >= 100 ? '#10b981' : '#f43f5e';
-                    } else if (currentMetric === 'highPayoutRate') {
-                      fillColor = entry.highPayoutRate >= 50 ? '#3b82f6' : '#f59e0b';
-                    } else if (unit === 'yen') {
-                      fillColor =
-                        entry.displayDailyProfit >= 0
-                          ? isHall
-                            ? '#10b981'
-                            : '#3b82f6'
-                          : '#f43f5e';
-                    } else if (unit === 'coins') {
-                      fillColor =
-                        entry.displayTotalCoins >= 0
-                          ? isHall
-                            ? '#10b981'
-                            : '#3b82f6'
-                          : '#f43f5e';
-                    } else {
-                      fillColor =
-                        entry.displayDiffCoins > 0
-                          ? isHall
-                            ? '#818cf8'
-                            : '#3b82f6'
-                          : '#f43f5e';
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                  <XAxis
+                    dataKey="shortLabel"
+                    tick={{ fontSize: 12, fill: '#64748b' }}
+                    axisLine={{ stroke: '#cbd5e1' }}
+                  />
+                  <YAxis
+                    yAxisId="left"
+                    tick={{ fontSize: 11, fill: '#64748b' }}
+                    axisLine={{ stroke: '#cbd5e1' }}
+                    tickFormatter={(val) => {
+                      if (currentMetric === 'payoutRate' || currentMetric === 'highPayoutRate') {
+                        return `${val}%`;
+                      }
+                      if (unit === 'yen') return `${(val / 10000).toFixed(0)}万`;
+                      if (unit === 'coins')
+                        return `${val > 0 ? '+' : ''}${(val / 10000).toFixed(0)}万枚`;
+                      return `${val > 0 ? '+' : ''}${val}`;
+                    }}
+                  />
+                  <Tooltip content={<MultiStoreChartTooltip />} />
+                  <Legend wrapperStyle={{ fontSize: 11, paddingTop: 6 }} />
+                  <ReferenceLine
+                    yAxisId="left"
+                    y={
+                      currentMetric === 'payoutRate'
+                        ? 100
+                        : currentMetric === 'highPayoutRate'
+                        ? 50
+                        : 0
                     }
-                    return (
-                      <Cell
-                        key={`cell-${index}`}
-                        fill={fillColor}
-                        stroke={entry.isStoreEvent ? '#f59e0b' : 'none'}
-                        strokeWidth={entry.isStoreEvent ? 2 : 0}
-                      />
-                    );
-                  })}
-                </Bar>
+                    stroke="#94a3b8"
+                    strokeDasharray="3 3"
+                  />
+                  {stores.map((s) => (
+                    <Bar
+                      key={s.id}
+                      yAxisId="left"
+                      dataKey={s.name}
+                      name={s.name}
+                      fill={getStoreColor(s.id, stores)}
+                      radius={[3, 3, 0, 0]}
+                      maxBarSize={36}
+                    />
+                  ))}
+                  <Line
+                    yAxisId="left"
+                    type="monotone"
+                    dataKey={ALL_STORES_NAME}
+                    name={ALL_STORES_NAME}
+                    stroke={ALL_STORES_COLOR}
+                    strokeWidth={3}
+                    dot={{ r: 4, fill: ALL_STORES_COLOR }}
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <div className="h-64 sm:h-72 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart
+                  data={singleStats}
+                  margin={{ top: 15, right: 20, left: 10, bottom: 5 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                  <XAxis
+                    dataKey="shortLabel"
+                    tick={{ fontSize: 12, fill: '#64748b' }}
+                    axisLine={{ stroke: '#cbd5e1' }}
+                  />
+                  <YAxis
+                    yAxisId="left"
+                    tick={{ fontSize: 11, fill: '#64748b' }}
+                    axisLine={{ stroke: '#cbd5e1' }}
+                    tickFormatter={(val) => {
+                      if (currentMetric === 'payoutRate' || currentMetric === 'highPayoutRate') {
+                        return `${val}%`;
+                      }
+                      if (unit === 'yen') return `${(val / 10000).toFixed(0)}万`;
+                      if (unit === 'coins')
+                        return `${val > 0 ? '+' : ''}${(val / 10000).toFixed(0)}万枚`;
+                      return `${val > 0 ? '+' : ''}${val}`;
+                    }}
+                  />
+                  <YAxis
+                    yAxisId="right"
+                    orientation="right"
+                    domain={[0, 'auto']}
+                    tick={{ fontSize: 10, fill: '#94a3b8' }}
+                    axisLine={{ stroke: '#cbd5e1' }}
+                    tickFormatter={(val) => `${val}G`}
+                  />
+                  <Tooltip content={<CustomChartTooltip />} />
+                  <ReferenceLine
+                    yAxisId="left"
+                    y={
+                      currentMetric === 'payoutRate'
+                        ? 100
+                        : currentMetric === 'highPayoutRate'
+                        ? 50
+                        : 0
+                    }
+                    stroke="#94a3b8"
+                    strokeDasharray="3 3"
+                  />
 
-                <Line
-                  yAxisId="right"
-                  type="monotone"
-                  dataKey="avgGames"
-                  name="台平均稼働G数"
-                  stroke="#f59e0b"
-                  strokeWidth={2}
-                  dot={{ r: 3, fill: '#f59e0b' }}
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
+                  <Bar
+                    yAxisId="left"
+                    dataKey={
+                      currentMetric === 'payoutRate'
+                        ? 'payoutRate'
+                        : currentMetric === 'highPayoutRate'
+                        ? 'highPayoutRate'
+                        : unit === 'yen'
+                        ? 'displayDailyProfit'
+                        : unit === 'coins'
+                        ? 'displayTotalCoins'
+                        : 'displayDiffCoins'
+                    }
+                    radius={[4, 4, 0, 0]}
+                  >
+                    {singleStats.map((entry, index) => {
+                      let fillColor = '#6366f1';
+                      if (currentMetric === 'payoutRate') {
+                        fillColor = entry.payoutRate >= 100 ? '#10b981' : '#f43f5e';
+                      } else if (currentMetric === 'highPayoutRate') {
+                        fillColor = entry.highPayoutRate >= 50 ? '#3b82f6' : '#f59e0b';
+                      } else if (unit === 'yen') {
+                        fillColor =
+                          entry.displayDailyProfit >= 0
+                            ? isHall
+                              ? '#10b981'
+                              : '#3b82f6'
+                            : '#f43f5e';
+                      } else if (unit === 'coins') {
+                        fillColor =
+                          entry.displayTotalCoins >= 0
+                            ? isHall
+                              ? '#10b981'
+                              : '#3b82f6'
+                            : '#f43f5e';
+                      } else {
+                        fillColor =
+                          entry.displayDiffCoins > 0
+                            ? isHall
+                              ? '#818cf8'
+                              : '#3b82f6'
+                            : '#f43f5e';
+                      }
+                      return (
+                        <Cell
+                          key={`cell-${index}`}
+                          fill={fillColor}
+                          stroke={entry.isStoreEvent ? '#f59e0b' : 'none'}
+                          strokeWidth={entry.isStoreEvent ? 2 : 0}
+                        />
+                      );
+                    })}
+                  </Bar>
+
+                  <Line
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="avgGames"
+                    name="台平均稼働G数"
+                    stroke="#f59e0b"
+                    strokeWidth={2}
+                    dot={{ r: 3, fill: '#f59e0b' }}
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </div>
       )}
 
@@ -1048,18 +1382,37 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
             <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-xl border border-slate-200">
               <span className="text-2xs font-bold text-slate-500">店舗詳細切替:</span>
               <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setSelectedStoreIndex(-1)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    selectedStoreIndex === -1
+                      ? 'bg-slate-900 text-white shadow-2xs'
+                      : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  <span
+                    className="w-2 h-2 rounded-full"
+                    style={{ backgroundColor: ALL_STORES_COLOR }}
+                  />
+                  <span>全店合計</span>
+                </button>
                 {stores.map((s, idx) => (
                   <button
                     key={s.id}
                     type="button"
                     onClick={() => setSelectedStoreIndex(idx)}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
                       selectedStoreIndex === idx
                         ? 'bg-slate-900 text-white shadow-2xs'
                         : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
                     }`}
                   >
-                    {s.name}
+                    <span
+                      className="w-2 h-2 rounded-full"
+                      style={{ backgroundColor: getStoreColor(s.id, stores) }}
+                    />
+                    <span>{s.name}</span>
                   </button>
                 ))}
               </div>
@@ -1075,6 +1428,9 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                     ★
                   </span>
                   <span className="text-xs font-bold text-emerald-950">
+                    {isMultiStore && stores && stores.length > 1
+                      ? `【${activeSelectedStoreName}】`
+                      : ''}
                     {isHall
                       ? '利益貢献 TOP 3 (高粗利・回収条件)'
                       : '出玉還元 TOP 3 (高差枚・好待遇条件)'}
@@ -1169,6 +1525,9 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                     ▼
                   </span>
                   <span className="text-xs font-bold text-rose-950">
+                    {isMultiStore && stores && stores.length > 1
+                      ? `【${activeSelectedStoreName}】`
+                      : ''}
                     {isHall ? '粗利 ワースト 3 (還元・赤字条件)' : '出玉 ワースト 3 (回収・低勝率条件)'}
                   </span>
                 </div>
@@ -1395,6 +1754,44 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                       {isExpanded && (
                         <tr>
                           <td colSpan={9} className="bg-slate-50 p-4">
+                            {isMultiStore && stores && stores.length > 1 && selectedStoreIndex === -1 && (
+                              <div className="mb-3 space-y-1.5">
+                                <div className="text-[11px] font-bold text-slate-700">各店舗の内訳:</div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                                  {stores.map((s) => {
+                                    const sRow = multiStoreRows.find((r) => r.storeId === s.id);
+                                    const sStat = sRow?.stats.find((st) => st.key === d.key);
+                                    if (!sStat || sStat.count === 0) return null;
+                                    return (
+                                      <div
+                                        key={s.id}
+                                        className="p-2 rounded-lg bg-white border border-slate-200 text-xs flex items-center justify-between shadow-2xs"
+                                      >
+                                        <div className="flex items-center gap-1.5 min-w-0">
+                                          <span
+                                            className="w-2 h-2 rounded-full shrink-0"
+                                            style={{ backgroundColor: getStoreColor(s.id, stores) }}
+                                          />
+                                          <span className="font-bold truncate">{s.name}</span>
+                                        </div>
+                                        <div className="text-right shrink-0">
+                                          <div
+                                            className={`font-mono font-bold ${
+                                              sStat.displayDiffCoins > 0 ? 'text-blue-600' : 'text-rose-600'
+                                            }`}
+                                          >
+                                            {sStat.displayDiffCoins > 0 ? `+${sStat.displayDiffCoins}` : sStat.displayDiffCoins}枚
+                                          </div>
+                                          <div className="text-[10px] text-slate-400">
+                                            {sStat.payoutRate.toFixed(1)}% ({sStat.count}日)
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
                             <div className="text-xs font-bold text-slate-800 mb-2">
                               {d.label} の営業日一覧 ({d.records.length}日間)
                             </div>
@@ -1463,6 +1860,35 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                   );
                 })}
               </tbody>
+              <tfoot className="bg-slate-100 font-bold text-slate-900 border-t-2 border-slate-300 text-xs">
+                <tr>
+                  <td colSpan={3} className="px-4 py-3 font-black text-left">
+                    {isMultiStore && stores && stores.length > 1 && selectedStoreIndex === -1
+                      ? '全店・全条件 合計／加重平均'
+                      : '全条件 合計／平均'}
+                  </td>
+                  <td
+                    className={`px-3 py-3 text-right font-black ${
+                      tableTotal.avgDiff > 0 ? 'text-blue-600' : 'text-rose-600'
+                    }`}
+                  >
+                    {tableTotal.avgDiff > 0 ? `+${tableTotal.avgDiff}` : tableTotal.avgDiff}枚/台
+                  </td>
+                  <td className="px-3 py-3 text-right font-black">
+                    {formatYen(tableTotal.dailyProfit)}
+                  </td>
+                  <td className="px-3 py-3 text-right font-black">
+                    {formatNumber(tableTotal.avgGames)}G
+                  </td>
+                  <td className="px-3 py-3 text-right font-black">
+                    {tableTotal.payoutRate.toFixed(2)}%
+                  </td>
+                  <td className="px-3 py-3 text-right font-black">
+                    {tableTotal.winRate.toFixed(1)}%
+                  </td>
+                  <td className="px-3 py-3 text-center text-slate-400 text-2xs">-</td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         </div>

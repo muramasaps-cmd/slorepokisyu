@@ -412,4 +412,32 @@ describe('ConditionAnalysis Component & Utilities', () => {
     expect(htmlSetting).toContain('条件別の比較:');
     expect(htmlSetting).toContain('条件別に詳しく見る');
   });
+
+  it('11. Prompt 49: Header layout has 2 tiers, min-w-0 on heading, no shrink-0 on switchers, and group labels', () => {
+    const html = renderToString(
+      <ConditionAnalysis
+        dailyRecords={sampleRecords}
+        initialDimension="tail"
+        unit="coins"
+        setUnit={vi.fn()}
+      />
+    );
+
+    // 1. Heading area has min-w-0 and h2 has min-w-0 break-normal
+    expect(html).toContain('min-w-0 flex-1');
+    expect(html).toContain('min-w-0 break-normal');
+
+    // 2. Supplementary label is placed outside h2
+    expect(html).toContain('(0〜9のつく日 &amp; ゾロ目の日)');
+
+    // 3. Global switchers container does not have shrink-0 or lg:flex-row in header
+    expect(html).not.toContain('shrink-0 self-start lg:self-auto');
+    expect(html).toContain('flex flex-wrap items-center gap-2 w-full text-xs');
+
+    // 4. Group labels (切り口, 指標, 表示, 単位) are present
+    expect(html).toContain('切り口:');
+    expect(html).toContain('指標:');
+    expect(html).toContain('表示:');
+    expect(html).toContain('単位:');
+  });
 });

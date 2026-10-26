@@ -42,14 +42,8 @@ interface StoreComparisonProps {
   isModelFilterActive?: boolean;
 }
 
-const STORE_COLORS = [
-  '#4f46e5', // indigo
-  '#059669', // emerald
-  '#d97706', // amber
-  '#e11d48', // rose
-  '#0284c7', // sky
-  '#7c3aed', // violet
-];
+import { STORE_COLORS, getStoreColor } from '../utils/storeColors';
+
 
 export function formatMonthlyTrendTooltip(val: any, name: any): [string, string] {
   const storeName = String(name ?? '');

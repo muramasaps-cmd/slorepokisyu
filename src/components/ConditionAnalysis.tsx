@@ -101,6 +101,155 @@ export interface ConditionAnalysisProps {
   period?: StoreCommonPeriod | null;
 }
 
+// Custom Chart Tooltip (Prompt 59: defined outside component to prevent remounting)
+export const CustomChartTooltip: React.FC<{
+  active?: boolean;
+  payload?: readonly { payload: ConditionBucketStat }[];
+  isHall?: boolean;
+}> = ({ active, payload, isHall = false }) => {
+  if (active && payload && payload.length) {
+    const data: ConditionBucketStat = payload[0].payload;
+    return (
+      <div className="bg-slate-900/95 text-white p-3 rounded-lg shadow-xl border border-slate-700 text-xs max-w-xs backdrop-blur-xs">
+        <div className="font-bold text-sm text-indigo-300 border-b border-slate-700 pb-1 mb-1.5 flex items-center justify-between">
+          <span>{data.label}</span>
+          <span
+            className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
+              data.isWeekend || data.isHoliday
+                ? 'bg-rose-500 text-white'
+                : 'bg-slate-700 text-slate-200'
+            }`}
+          >
+            {data.isHoliday ? '祝日' : data.isWeekend ? '週末' : '平日'}
+          </span>
+        </div>
+        <div className="space-y-1">
+          <div className="flex justify-between">
+            <span className="text-slate-400">集計営業日数:</span>
+            <span className="font-bold">{data.count}日間</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-400">
+              {isHall ? 'ホール平均差枚/台:' : '客平均差枚/台:'}
+            </span>
+            <span
+              className={`font-bold ${
+                data.displayDiffCoins > 0
+                  ? isHall
+                    ? 'text-indigo-300'
+                    : 'text-blue-400'
+                  : 'text-rose-400'
+              }`}
+            >
+              {data.displayDiffCoins > 0 ? `+${data.displayDiffCoins}` : data.displayDiffCoins} 枚
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-400">
+              {isHall ? '1日平均ホール粗利:' : '1日平均客収支:'}
+            </span>
+            <span
+              className={`font-bold ${
+                data.displayDailyProfit >= 0
+                  ? isHall
+                    ? 'text-emerald-400'
+                    : 'text-blue-400'
+                  : 'text-rose-400'
+              }`}
+            >
+              {formatYen(data.displayDailyProfit)}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-400">台平均稼働G数:</span>
+            <span className="font-semibold text-amber-300">
+              {formatNumber(data.avgGames)} G
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-400">機械割(出玉率):</span>
+            <span className="font-bold text-indigo-300">{data.payoutRate.toFixed(2)}%</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-400">高出率台の率(勝率):</span>
+            <span className="font-bold text-emerald-400">
+              {data.highPayoutRate}% ({data.playerWinDays}/{data.count}日)
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
+// Multi-Store Comparison Chart Tooltip (Prompt 59: defined outside component to prevent remounting)
+export const MultiStoreChartTooltip: React.FC<{
+  active?: boolean;
+  payload?: readonly any[];
+  label?: string;
+  currentMetric?: ConditionMetric;
+  unit?: string;
+}> = ({ active, payload, label, currentMetric = 'avgDiff', unit }) => {
+  if (active && payload && payload.length) {
+    const p0 = payload[0]?.payload;
+    const conditionLabel = p0?.label || label;
+    return (
+      <div className="bg-slate-900/95 text-white p-3 rounded-lg shadow-xl border border-slate-700 text-xs min-w-[220px] backdrop-blur-xs space-y-2">
+        <div className="font-bold text-sm text-indigo-300 border-b border-slate-700 pb-1 flex items-center justify-between">
+          <span>{conditionLabel}</span>
+          <span className="text-[10px] text-slate-400">
+            {currentMetric === 'avgDiff'
+              ? '台あたり差枚'
+              : currentMetric === 'payoutRate'
+              ? '出率(機械割)'
+              : '高出率台の率'}
+          </span>
+        </div>
+        <div className="space-y-1 pt-0.5">
+          {payload.map((entry: any) => {
+            const val = entry.value;
+            if (val === null || val === undefined) return null;
+            const isTotal = entry.name === ALL_STORES_NAME;
+            let formattedVal = '';
+            if (currentMetric === 'payoutRate' || currentMetric === 'highPayoutRate') {
+              formattedVal = `${Number(val).toFixed(2)}%`;
+            } else if (unit === 'yen') {
+              formattedVal = formatYen(val);
+            } else {
+              formattedVal = `${val >= 0 ? '+' : ''}${val}枚/台`;
+            }
+
+            return (
+              <div
+                key={entry.name}
+                className={`flex items-center justify-between gap-3 text-xs ${
+                  isTotal ? 'font-bold border-t border-slate-700/80 pt-1 text-slate-100' : ''
+                }`}
+              >
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span
+                    className="w-2.5 h-2.5 rounded-full shrink-0"
+                    style={{ backgroundColor: entry.color || entry.fill || entry.stroke }}
+                  />
+                  <span className="truncate max-w-[130px]">{entry.name}:</span>
+                </div>
+                <span
+                  className="font-mono font-bold shrink-0"
+                  style={{ color: isTotal ? '#ffffff' : entry.color }}
+                >
+                  {formattedVal}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
 export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
   dailyRecords = [],
   stores,
@@ -398,89 +547,7 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
     );
   };
 
-  // Custom Chart Tooltip
-  const CustomChartTooltip = ({
-    active,
-    payload,
-  }: {
-    active?: boolean;
-    payload?: readonly { payload: ConditionBucketStat }[];
-  }) => {
-    if (active && payload && payload.length) {
-      const data: ConditionBucketStat = payload[0].payload;
-      return (
-        <div className="bg-slate-900/95 text-white p-3 rounded-lg shadow-xl border border-slate-700 text-xs max-w-xs backdrop-blur-xs">
-          <div className="font-bold text-sm text-indigo-300 border-b border-slate-700 pb-1 mb-1.5 flex items-center justify-between">
-            <span>{data.label}</span>
-            <span
-              className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
-                data.isWeekend || data.isHoliday
-                  ? 'bg-rose-500 text-white'
-                  : 'bg-slate-700 text-slate-200'
-              }`}
-            >
-              {data.isHoliday ? '祝日' : data.isWeekend ? '週末' : '平日'}
-            </span>
-          </div>
-          <div className="space-y-1">
-            <div className="flex justify-between">
-              <span className="text-slate-400">集計営業日数:</span>
-              <span className="font-bold">{data.count}日間</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-400">
-                {isHall ? 'ホール平均差枚/台:' : '客平均差枚/台:'}
-              </span>
-              <span
-                className={`font-bold ${
-                  data.displayDiffCoins > 0
-                    ? isHall
-                      ? 'text-indigo-300'
-                      : 'text-blue-400'
-                    : 'text-rose-400'
-                }`}
-              >
-                {data.displayDiffCoins > 0 ? `+${data.displayDiffCoins}` : data.displayDiffCoins} 枚
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-400">
-                {isHall ? '1日平均ホール粗利:' : '1日平均客収支:'}
-              </span>
-              <span
-                className={`font-bold ${
-                  data.displayDailyProfit >= 0
-                    ? isHall
-                      ? 'text-emerald-400'
-                      : 'text-blue-400'
-                    : 'text-rose-400'
-                }`}
-              >
-                {formatYen(data.displayDailyProfit)}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-400">台平均稼働G数:</span>
-              <span className="font-semibold text-amber-300">
-                {formatNumber(data.avgGames)} G
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-400">機械割(出玉率):</span>
-              <span className="font-bold text-indigo-300">{data.payoutRate.toFixed(2)}%</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-400">高出率台の率(勝率):</span>
-              <span className="font-bold text-emerald-400">
-                {data.highPayoutRate}% ({data.playerWinDays}/{data.count}日)
-              </span>
-            </div>
-          </div>
-        </div>
-      );
-    }
-    return null;
-  };
+
 
   // Determine section headers
   const columns = getConditionColumns(currentDimension);
@@ -537,66 +604,7 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
     return stat.highPayoutRate;
   };
 
-  // Multi-Store Comparison Chart Tooltip
-  const MultiStoreChartTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length) {
-      const p0 = payload[0]?.payload;
-      const conditionLabel = p0?.label || label;
-      return (
-        <div className="bg-slate-900/95 text-white p-3 rounded-lg shadow-xl border border-slate-700 text-xs min-w-[220px] backdrop-blur-xs space-y-2">
-          <div className="font-bold text-sm text-indigo-300 border-b border-slate-700 pb-1 flex items-center justify-between">
-            <span>{conditionLabel}</span>
-            <span className="text-[10px] text-slate-400">
-              {currentMetric === 'avgDiff'
-                ? '台あたり差枚'
-                : currentMetric === 'payoutRate'
-                ? '出率(機械割)'
-                : '高出率台の率'}
-            </span>
-          </div>
-          <div className="space-y-1 pt-0.5">
-            {payload.map((entry: any) => {
-              const val = entry.value;
-              if (val === null || val === undefined) return null;
-              const isTotal = entry.name === ALL_STORES_NAME;
-              let formattedVal = '';
-              if (currentMetric === 'payoutRate' || currentMetric === 'highPayoutRate') {
-                formattedVal = `${Number(val).toFixed(2)}%`;
-              } else if (unit === 'yen') {
-                formattedVal = formatYen(val);
-              } else {
-                formattedVal = `${val >= 0 ? '+' : ''}${val}枚/台`;
-              }
 
-              return (
-                <div
-                  key={entry.name}
-                  className={`flex items-center justify-between gap-3 text-xs ${
-                    isTotal ? 'font-bold border-t border-slate-700/80 pt-1 text-slate-100' : ''
-                  }`}
-                >
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <span
-                      className="w-2.5 h-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: entry.color || entry.fill || entry.stroke }}
-                    />
-                    <span className="truncate max-w-[130px]">{entry.name}:</span>
-                  </div>
-                  <span
-                    className="font-mono font-bold shrink-0"
-                    style={{ color: isTotal ? '#ffffff' : entry.color }}
-                  >
-                    {formattedVal}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      );
-    }
-    return null;
-  };
 
   const multiStoreChartData = useMemo(() => {
     if (!isMultiStore || !stores || stores.length <= 1) return [];
@@ -1219,7 +1227,7 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                       return `${val > 0 ? '+' : ''}${val}`;
                     }}
                   />
-                  <Tooltip content={<MultiStoreChartTooltip />} />
+                  <Tooltip content={<MultiStoreChartTooltip currentMetric={currentMetric} unit={unit} />} />
                   <Legend wrapperStyle={{ fontSize: 11, paddingTop: 6 }} />
                   <ReferenceLine
                     yAxisId="left"
@@ -1291,7 +1299,7 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                     axisLine={{ stroke: '#cbd5e1' }}
                     tickFormatter={(val) => `${val}G`}
                   />
-                  <Tooltip content={<CustomChartTooltip />} />
+                  <Tooltip content={<CustomChartTooltip isHall={isHall} />} />
                   <ReferenceLine
                     yAxisId="left"
                     y={

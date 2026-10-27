@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   calculateCrossStoreRanking,
   calculateStoreTargetMetrics,
+  calculateStoreTargetMetricsForDates,
   generateCandidateScanDates,
   scanCandidateDates,
   convertCoinsToYen,
@@ -22,6 +23,12 @@ import {
   saveCrossStoreSettings,
   CROSS_STORE_SETTINGS_STORAGE_KEY,
 } from '../crossStoreRanking';
+import {
+  computeStoreDateScanCacheKey,
+  buildStoreScanPrefixData,
+  clearMemoryScanCache,
+} from '../crossStoreScanCache';
+import * as targetMachineRankingModule from '../targetMachineRanking';
 import { runMachineBacktest } from '../backtestEngine';
 import { StoreProfile, DailyRecord } from '../../data/types';
 
@@ -1522,6 +1529,228 @@ describe('crossStoreRanking utils', () => {
         const loaded = loadCrossStoreSettings();
         expect(loaded).toEqual({});
       });
+    });
+  });
+
+  // 13. プロンプト58: 来店日スキャンの高速化（結果は完全一致）
+  describe('プロンプト58: 来店日スキャンの高速化と結果の完全一致検証', () => {
+    // 3店×90日×40台の合成データを生成
+    function createPrompt58SyntheticData() {
+      const models = ['マイジャグラーV', 'アイムジャグラーEX', 'L パチスロ北斗の拳', '押忍！番長4'];
+      const startDate = new Date('2024-01-01');
+      const stores: StoreProfile[] = [];
+
+      for (let s = 1; s <= 3; s++) {
+        const storeId = `p58-store-${s}`;
+        const storeName = `テスト店舗${s}`;
+        const dailyRecords: DailyRecord[] = [];
+
+        // Store 3 has no machine data (machines is undefined)
+        const hasMachines = s !== 3;
+
+        for (let d = 0; d < 90; d++) {
+          const curDate = new Date(startDate);
+          curDate.setDate(curDate.getDate() + d);
+          const y = curDate.getFullYear();
+          const m = String(curDate.getMonth() + 1).padStart(2, '0');
+          const day = String(curDate.getDate()).padStart(2, '0');
+          const dateStr = `${y}-${m}-${day}`;
+          const dow = ['日', '月', '火', '水', '木', '金', '土'][curDate.getDay()];
+
+          const machines = hasMachines
+            ? Array.from({ length: 40 }, (_, idx) => {
+                const machineNum = 101 + idx;
+                const modelName = models[idx % models.length];
+                const diff = ((idx * 37 + d * 13) % 4000) - 1500;
+                const games = 4000 + ((idx * 17) % 3000);
+                return {
+                  machineNum,
+                  modelName,
+                  diff,
+                  games,
+                  bb: Math.max(0, Math.floor(games / 250)),
+                  rb: Math.max(0, Math.floor(games / 350)),
+                  payoutRate: 100 + (diff / (games * 3)) * 100,
+                  tailDigit: machineNum % 10,
+                  isZoro: machineNum === 111,
+                };
+              })
+            : undefined;
+
+          dailyRecords.push({
+            date: dateStr,
+            yearMonth: `${y}-${m}`,
+            year: y,
+            month: Number(m),
+            day: Number(day),
+            dayOfWeek: dow,
+            avgDiffCoins: 120,
+            avgGames: 5000,
+            winRate: 52,
+            winMachines: 20,
+            totalMachines: 40,
+            totalDiffCoins: 4800,
+            hallCoinProfit: -4800,
+            playerCoinProfit: 4800,
+            hallYenProfit: -96000,
+            playerYenProfit: 96000,
+            inCoins: 600000,
+            outCoins: 604800,
+            payoutRate: 100.8,
+            estimatedRevenue: 200000,
+            exchangeGapProfit: 10000,
+            gModelHallProfit: 20000,
+            gModelPlayerProfit: -20000,
+            isOldEventDay: day.endsWith('7'),
+            is7Day: day.endsWith('7'),
+            notable: '',
+            models: models.map((mod) => ({
+              modelName: mod,
+              avgDiffCoins: 150,
+              totalDiffCoins: 1500,
+              avgGames: 5000,
+              winRate: 55,
+              winMachines: 5,
+              totalMachines: 10,
+            })),
+            machines,
+          });
+        }
+
+        stores.push({
+          id: storeId,
+          name: storeName,
+          address: '東京都',
+          oldEventDays: '7のつく日',
+          exchangeRate: '46枚貸/52枚交換',
+          rateLend: 46,
+          rateExchange: 52,
+          totalMachinesApprox: 40,
+          dataRange: '2024-01-01 〜 2024-03-30',
+          specialDayRules: s === 2 ? { tails: [7], doubleDigits: true } : undefined,
+          dailyRecords,
+        });
+      }
+
+      return stores;
+    }
+
+    it('1. 現行の calculateStoreTargetMetrics と新関数の出力が、3店×90日×40台・日付10個で全セルJSON完全一致する', () => {
+      const stores = createPrompt58SyntheticData();
+      // 日付が昇順でない入力、データの最初の日(過去0日: '2024-01-01')、過去3日未満('2024-01-03')、過去7日未満('2024-01-05')、通常日、データ範囲外の日
+      const testDates = [
+        '2024-03-15',
+        '2024-01-01', // データの最初の日（過去0日）
+        '2024-02-10',
+        '2024-01-03', // 過去3日未満（2日）
+        '2024-01-05', // 過去7日未満（4日）
+        '2024-04-01', // 過去90日
+        '2024-02-28',
+        '2024-01-02', // 過去1日
+        '2024-03-01',
+        '2024-04-05',
+      ];
+
+      // A. デフォルトオプション (diffMetric='actual', topN=10)
+      for (const store of stores) {
+        const batchResults = calculateStoreTargetMetricsForDates(store, testDates, { topN: 10 });
+        expect(batchResults).toHaveLength(testDates.length);
+
+        testDates.forEach((date, idx) => {
+          const singleCell = calculateStoreTargetMetrics(store, date, { topN: 10 });
+          const batchCell = batchResults[idx];
+          expect(JSON.stringify(batchCell)).toBe(JSON.stringify(singleCell));
+        });
+      }
+
+      // B. diffMetric='baseGames', topN=3
+      for (const store of stores) {
+        const batchResults = calculateStoreTargetMetricsForDates(store, testDates, {
+          diffMetric: 'baseGames',
+          topN: 3,
+          baseGames: 6000,
+        });
+        expect(batchResults).toHaveLength(testDates.length);
+
+        testDates.forEach((date, idx) => {
+          const singleCell = calculateStoreTargetMetrics(store, date, {
+            diffMetric: 'baseGames',
+            topN: 3,
+            baseGames: 6000,
+          });
+          const batchCell = batchResults[idx];
+          expect(JSON.stringify(batchCell)).toBe(JSON.stringify(singleCell));
+        });
+      }
+    });
+
+    it('2. 新しい署名で作ったキー文字列が、旧 computeStoreDateScanCacheKey のキーと全（店舗, 日付）で一致する', () => {
+      const stores = createPrompt58SyntheticData();
+      const testDates = [
+        '2023-12-31', // 過去0日（開始前）
+        '2024-01-01', // 過去0日（当日）
+        '2024-01-02',
+        '2024-01-15',
+        '2024-02-01',
+        '2024-03-10',
+        '2024-04-10', // 全期間後
+      ];
+
+      for (const store of stores) {
+        const prefixData = buildStoreScanPrefixData(
+          store.id,
+          store.dailyRecords,
+          10,
+          'actual',
+          5000,
+          store.customMachineRankingWeights,
+          store.specialDayRules,
+          store.modelAliasDictionary,
+          store.includeReusedMachinesInStats
+        );
+
+        for (const date of testDates) {
+          const newKey = prefixData.computeKeyForDate(date);
+          const oldKey = computeStoreDateScanCacheKey(
+            store.id,
+            date,
+            store.dailyRecords,
+            10,
+            'actual',
+            5000,
+            store.customMachineRankingWeights,
+            store.specialDayRules,
+            store.modelAliasDictionary,
+            store.includeReusedMachinesInStats
+          );
+
+          expect(newKey).toBe(oldKey);
+        }
+      }
+    });
+
+    it('3. キャッシュが全部あるとき、アキュムレータとインデックスを作らないこと', () => {
+      const stores = createPrompt58SyntheticData();
+      const scanDates = ['2024-02-01', '2024-02-02', '2024-02-03'];
+
+      clearMemoryScanCache();
+
+      // 1回目の実行: キャッシュを投入
+      const firstScan = scanCandidateDates(stores, scanDates, { topN: 10 });
+      expect(firstScan.grid[stores[0].id]['2024-02-01']).toBeDefined();
+
+      // buildMachineFeatureIndex を spy
+      const featureIndexSpy = vi.spyOn(targetMachineRankingModule, 'buildMachineFeatureIndex');
+
+      // 2回目の実行: 全てメモリキャッシュに存在するため、アキュムレータやインデックス作成を一切行わない
+      const secondScan = scanCandidateDates(stores, scanDates, { topN: 10 });
+      expect(secondScan.grid[stores[0].id]['2024-02-01']).toEqual(
+        firstScan.grid[stores[0].id]['2024-02-01']
+      );
+
+      expect(featureIndexSpy).not.toHaveBeenCalled();
+
+      featureIndexSpy.mockRestore();
     });
   });
 });

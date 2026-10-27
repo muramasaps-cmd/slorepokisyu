@@ -6,6 +6,7 @@ import { CrossStoreTarget } from './CrossStoreTarget';
 import { Target, Building2, Sparkles, Calendar, Flame, X, Cpu } from 'lucide-react';
 import { isDateSpecialDay } from '../utils/dataEngine';
 import { isJapaneseHoliday } from '../utils/holidayUtils';
+import { calculateTargetMachineRanking } from '../utils/targetMachineRanking';
 
 export type TargetScope = 'store' | 'all';
 
@@ -152,6 +153,35 @@ export const TargetTab: React.FC<TargetTabProps> = ({
     if (!funnelStoreId) return null;
     return stores.find((s) => s.id === funnelStoreId) || null;
   }, [scope, currentStore, funnelStoreId, stores]);
+
+  // Single-store target machine ranking computed once in parent TargetTab (Prompt 59)
+  const singleStoreMachineRanking = useMemo(() => {
+    if (
+      scope !== 'store' ||
+      !currentStore?.dailyRecords ||
+      currentStore.dailyRecords.length === 0 ||
+      !effectiveTargetDate
+    ) {
+      return null;
+    }
+    const hasMach = currentStore.dailyRecords.some((r) => r.machines && r.machines.length > 0);
+    if (!hasMach) return null;
+    return calculateTargetMachineRanking(
+      effectiveTargetDate,
+      currentStore.dailyRecords,
+      currentStore.specialDayRules,
+      currentStore.customMachineRankingWeights,
+      {
+        rankingWeights: currentStore.customRankingWeights,
+        includeReusedMachines: currentStore.includeReusedMachinesInStats ?? false,
+        aliasDictionary: currentStore.modelAliasDictionary,
+      }
+    );
+  }, [
+    scope,
+    currentStore,
+    effectiveTargetDate,
+  ]);
 
   return (
     <div className="space-y-4 animate-in fade-in duration-150" data-testid="target-tab">
@@ -527,6 +557,7 @@ export const TargetTab: React.FC<TargetTabProps> = ({
               funnelModelName={funnelModelName}
               onSelectFunnelModel={setFunnelModelName}
               targetSection={targetSection}
+              precomputedMachineRankingResult={singleStoreMachineRanking}
             />
           </div>
         ) : (

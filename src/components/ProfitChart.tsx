@@ -111,6 +111,91 @@ function isValidNum(val: unknown): val is number {
   return typeof val === 'number' && !Number.isNaN(val) && Number.isFinite(val);
 }
 
+// Custom Chart Tooltip (Prompt 59: defined outside component to prevent remounting)
+export const ProfitChartTooltip: React.FC<{
+  active?: boolean;
+  payload?: readonly any[];
+  perspective?: 'hall' | 'player';
+}> = ({ active, payload, perspective = 'player' }) => {
+  if (active && payload && payload.length) {
+    const data = payload[0].payload;
+    const gYen = perspective === 'hall' ? data.gModelHallProfit : data.gModelPlayerProfit;
+    const perMachineMonth = data.avgMachines > 0 ? Math.round(gYen / data.avgMachines) : 0;
+    const perMachineDaily =
+      data.avgMachines > 0 && data.daysCount > 0
+        ? Math.round(gYen / (data.avgMachines * data.daysCount))
+        : 0;
+
+    return (
+      <div className="bg-slate-900/95 text-white p-3.5 rounded-lg shadow-xl border border-slate-700 text-xs max-w-sm backdrop-blur-xs">
+        <div className="font-bold text-sm text-amber-400 border-b border-slate-700/80 pb-1.5 mb-2 flex items-center justify-between">
+          <span>{data.label}</span>
+          <span className="text-[11px] font-normal text-slate-400">
+            {data.daysCount}日間営業 (平均{data.avgMachines}台)
+          </span>
+        </div>
+
+        <div className="space-y-1.5">
+          {/* G-count Model Details */}
+          <div className="bg-slate-800/80 p-2.5 rounded-lg border border-indigo-900/50 space-y-1.5">
+            <div className="flex justify-between items-center">
+              <span className="text-indigo-200 font-bold flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-amber-400" />
+                {perspective === 'hall' ? 'G数連動ホール粗利:' : 'G数連動ユーザー収支:'}
+              </span>
+              <span
+                className={`font-extrabold text-sm ${
+                  gYen >= 0 ? 'text-amber-400' : 'text-rose-400'
+                }`}
+              >
+                {formatYen(gYen)}
+              </span>
+            </div>
+            <div className="flex justify-between items-center text-[11px] pt-1 border-t border-slate-700/60">
+              <span className="text-slate-400">1台あたり収支:</span>
+              <span className="font-bold text-amber-300">
+                {formatYen(perMachineDaily)}/台・日
+                <span className="text-[10px] text-slate-300 font-normal ml-1">
+                  (月 {formatYen(perMachineMonth)}/台)
+                </span>
+              </span>
+            </div>
+          </div>
+
+          <div className="flex justify-between items-center">
+            <span className="text-slate-300">客側平均差枚/日:</span>
+            <span
+              className={`font-semibold ${data.avgDiffCoins > 0 ? 'text-blue-400' : 'text-slate-200'}`}
+            >
+              {data.avgDiffCoins > 0 ? `+${data.avgDiffCoins}` : data.avgDiffCoins} 枚/台
+            </span>
+          </div>
+
+          <div className="flex justify-between items-center">
+            <span className="text-slate-400">平均稼働 / 機械割:</span>
+            <span className="font-medium text-slate-200">
+              {formatNumber(data.avgGames)}G ({(data.avgPayoutRate || 100).toFixed(2)}%)
+            </span>
+          </div>
+
+          <div className="flex justify-between items-center text-[11px] text-slate-400 border-t border-slate-800 pt-1">
+            <span>旧イベント日平均:</span>
+            <span className="text-amber-300 font-medium">
+              {data.eventAvgDiff > 0 ? `+${data.eventAvgDiff}` : data.eventAvgDiff}枚/台 (
+              {data.eventDaysCount}日)
+            </span>
+          </div>
+        </div>
+
+        <div className="mt-2.5 pt-1.5 border-t border-slate-800 text-[10px] text-amber-300/80 text-center">
+          クリックで日別明細を表示
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
 const ProfitChartInner: React.FC<ProfitChartProps> = ({
   monthlyStats,
   perspective,
@@ -246,85 +331,7 @@ const ProfitChartInner: React.FC<ProfitChartProps> = ({
   const unitLabel =
     unit === 'yen' ? '万円' : unit === 'coins' ? '万枚' : unit === 'payoutRate' ? '%' : '枚/台';
 
-  const CustomTooltip = ({ active, payload }: any) => {
-    if (active && payload && payload.length) {
-      const data: (typeof chartData)[0] = payload[0].payload;
-      const gYen = perspective === 'hall' ? data.gModelHallProfit : data.gModelPlayerProfit;
-      const perMachineMonth = data.avgMachines > 0 ? Math.round(gYen / data.avgMachines) : 0;
-      const perMachineDaily =
-        data.avgMachines > 0 && data.daysCount > 0
-          ? Math.round(gYen / (data.avgMachines * data.daysCount))
-          : 0;
 
-      return (
-        <div className="bg-slate-900/95 text-white p-3.5 rounded-lg shadow-xl border border-slate-700 text-xs max-w-sm backdrop-blur-xs">
-          <div className="font-bold text-sm text-amber-400 border-b border-slate-700/80 pb-1.5 mb-2 flex items-center justify-between">
-            <span>{data.label}</span>
-            <span className="text-[11px] font-normal text-slate-400">
-              {data.daysCount}日間営業 (平均{data.avgMachines}台)
-            </span>
-          </div>
-
-          <div className="space-y-1.5">
-            {/* G-count Model Details */}
-            <div className="bg-slate-800/80 p-2.5 rounded-lg border border-indigo-900/50 space-y-1.5">
-              <div className="flex justify-between items-center">
-                <span className="text-indigo-200 font-bold flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-amber-400" />
-                  {perspective === 'hall' ? 'G数連動ホール粗利:' : 'G数連動ユーザー収支:'}
-                </span>
-                <span
-                  className={`font-extrabold text-sm ${
-                    gYen >= 0 ? 'text-amber-400' : 'text-rose-400'
-                  }`}
-                >
-                  {formatYen(gYen)}
-                </span>
-              </div>
-              <div className="flex justify-between items-center text-[11px] pt-1 border-t border-slate-700/60">
-                <span className="text-slate-400">1台あたり収支:</span>
-                <span className="font-bold text-amber-300">
-                  {formatYen(perMachineDaily)}/台・日
-                  <span className="text-[10px] text-slate-300 font-normal ml-1">
-                    (月 {formatYen(perMachineMonth)}/台)
-                  </span>
-                </span>
-              </div>
-            </div>
-
-            <div className="flex justify-between items-center">
-              <span className="text-slate-300">客側平均差枚/日:</span>
-              <span
-                className={`font-semibold ${data.avgDiffCoins > 0 ? 'text-blue-400' : 'text-slate-200'}`}
-              >
-                {data.avgDiffCoins > 0 ? `+${data.avgDiffCoins}` : data.avgDiffCoins} 枚/台
-              </span>
-            </div>
-
-            <div className="flex justify-between items-center">
-              <span className="text-slate-400">平均稼働 / 機械割:</span>
-              <span className="font-medium text-slate-200">
-                {formatNumber(data.avgGames)}G ({(data.avgPayoutRate || 100).toFixed(2)}%)
-              </span>
-            </div>
-
-            <div className="flex justify-between items-center text-[11px] text-slate-400 border-t border-slate-800 pt-1">
-              <span>旧イベント日平均:</span>
-              <span className="text-amber-300 font-medium">
-                {data.eventAvgDiff > 0 ? `+${data.eventAvgDiff}` : data.eventAvgDiff}枚/台 (
-                {data.eventDaysCount}日)
-              </span>
-            </div>
-          </div>
-
-          <div className="mt-2.5 pt-1.5 border-t border-slate-800 text-[10px] text-amber-300/80 text-center">
-            クリックで日別明細を表示
-          </div>
-        </div>
-      );
-    }
-    return null;
-  };
 
   return (
     <div className="bg-white rounded-xl p-4 sm:p-5 border border-slate-200/80 shadow-xs flex flex-col">
@@ -451,7 +458,7 @@ const ProfitChartInner: React.FC<ProfitChartProps> = ({
                   tick={{ fontSize: 11, fill: '#64748b' }}
                   tickFormatter={(val) => `${val}`}
                 />
-                <Tooltip content={<CustomTooltip />} />
+                <Tooltip content={<ProfitChartTooltip perspective={perspective} />} />
                 <ReferenceLine
                   y={unit === 'payoutRate' ? 100 : 0}
                   stroke="#cbd5e1"
@@ -488,13 +495,12 @@ const ProfitChartInner: React.FC<ProfitChartProps> = ({
                 perspective={perspective}
                 unit={unit}
                 unitLabel={unitLabel}
-                CustomTooltip={CustomTooltip}
                 onSelectMonth={onSelectMonth}
               />
             ) : (
               <GamesChartComponent
                 data={chartData}
-                CustomTooltip={CustomTooltip}
+                perspective={perspective}
                 onSelectMonth={onSelectMonth}
               />
             )}
@@ -519,9 +525,8 @@ const AreaChartComponent: React.FC<{
   perspective: 'hall' | 'player';
   unit: 'yen' | 'coins' | 'avgDiff' | 'payoutRate';
   unitLabel: string;
-  CustomTooltip: any;
   onSelectMonth?: (ym: string) => void;
-}> = ({ data, perspective, unit, unitLabel, CustomTooltip, onSelectMonth }) => {
+}> = ({ data, perspective, unit, unitLabel, onSelectMonth }) => {
   const refLineY = unit === 'payoutRate' ? 100 : 0;
   return (
     <ComposedChart
@@ -546,7 +551,7 @@ const AreaChartComponent: React.FC<{
         tick={{ fontSize: 11, fill: '#64748b' }}
         domain={unit === 'payoutRate' ? ['auto', 'auto'] : undefined}
       />
-      <Tooltip content={<CustomTooltip />} />
+      <Tooltip content={<ProfitChartTooltip perspective={perspective} />} />
       <ReferenceLine y={refLineY} stroke="#cbd5e1" strokeWidth={1} />
 
       <Area
@@ -567,9 +572,9 @@ const AreaChartComponent: React.FC<{
 // Subcomponent for games chart
 const GamesChartComponent: React.FC<{
   data: any[];
-  CustomTooltip: any;
+  perspective: 'hall' | 'player';
   onSelectMonth?: (ym: string) => void;
-}> = ({ data, CustomTooltip, onSelectMonth }) => {
+}> = ({ data, perspective, onSelectMonth }) => {
   return (
     <ComposedChart
       data={data}
@@ -595,7 +600,7 @@ const GamesChartComponent: React.FC<{
         domain={[0, 'auto']}
         tickFormatter={(val) => `${val}G`}
       />
-      <Tooltip content={<CustomTooltip />} />
+      <Tooltip content={<ProfitChartTooltip perspective={perspective} />} />
       <Bar
         yAxisId="left"
         dataKey="avgGames"

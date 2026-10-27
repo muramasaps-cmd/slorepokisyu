@@ -5,7 +5,10 @@ import {
 } from './targetRankingEngine';
 import {
   calculateTargetMachineRanking,
+  buildMachineFeatureIndex,
+  MachineHistoryAccumulator,
   TargetMachineScore,
+  TargetMachineRankingResult,
   MachineConfidenceLevel,
 } from './targetMachineRanking';
 import { getMachineIsland, parseIslandConfig } from './islandUtils';
@@ -15,6 +18,8 @@ import { isDateSpecialDay } from './dataEngine';
 import {
   StoreDateScanCell,
   computeStoreDateScanCacheKey,
+  buildStoreScanPrefixData,
+  StoreScanPrefixData,
   getMemoryScanCache,
   setMemoryScanCache,
   putScanCacheToIdb,
@@ -206,9 +211,15 @@ export function convertCoinsToYen(
  * CRITICAL: Strictly filters out records on or after targetDate (r.date < targetDate)
  * to prevent any future data leakage.
  */
-export function calculateStoreTargetMetrics(
+/**
+ * Assembles a StoreDateScanCell from a store, targetDate, storeEvalDays, and TargetMachineRankingResult.
+ * Shared between calculateStoreTargetMetrics (single-day) and calculateStoreTargetMetricsForDates (batch).
+ */
+export function assembleStoreDateScanCell(
   store: StoreProfile,
   targetDate: string,
+  storeEvalDays: number,
+  machineResult: TargetMachineRankingResult | null,
   options?: {
     topN?: number;
     diffMetric?: 'actual' | 'baseGames';
@@ -218,13 +229,7 @@ export function calculateStoreTargetMetrics(
 ): StoreDateScanCell {
   const topN = options?.topN ?? 10;
   const diffMetric = options?.diffMetric || 'actual';
-  const baseGames = options?.baseGames ?? 5000;
   const legacyCrossShrink = options?.legacyCrossShrink ?? false;
-
-  const records = store.dailyRecords || [];
-  // Strictly filter out any records on or after targetDate to prevent future leakage
-  const priorRecords = records.filter((r) => r.date < targetDate);
-  const storeEvalDays = priorRecords.length;
 
   const isSpecial = isDateSpecialDay(targetDate, store.specialDayRules);
   const specialDayReason = store.oldEventDays || (isSpecial ? '特日' : undefined);
@@ -243,8 +248,7 @@ export function calculateStoreTargetMetrics(
     };
   }
 
-  const hasMachineData = priorRecords.some((r) => r.machines && r.machines.length > 0);
-  if (!hasMachineData) {
+  if (!machineResult) {
     return {
       storeId: store.id,
       storeName: store.name,
@@ -256,6 +260,117 @@ export function calculateStoreTargetMetrics(
       specialDayReason,
       evaluationDays: storeEvalDays,
     };
+  }
+
+  const isSpecialResult = Boolean(machineResult.isSpecialDay ?? isSpecial);
+
+  if (machineResult.rankings.length === 0) {
+    return {
+      storeId: store.id,
+      storeName: store.name,
+      targetDate,
+      topNAvgExpectedDiff: 0,
+      evaluatedMachinesCount: 0,
+      excludedLowConfidenceCount: 0,
+      isSpecialDay: isSpecialResult,
+      specialDayReason,
+      evaluationDays: storeEvalDays,
+    };
+  }
+
+  let lowConfidenceCount = 0;
+  const validExpectedDiffs: number[] = [];
+
+  for (const mach of machineResult.rankings) {
+    let machConfidence = mach.confidence;
+    if (storeEvalDays < 3) {
+      machConfidence = '低';
+    } else if (storeEvalDays < 7 && machConfidence === '高') {
+      machConfidence = '中';
+    }
+
+    if (machConfidence === '低') {
+      lowConfidenceCount++;
+      continue;
+    }
+
+    let rawExpectedDiff = 0;
+    if (diffMetric === 'baseGames') {
+      rawExpectedDiff =
+        mach.expectedDiffAtBaseGames ??
+        mach.stats.expectedDiffAtBaseGames ??
+        mach.stats.shrunkDiff;
+    } else {
+      rawExpectedDiff = mach.posteriorMean ?? mach.stats.shrunkDiff;
+    }
+
+    let expectedDiffCoins = 0;
+    const evidenceDays =
+      mach.cohortEvidenceDays > 0 ? mach.cohortEvidenceDays : mach.evidenceDays;
+    const evidenceWeight = evidenceDays / (evidenceDays + 3);
+    const storeWeight = Math.min(1.0, storeEvalDays / 15);
+
+    if (legacyCrossShrink) {
+      expectedDiffCoins = Math.round(rawExpectedDiff * evidenceWeight * storeWeight);
+    } else {
+      expectedDiffCoins = Math.round(rawExpectedDiff);
+    }
+
+    validExpectedDiffs.push(expectedDiffCoins);
+  }
+
+  // Sort valid machines descending by expected diff
+  validExpectedDiffs.sort((a, b) => b - a);
+  const topCandidates = validExpectedDiffs.slice(0, topN);
+  const topNAvgExpectedDiff =
+    topCandidates.length > 0
+      ? Math.round(topCandidates.reduce((sum, v) => sum + v, 0) / topCandidates.length)
+      : 0;
+
+  return {
+    storeId: store.id,
+    storeName: store.name,
+    targetDate,
+    topNAvgExpectedDiff,
+    evaluatedMachinesCount: topCandidates.length,
+    excludedLowConfidenceCount: lowConfidenceCount,
+    isSpecialDay: isSpecialResult,
+    specialDayReason,
+    evaluationDays: storeEvalDays,
+  };
+}
+
+/**
+ * Calculates store metrics (top N machines expected diff average excluding low confidence)
+ * for a specific targetDate.
+ *
+ * CRITICAL: Strictly filters out records on or after targetDate (r.date < targetDate)
+ * to prevent any future data leakage.
+ */
+export function calculateStoreTargetMetrics(
+  store: StoreProfile,
+  targetDate: string,
+  options?: {
+    topN?: number;
+    diffMetric?: 'actual' | 'baseGames';
+    baseGames?: number;
+    legacyCrossShrink?: boolean;
+  }
+): StoreDateScanCell {
+  const baseGames = options?.baseGames ?? 5000;
+
+  const records = store.dailyRecords || [];
+  // Strictly filter out any records on or after targetDate to prevent future leakage
+  const priorRecords = records.filter((r) => r.date < targetDate);
+  const storeEvalDays = priorRecords.length;
+
+  if (storeEvalDays === 0) {
+    return assembleStoreDateScanCell(store, targetDate, 0, null, options);
+  }
+
+  const hasMachineData = priorRecords.some((r) => r.machines && r.machines.length > 0);
+  if (!hasMachineData) {
+    return assembleStoreDateScanCell(store, targetDate, storeEvalDays, null, options);
   }
 
   try {
@@ -272,95 +387,125 @@ export function calculateStoreTargetMetrics(
       }
     );
 
-    const isSpecialResult = Boolean(machineResult.isSpecialDay ?? isSpecial);
-
-    if (!machineResult || machineResult.rankings.length === 0) {
-      return {
-        storeId: store.id,
-        storeName: store.name,
-        targetDate,
-        topNAvgExpectedDiff: 0,
-        evaluatedMachinesCount: 0,
-        excludedLowConfidenceCount: 0,
-        isSpecialDay: isSpecialResult,
-        specialDayReason,
-        evaluationDays: storeEvalDays,
-      };
-    }
-
-    let lowConfidenceCount = 0;
-    const validExpectedDiffs: number[] = [];
-
-    for (const mach of machineResult.rankings) {
-      let machConfidence = mach.confidence;
-      if (storeEvalDays < 3) {
-        machConfidence = '低';
-      } else if (storeEvalDays < 7 && machConfidence === '高') {
-        machConfidence = '中';
-      }
-
-      if (machConfidence === '低') {
-        lowConfidenceCount++;
-        continue;
-      }
-
-      let rawExpectedDiff = 0;
-      if (diffMetric === 'baseGames') {
-        rawExpectedDiff =
-          mach.expectedDiffAtBaseGames ??
-          mach.stats.expectedDiffAtBaseGames ??
-          mach.stats.shrunkDiff;
-      } else {
-        rawExpectedDiff = mach.posteriorMean ?? mach.stats.shrunkDiff;
-      }
-
-      let expectedDiffCoins = 0;
-      const evidenceDays =
-        mach.cohortEvidenceDays > 0 ? mach.cohortEvidenceDays : mach.evidenceDays;
-      const evidenceWeight = evidenceDays / (evidenceDays + 3);
-      const storeWeight = Math.min(1.0, storeEvalDays / 15);
-
-      if (legacyCrossShrink) {
-        expectedDiffCoins = Math.round(rawExpectedDiff * evidenceWeight * storeWeight);
-      } else {
-        expectedDiffCoins = Math.round(rawExpectedDiff);
-      }
-
-      validExpectedDiffs.push(expectedDiffCoins);
-    }
-
-    // Sort valid machines descending by expected diff
-    validExpectedDiffs.sort((a, b) => b - a);
-    const topCandidates = validExpectedDiffs.slice(0, topN);
-    const topNAvgExpectedDiff = topCandidates.length > 0
-      ? Math.round(topCandidates.reduce((sum, v) => sum + v, 0) / topCandidates.length)
-      : 0;
-
-    return {
-      storeId: store.id,
-      storeName: store.name,
-      targetDate,
-      topNAvgExpectedDiff,
-      evaluatedMachinesCount: topCandidates.length,
-      excludedLowConfidenceCount: lowConfidenceCount,
-      isSpecialDay: isSpecialResult,
-      specialDayReason,
-      evaluationDays: storeEvalDays,
-    };
+    return assembleStoreDateScanCell(store, targetDate, storeEvalDays, machineResult, options);
   } catch (err) {
     console.warn(`Failed to calculate target metrics for ${store.name} on ${targetDate}:`, err);
-    return {
-      storeId: store.id,
-      storeName: store.name,
-      targetDate,
-      topNAvgExpectedDiff: 0,
-      evaluatedMachinesCount: 0,
-      excludedLowConfidenceCount: 0,
-      isSpecialDay: isSpecial,
-      specialDayReason,
-      evaluationDays: storeEvalDays,
-    };
+    return assembleStoreDateScanCell(store, targetDate, storeEvalDays, null, options);
   }
+}
+
+/**
+ * Calculates store metrics for multiple target dates efficiently using a single
+ * MachineHistoryAccumulator and MachineFeatureIndex per store.
+ * Dates are sorted in ascending order for accumulator reuse, and results are returned
+ * matching the original input dates order.
+ */
+export function calculateStoreTargetMetricsForDates(
+  store: StoreProfile,
+  dates: string[],
+  options?: {
+    topN?: number;
+    diffMetric?: 'actual' | 'baseGames';
+    baseGames?: number;
+    legacyCrossShrink?: boolean;
+  }
+): StoreDateScanCell[] {
+  if (!dates || dates.length === 0) return [];
+
+  const baseGames = options?.baseGames ?? 5000;
+  const rawRecords = store.dailyRecords || [];
+  const sortedRecords = [...rawRecords].sort((a, b) => a.date.localeCompare(b.date));
+
+  // Sort dates ascending while remembering original indices
+  const indexedDates = dates.map((date, originalIndex) => ({ date, originalIndex }));
+  indexedDates.sort((a, b) => a.date.localeCompare(b.date));
+
+  const results: StoreDateScanCell[] = new Array(dates.length);
+
+  let machineIndex: ReturnType<typeof buildMachineFeatureIndex> | null = null;
+  let accumulator: MachineHistoryAccumulator | null = null;
+
+  let recIdx = 0;
+  let hasMachineDataSoFar = false;
+
+  for (let i = 0; i < indexedDates.length; i++) {
+    const { date: targetDate, originalIndex } = indexedDates[i];
+
+    while (recIdx < sortedRecords.length && sortedRecords[recIdx].date < targetDate) {
+      const rec = sortedRecords[recIdx];
+      if (rec.machines && rec.machines.length > 0) {
+        hasMachineDataSoFar = true;
+      }
+      recIdx++;
+    }
+
+    const storeEvalDays = recIdx;
+    const hasMachineData = hasMachineDataSoFar;
+
+    if (storeEvalDays === 0) {
+      results[originalIndex] = assembleStoreDateScanCell(store, targetDate, 0, null, options);
+      continue;
+    }
+
+    if (!hasMachineData) {
+      results[originalIndex] = assembleStoreDateScanCell(store, targetDate, storeEvalDays, null, options);
+      continue;
+    }
+
+    if (!accumulator) {
+      machineIndex = buildMachineFeatureIndex(
+        rawRecords,
+        store.specialDayRules,
+        {
+          rankingWeights: store.customRankingWeights,
+          includeReusedMachines: store.includeReusedMachinesInStats,
+          aliasDictionary: store.modelAliasDictionary,
+          baseGames,
+        }
+      );
+      accumulator = new MachineHistoryAccumulator(
+        machineIndex.sortedPastRecords,
+        machineIndex.specialDayRules,
+        machineIndex.featureIndex,
+        store.modelAliasDictionary || machineIndex.aliasDictionary
+      );
+    }
+
+    try {
+      const machineResult = accumulator.computeRanking(
+        targetDate,
+        store.customMachineRankingWeights,
+        {
+          rankingWeights: store.customRankingWeights,
+          includeReusedMachines: store.includeReusedMachinesInStats,
+          aliasDictionary: store.modelAliasDictionary,
+          baseGames,
+        }
+      );
+
+      results[originalIndex] = assembleStoreDateScanCell(
+        store,
+        targetDate,
+        storeEvalDays,
+        machineResult,
+        options
+      );
+    } catch (err) {
+      console.warn(
+        `Failed to calculate target metrics for ${store.name} on ${targetDate}:`,
+        err
+      );
+      results[originalIndex] = assembleStoreDateScanCell(
+        store,
+        targetDate,
+        storeEvalDays,
+        null,
+        options
+      );
+    }
+  }
+
+  return results;
 }
 
 /**
@@ -391,6 +536,8 @@ export function generateCandidateScanDates(startDateStr?: string, daysCount = 14
 /**
  * Scans candidate visit dates across multiple stores (Store × Date grid).
  * Caches each cell using dual FNV-1a key with memory and IndexedDB backing.
+ * Uses single-pass prefix hashing and batch calculateStoreTargetMetricsForDates
+ * to only compute uncached cells without recreating accumulators.
  */
 export function scanCandidateDates(
   stores: StoreProfile[],
@@ -416,42 +563,57 @@ export function scanCandidateDates(
   const totalSteps = Math.max(1, dates.length * stores.length);
   let currentStep = 0;
 
-  for (let dIdx = 0; dIdx < dates.length; dIdx++) {
-    const dStr = dates[dIdx];
-    for (let sIdx = 0; sIdx < stores.length; sIdx++) {
-      const store = stores[sIdx];
+  for (let sIdx = 0; sIdx < stores.length; sIdx++) {
+    const store = stores[sIdx];
+    const prefixData = buildStoreScanPrefixData(
+      store.id,
+      store.dailyRecords,
+      topN,
+      diffMetric,
+      baseGames,
+      store.customMachineRankingWeights,
+      store.specialDayRules,
+      store.modelAliasDictionary,
+      store.includeReusedMachinesInStats
+    );
+
+    const missingDates: string[] = [];
+    const missingCacheKeys: string[] = [];
+
+    for (let dIdx = 0; dIdx < dates.length; dIdx++) {
+      const dStr = dates[dIdx];
       currentStep++;
       if (options?.onProgress) {
         const pct = Math.round((currentStep / totalSteps) * 100);
         options.onProgress(pct, dStr, store.name);
       }
 
-      const cacheKey = computeStoreDateScanCacheKey(
-        store.id,
-        dStr,
-        store.dailyRecords,
+      const cacheKey = prefixData.computeKeyForDate(dStr);
+      const cell = getMemoryScanCache(cacheKey);
+      if (cell) {
+        grid[store.id][dStr] = cell;
+      } else {
+        missingDates.push(dStr);
+        missingCacheKeys.push(cacheKey);
+      }
+    }
+
+    if (missingDates.length > 0) {
+      const calculatedCells = calculateStoreTargetMetricsForDates(store, missingDates, {
         topN,
         diffMetric,
         baseGames,
-        store.customMachineRankingWeights,
-        store.specialDayRules,
-        store.modelAliasDictionary,
-        store.includeReusedMachinesInStats
-      );
+        legacyCrossShrink,
+      });
 
-      let cell = getMemoryScanCache(cacheKey);
-      if (!cell) {
-        cell = calculateStoreTargetMetrics(store, dStr, {
-          topN,
-          diffMetric,
-          baseGames,
-          legacyCrossShrink,
-        });
+      for (let m = 0; m < missingDates.length; m++) {
+        const dStr = missingDates[m];
+        const cacheKey = missingCacheKeys[m];
+        const cell = calculatedCells[m];
         setMemoryScanCache(cacheKey, cell);
         putScanCacheToIdb(cacheKey, cell, store.id).catch(() => {});
+        grid[store.id][dStr] = cell;
       }
-
-      grid[store.id][dStr] = cell;
     }
   }
 

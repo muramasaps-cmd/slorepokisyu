@@ -55,6 +55,7 @@ interface TargetMachineRankingProps {
   storeId?: string;
   featureIndex?: FeatureIndex;
   funnelModelName?: string | null;
+  precomputedRankingResult?: TargetMachineRankingResult | null;
 }
 
 /**
@@ -127,6 +128,7 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
   storeId,
   featureIndex,
   funnelModelName,
+  precomputedRankingResult,
 }) => {
   const [selectedModel, setSelectedModel] = useState<string>(() => funnelModelName || 'all');
 
@@ -303,8 +305,11 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
     };
   }, [cacheKey, dailyRecords, specialDayRules, backtestOptions, hasMachineData]);
 
-  // Calculate machine ranking for target date immediately (Requirement 2: reuse featureIndex)
+  // Calculate machine ranking for target date immediately (Prompt 59: reuse precomputedRankingResult if provided)
   const rankingResult: TargetMachineRankingResult | null = useMemo(() => {
+    if (precomputedRankingResult !== undefined) {
+      return precomputedRankingResult;
+    }
     if (!hasMachineData || !targetDate) return null;
     return calculateTargetMachineRanking(targetDate, dailyRecords, specialDayRules, customMachineWeights, {
       rankingWeights: customWeights,
@@ -312,7 +317,18 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
       aliasDictionary,
       featureIndex,
     });
-  }, [targetDate, dailyRecords, specialDayRules, customWeights, customMachineWeights, hasMachineData, includeReusedMachines, aliasDictionary, featureIndex]);
+  }, [
+    precomputedRankingResult,
+    targetDate,
+    dailyRecords,
+    specialDayRules,
+    customWeights,
+    customMachineWeights,
+    hasMachineData,
+    includeReusedMachines,
+    aliasDictionary,
+    featureIndex,
+  ]);
 
   // Extract unique models & tails from ranking results
   const availableModels = useMemo(() => {

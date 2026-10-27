@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useTransition } from 'react';
 import { StoreProfile, MonthlyStat, DailyRecord, RankingWeights, MachineRankingWeights } from './data/types';
 import { Header, ProfitModelType, UnitMode } from './components/Header';
 import { KpiCards } from './components/KpiCards';
@@ -407,6 +407,55 @@ export default function App() {
     const found = uniqueStores.find((s) => s.id === activeStoreIdState);
     return found || uniqueStores[0];
   }, [uniqueStores, activeStoreIdState]);
+
+  const [isPending, startTransition] = useTransition();
+
+  // Performance measurement for ?perf=1 (Prompt 59)
+  const perfStartMarkRef = useRef<string | null>(null);
+  const perfLabelRef = useRef<string>('');
+
+  const triggerPerfTransition = (label: string, action: () => void) => {
+    const isPerf =
+      typeof window !== 'undefined' &&
+      (window.location.search.includes('perf=1') || window.location.hash.includes('perf=1'));
+    if (isPerf) {
+      const startMark = `perf-start-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      try {
+        performance.mark(startMark);
+        perfStartMarkRef.current = startMark;
+        perfLabelRef.current = label;
+      } catch {
+        // ignore performance mark error
+      }
+    }
+    startTransition(action);
+  };
+
+  // Record transition measurement on render completion (?perf=1)
+  useEffect(() => {
+    if (!isPending && perfStartMarkRef.current) {
+      const isPerf =
+        typeof window !== 'undefined' &&
+        (window.location.search.includes('perf=1') || window.location.hash.includes('perf=1'));
+      if (isPerf) {
+        const endMark = `perf-end-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        try {
+          performance.mark(endMark);
+          const measureName = `Transition: ${perfLabelRef.current}`;
+          const measure = performance.measure(measureName, perfStartMarkRef.current, endMark);
+          console.table([
+            {
+              Screen: perfLabelRef.current,
+              'Duration (ms)': Math.round(measure.duration * 10) / 10,
+            },
+          ]);
+        } catch {
+          // ignore performance measure error
+        }
+      }
+      perfStartMarkRef.current = null;
+    }
+  }, [isPending]);
 
   const [perspective, setPerspective] = useState<'hall' | 'player'>('hall');
   const [unit, setUnit] = useState<UnitMode>('yen');

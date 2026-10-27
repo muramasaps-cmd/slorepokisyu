@@ -37,6 +37,158 @@ export const MAX_SCAN_CACHE_ENTRIES_TOTAL = 300;
  * CRITICAL: Only records strictly prior to targetDate (r.date < targetDate)
  * are hashed into dataSig. Modifying or adding records on or after targetDate
  * produces the identical cache key, guaranteeing no leakage.
+/**
+ * Hashes a single daily record into dual 32-bit FNV-1a digests.
+ */
+export function hashDailyRecordForScan(r: DailyRecord): { h1: number; h2: number } {
+  const dayHasher = new Fnv1aDual();
+
+  dayHasher.addString(r.date);
+  dayHasher.addString(r.dayOfWeek);
+  dayHasher.addBool(r.isReusedMachines);
+  dayHasher.addBool(r.isOldEventDay);
+  dayHasher.addBool(r.is7Day);
+
+  const machines = r.machines || [];
+  dayHasher.addInt(machines.length);
+
+  for (let m = 0; m < machines.length; m++) {
+    const mach = machines[m];
+    dayHasher.addInt(mach.machineNum);
+    dayHasher.addString(mach.modelName);
+    dayHasher.addInt(mach.games);
+    dayHasher.addInt(mach.diff);
+    dayHasher.addInt(mach.bb ?? 0);
+    dayHasher.addInt(mach.rb ?? 0);
+    dayHasher.addFloat(mach.payoutRate ?? 0);
+    const tailDigit = mach.tailDigit !== undefined ? mach.tailDigit : (mach.machineNum % 10);
+    dayHasher.addInt(tailDigit);
+    dayHasher.addBool(mach.isZoro);
+  }
+
+  return { h1: dayHasher.h1, h2: dayHasher.h2 };
+}
+
+export interface StoreScanPrefixState {
+  h1: number;
+  h2: number;
+  dataSig: string;
+}
+
+export interface StoreScanPrefixData {
+  storeId: string;
+  sortedRecords: DailyRecord[];
+  prefixStates: StoreScanPrefixState[];
+  getPriorCountForDate: (targetDate: string) => number;
+  getDataSigForDate: (targetDate: string) => string;
+  computeKeyForDate: (targetDate: string) => string;
+}
+
+/**
+ * Builds incremental prefix hash states for candidate scan keys in a single pass over daily records.
+ * The resulting cache key for each targetDate exactly matches computeStoreDateScanCacheKey.
+ */
+export function buildStoreScanPrefixData(
+  storeId: string,
+  dailyRecords: DailyRecord[] | undefined,
+  topN: number = 10,
+  diffMetric: 'actual' | 'baseGames' = 'actual',
+  baseGames: number = 5000,
+  weights?: MachineRankingWeights,
+  rules?: SpecialDayRules,
+  aliasDictionary?: Record<string, string>,
+  includeReusedMachines?: boolean
+): StoreScanPrefixData {
+  const sid = storeId || 'default';
+  const allRecords = dailyRecords || [];
+  const sortedRecords = [...allRecords].sort((a, b) => a.date.localeCompare(b.date));
+  const n = sortedRecords.length;
+
+  const weightsStr = weights
+    ? JSON.stringify(weights, Object.keys(weights).sort())
+    : 'defWeights';
+
+  const rulesStr = rules
+    ? JSON.stringify(rules, Object.keys(rules).sort())
+    : 'defRules';
+
+  const aliasStr =
+    aliasDictionary && Object.keys(aliasDictionary).length > 0
+      ? Object.keys(aliasDictionary)
+          .sort()
+          .map((k) => `${k}:${aliasDictionary[k]}`)
+          .join(';')
+      : 'noAlias';
+
+  const reusedStr = includeReusedMachines ? 'incReused' : 'noReused';
+  const suffix = `top${topN}__${diffMetric}__${baseGames}__${weightsStr}__${rulesStr}__${aliasStr}__${reusedStr}`;
+
+  const prefixStates: StoreScanPrefixState[] = new Array(n + 1);
+  const overallHasher = new Fnv1aDual();
+
+  prefixStates[0] = {
+    h1: overallHasher.h1,
+    h2: overallHasher.h2,
+    dataSig: `0___${overallHasher.digestHex()}`,
+  };
+
+  const firstDate = n > 0 ? sortedRecords[0].date : '';
+
+  for (let k = 1; k <= n; k++) {
+    const r = sortedRecords[k - 1];
+    const { h1, h2 } = hashDailyRecordForScan(r);
+    overallHasher.addInt(h1);
+    overallHasher.addInt(h2);
+    const lastDate = r.date;
+    const dataSig = `${k}_${firstDate}_${lastDate}_${overallHasher.digestHex()}`;
+    prefixStates[k] = {
+      h1: overallHasher.h1,
+      h2: overallHasher.h2,
+      dataSig,
+    };
+  }
+
+  const getPriorCountForDate = (targetDate: string): number => {
+    let low = 0;
+    let high = n;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (sortedRecords[mid].date < targetDate) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    return low;
+  };
+
+  const getDataSigForDate = (targetDate: string): string => {
+    const k = getPriorCountForDate(targetDate);
+    return prefixStates[k].dataSig;
+  };
+
+  const computeKeyForDate = (targetDate: string): string => {
+    const dataSig = getDataSigForDate(targetDate);
+    return `scan_v${SCAN_CACHE_VERSION}__${sid}__${targetDate}__${dataSig}__${suffix}`;
+  };
+
+  return {
+    storeId: sid,
+    sortedRecords,
+    prefixStates,
+    getPriorCountForDate,
+    getDataSigForDate,
+    computeKeyForDate,
+  };
+}
+
+/**
+ * Computes a deterministic cache key for store date candidate scan.
+ * Format: "scan_v{version}__{storeId}__{targetDate}__{dataSig}__{topN}__{diffMetric}__{baseGames}__{weights}__{rules}"
+ *
+ * CRITICAL: Only records strictly prior to targetDate (r.date < targetDate)
+ * are hashed into dataSig. Modifying or adding records on or after targetDate
+ * produces the identical cache key, guaranteeing no leakage.
  */
 export function computeStoreDateScanCacheKey(
   storeId: string,
@@ -62,33 +214,9 @@ export function computeStoreDateScanCacheKey(
 
   for (let i = 0; i < recCount; i++) {
     const r = priorRecords[i];
-    const dayHasher = new Fnv1aDual();
-
-    dayHasher.addString(r.date);
-    dayHasher.addString(r.dayOfWeek);
-    dayHasher.addBool(r.isReusedMachines);
-    dayHasher.addBool(r.isOldEventDay);
-    dayHasher.addBool(r.is7Day);
-
-    const machines = r.machines || [];
-    dayHasher.addInt(machines.length);
-
-    for (let m = 0; m < machines.length; m++) {
-      const mach = machines[m];
-      dayHasher.addInt(mach.machineNum);
-      dayHasher.addString(mach.modelName);
-      dayHasher.addInt(mach.games);
-      dayHasher.addInt(mach.diff);
-      dayHasher.addInt(mach.bb ?? 0);
-      dayHasher.addInt(mach.rb ?? 0);
-      dayHasher.addFloat(mach.payoutRate ?? 0);
-      const tailDigit = mach.tailDigit !== undefined ? mach.tailDigit : (mach.machineNum % 10);
-      dayHasher.addInt(tailDigit);
-      dayHasher.addBool(mach.isZoro);
-    }
-
-    overallHasher.addInt(dayHasher.h1);
-    overallHasher.addInt(dayHasher.h2);
+    const { h1, h2 } = hashDailyRecordForScan(r);
+    overallHasher.addInt(h1);
+    overallHasher.addInt(h2);
   }
 
   const dataSig = `${recCount}_${firstDate}_${lastDate}_${overallHasher.digestHex()}`;

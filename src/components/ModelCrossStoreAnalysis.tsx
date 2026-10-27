@@ -65,6 +65,52 @@ export interface ModelCrossStoreAnalysisProps {
   onNavigateToConditions?: (dim?: ConditionDimension) => void;
 }
 
+// Custom Chart Tooltip for Monthly Trends (Prompt 59: defined outside component to prevent remounting)
+export const MonthlyTrendTooltip = ({ active, payload, label }: any) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-slate-900/95 text-white p-3 rounded-lg shadow-xl border border-slate-700 text-xs min-w-[200px] backdrop-blur-xs space-y-2">
+        <div className="font-bold text-sm text-indigo-300 border-b border-slate-700 pb-1 flex items-center justify-between">
+          <span>{label}</span>
+          <span className="text-[10px] text-slate-400">台あたり差枚</span>
+        </div>
+        <div className="space-y-1 pt-0.5">
+          {payload.map((entry: any) => {
+            const val = entry.value;
+            if (val === null || val === undefined) return null;
+            const isTotal = entry.name === ALL_STORES_NAME;
+            const formattedVal = `${val >= 0 ? '+' : ''}${val}枚/台`;
+
+            return (
+              <div
+                key={entry.name}
+                className={`flex items-center justify-between gap-3 text-xs ${
+                  isTotal ? 'font-bold border-t border-slate-700/80 pt-1 text-slate-100' : ''
+                }`}
+              >
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span
+                    className="w-2.5 h-2.5 rounded-full shrink-0"
+                    style={{ backgroundColor: entry.color || entry.stroke }}
+                  />
+                  <span className="truncate max-w-[130px]">{entry.name}:</span>
+                </div>
+                <span
+                  className="font-mono font-bold shrink-0"
+                  style={{ color: isTotal ? '#ffffff' : entry.color }}
+                >
+                  {formattedVal}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
 export const ModelCrossStoreAnalysis: React.FC<ModelCrossStoreAnalysisProps> = ({
   stores,
   currentStore,
@@ -163,51 +209,7 @@ export const ModelCrossStoreAnalysis: React.FC<ModelCrossStoreAnalysisProps> = (
     return stores.find((s) => s.id === selectedDetailStoreId) || null;
   }, [stores, selectedDetailStoreId]);
 
-  // Custom Chart Tooltip for Monthly Trends
-  const MonthlyTrendTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length) {
-      return (
-        <div className="bg-slate-900/95 text-white p-3 rounded-lg shadow-xl border border-slate-700 text-xs min-w-[200px] backdrop-blur-xs space-y-2">
-          <div className="font-bold text-sm text-indigo-300 border-b border-slate-700 pb-1 flex items-center justify-between">
-            <span>{label}</span>
-            <span className="text-[10px] text-slate-400">台あたり差枚</span>
-          </div>
-          <div className="space-y-1 pt-0.5">
-            {payload.map((entry: any) => {
-              const val = entry.value;
-              if (val === null || val === undefined) return null;
-              const isTotal = entry.name === ALL_STORES_NAME;
-              const formattedVal = `${val >= 0 ? '+' : ''}${val}枚/台`;
 
-              return (
-                <div
-                  key={entry.name}
-                  className={`flex items-center justify-between gap-3 text-xs ${
-                    isTotal ? 'font-bold border-t border-slate-700/80 pt-1 text-slate-100' : ''
-                  }`}
-                >
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <span
-                      className="w-2.5 h-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: entry.color || entry.stroke }}
-                    />
-                    <span className="truncate max-w-[130px]">{entry.name}:</span>
-                  </div>
-                  <span
-                    className="font-mono font-bold shrink-0"
-                    style={{ color: isTotal ? '#ffffff' : entry.color }}
-                  >
-                    {formattedVal}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      );
-    }
-    return null;
-  };
 
   return (
     <div className="space-y-6 animate-in fade-in duration-150">

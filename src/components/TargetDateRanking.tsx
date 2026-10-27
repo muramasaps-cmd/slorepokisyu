@@ -11,7 +11,7 @@ import { formatYen, formatCoins, formatNumber } from '../utils/formatters';
 import { UnitMode } from './Header';
 import { TargetMachineRanking, formatMachineReasons } from './TargetMachineRanking';
 import { TargetRankingTable } from './TargetRankingTable';
-import { calculateTargetMachineRanking } from '../utils/targetMachineRanking';
+import { calculateTargetMachineRanking, TargetMachineRankingResult } from '../utils/targetMachineRanking';
 import {
   loadTargetCheckStatus,
   saveTargetCheckStatus,
@@ -72,6 +72,7 @@ interface TargetDateRankingProps {
   funnelModelName?: string | null;
   onSelectFunnelModel?: (modelName: string | null) => void;
   targetSection?: string;
+  precomputedMachineRankingResult?: TargetMachineRankingResult | null;
 }
 
 type ModelFilterType = 'all' | 'main' | 'smart_slot' | 'juggler_a' | 'small';
@@ -99,6 +100,7 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
   funnelModelName,
   onSelectFunnelModel,
   targetSection,
+  precomputedMachineRankingResult,
 }) => {
   const [modelFilter, setModelFilter] = useState<ModelFilterType>('all');
   const [modelSort, setModelSort] = useState<ModelSortType>('score');
@@ -157,8 +159,14 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
     );
   }, [targetDate, dailyRecords, specialDayRules, oldEventDays, customWeights, includeReusedState, aliasDictionary, sharedFeatureIndex]);
 
-  // Machine ranking for Step ④ & ⑤
+  // Machine ranking for Step ④ & ⑤ (Prompt 59: reuse precomputedMachineRankingResult if provided)
   const machineRankingResult = useMemo(() => {
+    if (
+      precomputedMachineRankingResult !== undefined &&
+      includeReusedState === (includeReusedMachines ?? false)
+    ) {
+      return precomputedMachineRankingResult;
+    }
     if (!dailyRecords || dailyRecords.length === 0 || !targetDate) return null;
     const hasMach = dailyRecords.some((r) => r.machines && r.machines.length > 0);
     if (!hasMach) return null;
@@ -168,7 +176,18 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
       aliasDictionary,
       featureIndex: sharedFeatureIndex,
     });
-  }, [targetDate, dailyRecords, specialDayRules, customWeights, customMachineWeights, includeReusedState, aliasDictionary, sharedFeatureIndex]);
+  }, [
+    precomputedMachineRankingResult,
+    includeReusedState,
+    includeReusedMachines,
+    targetDate,
+    dailyRecords,
+    specialDayRules,
+    customWeights,
+    customMachineWeights,
+    aliasDictionary,
+    sharedFeatureIndex,
+  ]);
 
   // Step ④ machines filtered by funnelModelName
   const step4Machines = useMemo(() => {
@@ -1068,6 +1087,7 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
               storeId={storeId}
               featureIndex={sharedFeatureIndex}
               funnelModelName={funnelModelName}
+              precomputedRankingResult={machineRankingResult}
             />
           </div>
         )}

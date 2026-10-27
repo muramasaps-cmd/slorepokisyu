@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { StoreProfile } from '../data/types';
 import {
   calculateCrossStoreRanking,
@@ -36,6 +36,7 @@ import {
   putBacktestToIdb,
 } from '../utils/machineBacktestCache';
 import type { CrossRankingWorkerRequest, CrossRankingWorkerResponse } from '../workers/crossRankingWorker';
+import { computeStoresSignature } from '../workers/crossRankingController';
 import { TargetRankingTable } from './TargetRankingTable';
 import {
   Building2,
@@ -421,9 +422,15 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
   // Low confidence toggle (Prompt 13: 既定で除外、トグルで表示)
   const [includeLowConfidence, setIncludeLowConfidence] = useState<boolean>(false);
 
-  // Worker calculation & progress
+  // Worker availability state (fallback to synchronous only when Worker is unavailable / throws)
+  const [workerUnavailable, setWorkerUnavailable] = useState<boolean>(() => typeof Worker === 'undefined');
   const [workerProgress, setWorkerProgress] = useState<{ percent: number; store?: string } | null>(null);
   const workerRef = useRef<Worker | null>(null);
+  const lastSentSignatureRef = useRef<string>('');
+  const rankingReqIdRef = useRef<number>(0);
+  const latestRankingRequestIdRef = useRef<number>(0);
+  const scanReqIdRef = useRef<number>(0);
+  const latestScanRequestIdRef = useRef<number>(0);
 
   // Store backtest edge & calibration cache (30-6: 上位20台の実績リフト & 95%区間)
   const [edgeCache, setEdgeCache] = useState<
@@ -449,12 +456,40 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
     }
   });
 
+  const edgeCacheRef = useRef(edgeCache);
+  edgeCacheRef.current = edgeCache;
+
   const [testingStoreId, setTestingStoreId] = useState<string | null>(null);
 
-  // Pre-load backtest results from cache (memory or IndexedDB) for all stores
+  // Pre-load backtest results from cache (memory or IndexedDB) for all stores in batch
   useEffect(() => {
+    let isCancelled = false;
+    const batchMemoryHits: Record<
+      string,
+      {
+        hasEdge: boolean;
+        verdictMessage: string;
+        evaluatedDays: number;
+        top20AvgLift: number;
+        top20Ci95: [number, number];
+        top20ActualAvgDiff?: number;
+      }
+    > = {};
+
+    const idbLookups: Promise<{
+      storeId: string;
+      info: {
+        hasEdge: boolean;
+        verdictMessage: string;
+        evaluatedDays: number;
+        top20AvgLift: number;
+        top20Ci95: [number, number];
+        top20ActualAvgDiff?: number;
+      };
+    } | null>[] = [];
+
     stores.forEach((store) => {
-      if (edgeCache[store.id]) return;
+      if (edgeCacheRef.current[store.id]) return;
       const priorRecords = (store.dailyRecords || []).filter((r) => r.date < targetDate);
       if (priorRecords.length < 3) return;
       const hasMach = priorRecords.some((r) => r.machines && r.machines.length > 0);
@@ -478,39 +513,75 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
 
       const memRes = getMemoryBacktestCache(key);
       if (memRes) {
-        setEdgeCache((prev) => ({
-          ...prev,
-          [store.id]: {
-            hasEdge: memRes.withFilter.hasEdge,
-            verdictMessage: memRes.withFilter.verdictMessage,
-            evaluatedDays: memRes.evaluatedDaysCount,
-            top20AvgLift: memRes.withFilter.avgLift,
-            top20Ci95: memRes.withFilter.ci95,
-            top20ActualAvgDiff: memRes.withFilter.avgActualDiff,
-          },
-        }));
+        batchMemoryHits[store.id] = {
+          hasEdge: memRes.withFilter.hasEdge,
+          verdictMessage: memRes.withFilter.verdictMessage,
+          evaluatedDays: memRes.evaluatedDaysCount,
+          top20AvgLift: memRes.withFilter.avgLift,
+          top20Ci95: memRes.withFilter.ci95,
+          top20ActualAvgDiff: memRes.withFilter.avgActualDiff,
+        };
       } else {
-        getBacktestFromIdb(key)
-          .then((idbRes) => {
-            if (idbRes) {
-              setMemoryBacktestCache(key, idbRes);
-              setEdgeCache((prev) => ({
-                ...prev,
-                [store.id]: {
-                  hasEdge: idbRes.withFilter.hasEdge,
-                  verdictMessage: idbRes.withFilter.verdictMessage,
-                  evaluatedDays: idbRes.evaluatedDaysCount,
-                  top20AvgLift: idbRes.withFilter.avgLift,
-                  top20Ci95: idbRes.withFilter.ci95,
-                  top20ActualAvgDiff: idbRes.withFilter.avgActualDiff,
-                },
-              }));
-            }
-          })
-          .catch(() => {});
+        idbLookups.push(
+          getBacktestFromIdb(key)
+            .then((idbRes) => {
+              if (idbRes) {
+                setMemoryBacktestCache(key, idbRes);
+                return {
+                  storeId: store.id,
+                  info: {
+                    hasEdge: idbRes.withFilter.hasEdge,
+                    verdictMessage: idbRes.withFilter.verdictMessage,
+                    evaluatedDays: idbRes.evaluatedDaysCount,
+                    top20AvgLift: idbRes.withFilter.avgLift,
+                    top20Ci95: idbRes.withFilter.ci95,
+                    top20ActualAvgDiff: idbRes.withFilter.avgActualDiff,
+                  },
+                };
+              }
+              return null;
+            })
+            .catch(() => null)
+        );
       }
     });
-  }, [stores, targetDate, edgeCache]);
+
+    if (Object.keys(batchMemoryHits).length > 0) {
+      setEdgeCache((prev) => ({
+        ...prev,
+        ...batchMemoryHits,
+      }));
+    }
+
+    if (idbLookups.length > 0) {
+      Promise.all(idbLookups).then((results) => {
+        if (isCancelled) return;
+        const idbHits: Record<string, {
+          hasEdge: boolean;
+          verdictMessage: string;
+          evaluatedDays: number;
+          top20AvgLift: number;
+          top20Ci95: [number, number];
+          top20ActualAvgDiff?: number;
+        }> = {};
+        for (const item of results) {
+          if (item) {
+            idbHits[item.storeId] = item.info;
+          }
+        }
+        if (Object.keys(idbHits).length > 0) {
+          setEdgeCache((prev) => ({
+            ...prev,
+            ...idbHits,
+          }));
+        }
+      });
+    }
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [stores, targetDate]);
 
   const runStoreEdgeTest = async (store: StoreProfile) => {
     if (testingStoreId) return;
@@ -598,6 +669,82 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
     }, 50);
   };
 
+  // 1 Single persistent Worker across interactions
+  useEffect(() => {
+    if (typeof Worker === 'undefined') {
+      setWorkerUnavailable(true);
+      return;
+    }
+
+    try {
+      const worker = new Worker(
+        new URL('../workers/crossRankingWorker.ts', import.meta.url),
+        { type: 'module' }
+      );
+      workerRef.current = worker;
+
+      worker.onmessage = (e: MessageEvent<CrossRankingWorkerResponse>) => {
+        const data = e.data;
+        if (data.type === 'PROGRESS') {
+          if (data.requestId && data.requestId < latestRankingRequestIdRef.current) return;
+          setWorkerProgress({ percent: data.progress, store: data.currentStore });
+        } else if (data.type === 'RESULT') {
+          if (data.requestId && data.requestId < latestRankingRequestIdRef.current) return;
+          setWorkerResult(data.result);
+          setWorkerProgress(null);
+        } else if (data.type === 'SCAN_PROGRESS') {
+          if (data.requestId && data.requestId < latestScanRequestIdRef.current) return;
+          setScanProgress({
+            percent: data.progress,
+            currentDate: data.currentDate,
+            currentStore: data.currentStore,
+          });
+        } else if (data.type === 'SCAN_RESULT') {
+          if (data.requestId && data.requestId < latestScanRequestIdRef.current) return;
+          setScanResult(data.result);
+          setScanProgress(null);
+        } else if (data.type === 'ERROR') {
+          console.error('Worker reported error:', data.error);
+          setWorkerProgress(null);
+          setScanProgress(null);
+        }
+      };
+
+      worker.onerror = (err) => {
+        console.warn('Worker error encountered, falling back to synchronous execution:', err);
+        setWorkerUnavailable(true);
+        setWorkerProgress(null);
+        setScanProgress(null);
+      };
+
+      setWorkerUnavailable(false);
+    } catch (err) {
+      console.warn('Worker initialization failed, using sync calculateCrossStoreRanking:', err);
+      setWorkerUnavailable(true);
+    }
+
+    return () => {
+      if (workerRef.current) {
+        workerRef.current.terminate();
+        workerRef.current = null;
+      }
+    };
+  }, []);
+
+  // Post stores to worker only when data signature changes
+  const sendStoresIfNeeded = useCallback(() => {
+    if (!workerRef.current || workerUnavailable) return;
+    const currentSig = computeStoresSignature(stores);
+    if (lastSentSignatureRef.current !== currentSig) {
+      workerRef.current.postMessage({
+        type: 'SET_STORES',
+        signature: currentSig,
+        stores,
+      } satisfies CrossRankingWorkerRequest);
+      lastSentSignatureRef.current = currentSig;
+    }
+  }, [stores, workerUnavailable]);
+
   // Candidate Date Scan state (Prompt 32: 今後14日間・日数は設定可・Worker計算と進捗・キャッシュ)
   const [scanStartDate, setScanStartDate] = useState<string>(() => targetDate);
   const [scanDaysCount, setScanDaysCount] = useState<number>(14);
@@ -608,7 +755,6 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
     currentDate?: string;
     currentStore?: string;
   } | null>(null);
-  const scanWorkerRef = useRef<Worker | null>(null);
   const [scanTrigger, setScanTrigger] = useState<number>(0);
 
   const scanDates = useMemo(() => {
@@ -616,124 +762,73 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
   }, [scanStartDate, scanDaysCount]);
 
   useEffect(() => {
-    try {
-      const worker = new Worker(
-        new URL('../workers/crossRankingWorker.ts', import.meta.url),
-        { type: 'module' }
-      );
-      scanWorkerRef.current = worker;
-      setScanProgress({ percent: 10 });
+    if (workerUnavailable) return;
+    if (!workerRef.current) return;
 
-      worker.onmessage = (e: MessageEvent<CrossRankingWorkerResponse>) => {
-        if (e.data.type === 'SCAN_PROGRESS') {
-          setScanProgress({
-            percent: e.data.progress,
-            currentDate: e.data.currentDate,
-            currentStore: e.data.currentStore,
-          });
-        } else if (e.data.type === 'SCAN_RESULT') {
-          setScanResult(e.data.result);
-          setScanProgress(null);
-        } else if (e.data.type === 'ERROR') {
-          console.error('Candidate scan worker failed:', e.data.error);
-          setScanProgress(null);
-        }
-      };
+    sendStoresIfNeeded();
 
-      const req: CrossRankingWorkerRequest = {
-        type: 'SCAN_CANDIDATE_DATES',
-        stores,
-        dates: scanDates,
-        options: {
-          topN: scanTopN,
-          diffMetric,
-          baseGames,
-        },
-      };
-      worker.postMessage(req);
+    const nextReqId = ++scanReqIdRef.current;
+    latestScanRequestIdRef.current = nextReqId;
+    setScanProgress({ percent: 10 });
 
-      return () => {
-        worker.terminate();
-        scanWorkerRef.current = null;
-      };
-    } catch (err) {
-      console.warn('Worker initialization for candidate scan failed, falling back to sync:', err);
-      setScanProgress(null);
-      const res = scanCandidateDates(stores, scanDates, {
+    const req: CrossRankingWorkerRequest = {
+      type: 'SCAN_CANDIDATE_DATES',
+      requestId: nextReqId,
+      dates: scanDates,
+      options: {
         topN: scanTopN,
         diffMetric,
         baseGames,
-      });
-      setScanResult(res);
-    }
-  }, [stores, scanDates, scanTopN, diffMetric, baseGames, scanTrigger]);
+      },
+    };
+    workerRef.current.postMessage(req);
+  }, [workerUnavailable, sendStoresIfNeeded, scanDates, scanTopN, diffMetric, baseGames, scanTrigger]);
 
-  const fallbackScanResult = useMemo(() => {
-    if (scanResult) return null;
-    return scanCandidateDates(stores, scanDates, {
-      topN: scanTopN,
-      diffMetric,
-      baseGames,
-    });
-  }, [stores, scanDates, scanTopN, diffMetric, baseGames, scanResult]);
-
-  const activeScanResult = scanResult || fallbackScanResult;
-
-  // Synchronous fallback / memoized ranking
   const [workerResult, setWorkerResult] = useState<CrossStoreRankingResult | null>(null);
 
   useEffect(() => {
-    try {
-      const worker = new Worker(
-        new URL('../workers/crossRankingWorker.ts', import.meta.url),
-        { type: 'module' }
-      );
-      workerRef.current = worker;
+    if (workerUnavailable) return;
+    if (!workerRef.current) return;
 
-      setWorkerProgress({ percent: 10 });
+    sendStoresIfNeeded();
 
-      worker.onmessage = (e: MessageEvent<CrossRankingWorkerResponse>) => {
-        if (e.data.type === 'PROGRESS') {
-          setWorkerProgress({ percent: e.data.progress, store: e.data.currentStore });
-        } else if (e.data.type === 'RESULT') {
-          setWorkerResult(e.data.result);
-          setWorkerProgress(null);
-        } else if (e.data.type === 'ERROR') {
-          console.error('Cross ranking worker failed:', e.data.error);
-          setWorkerProgress(null);
-        }
-      };
+    const nextReqId = ++rankingReqIdRef.current;
+    latestRankingRequestIdRef.current = nextReqId;
+    setWorkerProgress({ percent: 10 });
 
-      const req: CrossRankingWorkerRequest = {
-        type: 'CALCULATE_CROSS_RANKING',
-        stores,
-        targetDate,
-        options: {
-          metricMode,
-          topModelCount: displayCount,
-          topMachineCount: displayCount,
-          topStoreMachineN: 10,
-          selectedStoreIds,
-          includeLowConfidence,
-          diffMetric,
-          baseGames,
-          backtestResults: edgeCache,
-        },
-      };
-      worker.postMessage(req);
+    const req: CrossRankingWorkerRequest = {
+      type: 'CALCULATE_CROSS_RANKING',
+      requestId: nextReqId,
+      targetDate,
+      options: {
+        metricMode,
+        topModelCount: displayCount,
+        topMachineCount: displayCount,
+        topStoreMachineN: 10,
+        selectedStoreIds,
+        includeLowConfidence,
+        diffMetric,
+        baseGames,
+        backtestResults: edgeCache,
+      },
+    };
+    workerRef.current.postMessage(req);
+  }, [
+    workerUnavailable,
+    sendStoresIfNeeded,
+    targetDate,
+    metricMode,
+    displayCount,
+    selectedStoreIds,
+    includeLowConfidence,
+    diffMetric,
+    baseGames,
+    edgeCache,
+  ]);
 
-      return () => {
-        worker.terminate();
-        workerRef.current = null;
-      };
-    } catch (err) {
-      console.warn('Worker initialization failed, using sync calculateCrossStoreRanking:', err);
-      setWorkerProgress(null);
-    }
-  }, [stores, targetDate, metricMode, displayCount, selectedStoreIds, includeLowConfidence, diffMetric, baseGames, edgeCache]);
-
-  // Synchronous calculation
-  const syncResult: CrossStoreRankingResult = useMemo(() => {
+  // Synchronous fallback (ONLY evaluated when Worker is unavailable / throws)
+  const syncRankingResult: CrossStoreRankingResult | null = useMemo(() => {
+    if (!workerUnavailable) return null;
     return calculateCrossStoreRanking(stores, targetDate, {
       metricMode,
       topModelCount: displayCount,
@@ -745,12 +840,38 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
       baseGames,
       backtestResults: edgeCache,
     });
-  }, [stores, targetDate, metricMode, displayCount, selectedStoreIds, includeLowConfidence, diffMetric, baseGames, edgeCache]);
+  }, [
+    workerUnavailable,
+    stores,
+    targetDate,
+    metricMode,
+    displayCount,
+    selectedStoreIds,
+    includeLowConfidence,
+    diffMetric,
+    baseGames,
+    edgeCache,
+  ]);
 
-  const rankingResult = workerResult || syncResult;
+  const syncScanResult: CandidateDateScanResult | null = useMemo(() => {
+    if (!workerUnavailable) return null;
+    return scanCandidateDates(stores, scanDates, {
+      topN: scanTopN,
+      diffMetric,
+      baseGames,
+    });
+  }, [workerUnavailable, stores, scanDates, scanTopN, diffMetric, baseGames]);
+
+  const rankingResult: CrossStoreRankingResult | null = workerUnavailable
+    ? syncRankingResult
+    : workerResult;
+  const activeScanResult: CandidateDateScanResult | null = workerUnavailable
+    ? syncScanResult
+    : scanResult;
 
   // 30-6: Helper to compute top 20 expected diff average for a store
   const getStoreTop20ExpectedDiff = (storeId: string): number => {
+    if (!rankingResult) return 0;
     const list = rankingResult.storeMachineRankings?.[storeId] || [];
     const top20 = list.slice(0, 20);
     if (top20.length === 0) return 0;
@@ -827,16 +948,18 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
 
   // Prompt 33: Filtered machine and model rankings
   const filteredMachineRankings = useMemo(() => {
+    if (!rankingResult) return [];
     return filterMachineRankings(rankingResult.machineRankings, filterCriteria);
-  }, [rankingResult.machineRankings, filterCriteria]);
+  }, [rankingResult, filterCriteria]);
 
   const filteredModelRankings = useMemo(() => {
+    if (!rankingResult) return [];
     return filterModelRankings(
       rankingResult.modelRankings,
       filterCriteria,
       rankingResult.machineRankings
     );
-  }, [rankingResult.modelRankings, rankingResult.machineRankings, filterCriteria]);
+  }, [rankingResult, filterCriteria]);
 
   const activeFilterCount = useMemo(() => {
     let count = 0;
@@ -1183,7 +1306,7 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
         )}
 
         {/* Excluded Stores Notice (if any) */}
-        {rankingResult.excludedStores.length > 0 && (
+        {rankingResult && rankingResult.excludedStores.length > 0 && (
           <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600 space-y-1">
             <div className="font-bold text-slate-700 flex items-center gap-1.5">
               <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
@@ -1200,7 +1323,44 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
         )}
       </div>
 
-      {/* Step ①: 来店日と範囲（この店／全店）と来店日の候補スキャン */}
+      {!rankingResult ? (
+        <div
+          data-testid="cross-target-loading"
+          className="bg-white rounded-2xl border border-slate-200 p-8 sm:p-12 text-center shadow-2xs space-y-4 animate-in fade-in"
+        >
+          <div className="inline-flex p-3 rounded-full bg-indigo-50 text-indigo-600">
+            <RotateCw className="w-6 h-6 animate-spin" />
+          </div>
+          <div className="space-y-1">
+            <h3 className="text-base font-black text-slate-800">全店の狙い台と候補日を計算中...</h3>
+            <p className="text-xs text-slate-500">
+              店舗データと特日周期から横断ランキングをバックグラウンドで集計しています
+            </p>
+          </div>
+          {(workerProgress || scanProgress) && (
+            <div className="max-w-xs mx-auto space-y-1.5 pt-2">
+              <div className="flex justify-between text-2xs font-bold text-slate-500">
+                <span>
+                  {workerProgress?.store
+                    ? `店舗: ${workerProgress.store}`
+                    : scanProgress?.currentStore
+                    ? `店舗: ${scanProgress.currentStore}`
+                    : '集計中'}
+                </span>
+                <span>{workerProgress?.percent ?? scanProgress?.percent ?? 10}%</span>
+              </div>
+              <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                <div
+                  className="bg-indigo-600 h-2 transition-all duration-200"
+                  style={{ width: `${workerProgress?.percent ?? scanProgress?.percent ?? 10}%` }}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
+          {/* Step ①: 来店日と範囲（この店／全店）と来店日の候補スキャン */}
       <div id="target-step-1" className="space-y-4">
         <div id="target-calendar-scan" className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3.5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
@@ -3035,6 +3195,8 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
         </div>
       );
     })()}
+        </>
+      )}
   </div>
 );
 };

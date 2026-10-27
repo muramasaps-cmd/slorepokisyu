@@ -6,58 +6,94 @@ import { DailyRecord } from '../data/types';
  * and ジャグラーシリーズ (Juggler Series), plus multi-selection.
  */
 
+const FILTER_CACHE_MAX = 20000;
+const jugglerCache = new Map<string, boolean>();
+const smartSlotCache = new Map<string, boolean>();
+const aTypeCache = new Map<string, boolean>();
+
+const A_TYPE_KEYWORDS: readonly string[] = [
+  'ハナハナ',
+  'ディスクアップ',
+  'アレックス',
+  'パルサー',
+  'クランキー',
+  'バーサス',
+  'ハナビ',
+  '花火',
+  'サンダー',
+  'ゲッターマウス',
+  'マッピー',
+  'a-slot',
+  'aタイプ',
+  'うまい棒',
+  'ハイビ',
+  'シオサイ',
+  'ニューパル',
+  'ガメラ',
+  '新ハナビ',
+  'ディスク',
+].map((kw) => kw.toLowerCase());
+
 export function isJuggler(name: string): boolean {
-  if (!name) return false;
-  return /ジャグラー|juggler|jugler/i.test(name);
+  if (!name || typeof name !== 'string') return false;
+  const cached = jugglerCache.get(name);
+  if (cached !== undefined) return cached;
+
+  const res = /ジャグラー|juggler|jugler/i.test(name);
+  if (jugglerCache.size >= FILTER_CACHE_MAX) {
+    jugglerCache.clear();
+  }
+  jugglerCache.set(name, res);
+  return res;
 }
 
 export function isSmartSlot(name: string): boolean {
-  if (!name) return false;
+  if (!name || typeof name !== 'string') return false;
+  const cached = smartSlotCache.get(name);
+  if (cached !== undefined) return cached;
+
   const trimmed = name.trim();
+  let res = false;
   // Starts with L or l (industry standard prefix for Smart Slots)
   if (/^[Ll][\s　・]?[^\w]/u.test(trimmed) || /^[Ll]パチスロ/i.test(trimmed) || /^[Ll]スマスロ/i.test(trimmed)) {
-    return true;
+    res = true;
+  } else if (/スマスロ|スマート/i.test(trimmed)) {
+    res = true;
+  } else if (/^[Ll][A-Za-z0-9\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(trimmed) && !/^L[A-Z]{3,}/.test(trimmed)) {
+    res = true;
   }
-  // Contains スマスロ or スマート
-  if (/スマスロ|スマート/i.test(trimmed)) {
-    return true;
+
+  if (smartSlotCache.size >= FILTER_CACHE_MAX) {
+    smartSlotCache.clear();
   }
-  // Model name starts with L (e.g. L ToLOVEる, Lヴァルヴレイヴ, etc.)
-  if (/^[Ll][A-Za-z0-9\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(trimmed) && !/^L[A-Z]{3,}/.test(trimmed)) {
-    return true;
-  }
-  return false;
+  smartSlotCache.set(name, res);
+  return res;
 }
 
 export function isAType(name: string): boolean {
-  if (!name) return false;
-  if (isJuggler(name)) return true;
+  if (!name || typeof name !== 'string') return false;
+  const cached = aTypeCache.get(name);
+  if (cached !== undefined) return cached;
 
-  const normalKeywords = [
-    'ハナハナ',
-    'ディスクアップ',
-    'アレックス',
-    'パルサー',
-    'クランキー',
-    'バーサス',
-    'ハナビ',
-    '花火',
-    'サンダー',
-    'ゲッターマウス',
-    'マッピー',
-    'a-slot',
-    'aタイプ',
-    'うまい棒',
-    'ハイビ',
-    'シオサイ',
-    'ニューパル',
-    'ガメラ',
-    '新ハナビ',
-    'ディスク',
-  ];
+  let res = false;
+  if (isJuggler(name)) {
+    res = true;
+  } else {
+    const lower = name.toLowerCase();
+    res = A_TYPE_KEYWORDS.some((kw) => lower.includes(kw));
+  }
 
-  const lower = name.toLowerCase();
-  return normalKeywords.some((kw) => lower.includes(kw.toLowerCase()));
+  if (aTypeCache.size >= FILTER_CACHE_MAX) {
+    aTypeCache.clear();
+  }
+  aTypeCache.set(name, res);
+  return res;
+}
+
+export function clearModelFilterCaches(): void {
+  jugglerCache.clear();
+  smartSlotCache.clear();
+  aTypeCache.clear();
 }
 
 export type PresetFilterType = 'smart_slot' | 'a_type' | 'juggler';

@@ -12,15 +12,40 @@ import { StoreInfo, StoreProfile, CategoryRateOverride } from '../data/types';
  * - Normalizes full-width parentheses/brackets to standard half-width.
  * - Supports an optional alias dictionary to map arbitrary raw or normalized model names to canonical names.
  */
-export function normalizeModelName(
-  rawName: string,
-  aliasDictionary?: Record<string, string>
-): string {
-  if (!rawName || typeof rawName !== 'string') return '';
+const NORMALIZE_CACHE_MAX = 50000;
+const normalizeCache = new Map<string, string>();
 
-  // Direct alias check before normalization
-  if (aliasDictionary && aliasDictionary[rawName]) {
-    return aliasDictionary[rawName];
+const KANA_MAP: Record<string, string> = {
+  'ｶﾞ': 'ガ', 'ｷﾞ': 'ギ', 'ｸﾞ': 'グ', 'ｹﾞ': 'ゲ', 'ｺﾞ': 'ゴ',
+  'ｻﾞ': 'ザ', 'ｼﾞ': 'ジ', 'ｽﾞ': 'ズ', 'ｾﾞ': 'ゼ', 'ｿﾞ': 'ゾ',
+  'ﾀﾞ': 'ダ', 'ﾁﾞ': 'ヂ', 'ﾂﾞ': 'ヅ', 'ﾃﾞ': 'デ', 'ﾄﾞ': 'ド',
+  'ﾊﾞ': 'バ', 'ﾋﾞ': 'ビ', 'ﾌﾞ': 'ブ', 'ﾍﾞ': 'ベ', 'ﾎﾞ': 'ボ',
+  'ﾊﾟ': 'パ', 'ﾋﾟ': 'ピ', 'ﾌﾟ': 'プ', 'ﾍﾟ': 'ペ', 'ﾎﾟ': 'ポ',
+  'ｳﾞ': 'ヴ',
+  'ｱ': 'ア', 'ｲ': 'イ', 'ｳ': 'ウ', 'ｴ': 'エ', 'ｵ': 'オ',
+  'ｶ': 'カ', 'ｷ': 'キ', 'ｸ': 'ク', 'ｹ': 'ケ', 'ｺ': 'コ',
+  'ｻ': 'サ', 'ｼ': 'シ', 'ｽ': 'ス', 'ｾ': 'セ', 'ｿ': 'ソ',
+  'ﾀ': 'タ', 'ﾁ': 'チ', 'ﾂ': 'ツ', 'ﾃ': 'テ', 'ﾄ': 'ト',
+  'ﾅ': 'ナ', 'ﾆ': 'ニ', 'ﾇ': 'ヌ', 'ﾈ': 'ネ', 'ﾉ': 'ノ',
+  'ﾊ': 'ハ', 'ﾋ': 'ヒ', 'ﾌ': 'フ', 'ﾍ': 'ヘ', 'ﾎ': 'ホ',
+  'ﾏ': 'マ', 'ﾐ': 'ミ', 'ﾑ': 'ム', 'ﾒ': 'メ', 'ﾓ': 'モ',
+  'ﾔ': 'ヤ', 'ﾕ': 'ユ', 'ﾖ': 'ヨ',
+  'ﾗ': 'ラ', 'ﾘ': 'リ', 'ﾙ': 'ル', 'ﾚ': 'レ', 'ﾛ': 'ロ',
+  'ﾜ': 'ワ', 'ｦ': 'ヲ', 'ﾝ': 'ン',
+  'ｧ': 'ァ', 'ｨ': 'ィ', 'ｩ': 'ゥ', 'ｪ': 'ェ', 'ｫ': 'ォ',
+  'ｯ': 'ッ', 'ｬ': 'ャ', 'ｭ': 'ュ', 'ｮ': 'ョ',
+  'ｰ': 'ー', '･': '・',
+};
+
+const KANA_ENTRIES = Object.entries(KANA_MAP);
+
+/**
+ * Core normalization logic without alias dictionary lookup, cached in memory.
+ */
+function normalizeCore(rawName: string): string {
+  const cached = normalizeCache.get(rawName);
+  if (cached !== undefined) {
+    return cached;
   }
 
   // 1. Whitespace handling
@@ -32,29 +57,9 @@ export function normalizeModelName(
   );
 
   // 3. Half-width katakana to full-width katakana
-  const kanaMap: Record<string, string> = {
-    'ｶﾞ': 'ガ', 'ｷﾞ': 'ギ', 'ｸﾞ': 'グ', 'ｹﾞ': 'ゲ', 'ｺﾞ': 'ゴ',
-    'ｻﾞ': 'ザ', 'ｼﾞ': 'ジ', 'ｽﾞ': 'ズ', 'ｾﾞ': 'ゼ', 'ｿﾞ': 'ゾ',
-    'ﾀﾞ': 'ダ', 'ﾁﾞ': 'ヂ', 'ﾂﾞ': 'ヅ', 'ﾃﾞ': 'デ', 'ﾄﾞ': 'ド',
-    'ﾊﾞ': 'バ', 'ﾋﾞ': 'ビ', 'ﾌﾞ': 'ブ', 'ﾍﾞ': 'ベ', 'ﾎﾞ': 'ボ',
-    'ﾊﾟ': 'パ', 'ﾋﾟ': 'ピ', 'ﾌﾟ': 'プ', 'ﾍﾟ': 'ペ', 'ﾎﾟ': 'ポ',
-    'ｳﾞ': 'ヴ',
-    'ｱ': 'ア', 'ｲ': 'イ', 'ｳ': 'ウ', 'ｴ': 'エ', 'ｵ': 'オ',
-    'ｶ': 'カ', 'ｷ': 'キ', 'ｸ': 'ク', 'ｹ': 'ケ', 'ｺ': 'コ',
-    'ｻ': 'サ', 'ｼ': 'シ', 'ｽ': 'ス', 'ｾ': 'セ', 'ｿ': 'ソ',
-    'ﾀ': 'タ', 'ﾁ': 'チ', 'ﾂ': 'ツ', 'ﾃ': 'テ', 'ﾄ': 'ト',
-    'ﾅ': 'ナ', 'ﾆ': 'ニ', 'ﾇ': 'ヌ', 'ﾈ': 'ネ', 'ﾉ': 'ノ',
-    'ﾊ': 'ハ', 'ﾋ': 'ヒ', 'ﾌ': 'フ', 'ﾍ': 'ヘ', 'ﾎ': 'ホ',
-    'ﾏ': 'マ', 'ﾐ': 'ミ', 'ﾑ': 'ム', 'ﾒ': 'メ', 'ﾓ': 'モ',
-    'ﾔ': 'ヤ', 'ﾕ': 'ユ', 'ﾖ': 'ヨ',
-    'ﾗ': 'ラ', 'ﾘ': 'リ', 'ﾙ': 'ル', 'ﾚ': 'レ', 'ﾛ': 'ロ',
-    'ﾜ': 'ワ', 'ｦ': 'ヲ', 'ﾝ': 'ン',
-    'ｧ': 'ァ', 'ｨ': 'ィ', 'ｩ': 'ゥ', 'ｪ': 'ェ', 'ｫ': 'ォ',
-    'ｯ': 'ッ', 'ｬ': 'ャ', 'ｭ': 'ュ', 'ｮ': 'ョ',
-    'ｰ': 'ー', '･': '・',
-  };
-
-  for (const [k, v] of Object.entries(kanaMap)) {
+  for (let i = 0; i < KANA_ENTRIES.length; i++) {
+    const k = KANA_ENTRIES[i][0];
+    const v = KANA_ENTRIES[i][1];
     if (s.includes(k)) {
       s = s.split(k).join(v);
     }
@@ -73,12 +78,52 @@ export function normalizeModelName(
   s = s.replace(/－/g, '-').replace(/＋/g, '+');
   s = s.replace(/\uFF9E/g, '゛').replace(/\uFF9F/g, '゜');
 
+  if (normalizeCache.size >= NORMALIZE_CACHE_MAX) {
+    normalizeCache.clear();
+  }
+  normalizeCache.set(rawName, s);
+
+  return s;
+}
+
+/**
+ * Normalizes model names across the system:
+ * - Trims leading/trailing whitespace and collapses multiple inner spaces to a single space.
+ * - Converts full-width ASCII alphanumerics (Ａ-Ｚ, ａ-ｚ, ０-９) to half-width (A-Z, a-z, 0-9).
+ * - Converts full-width space (U+3000) to half-width space (U+0020).
+ * - Converts half-width katakana (ｱ-ﾝ, ｶﾞ, ﾊﾟ etc.) to full-width katakana.
+ * - Standardizes wave dashes (~, ～ / U+FF5E) to standard Japanese wave dash (〜 / U+301C).
+ * - Standardizes half-width exclamation/question marks to full-width (！, ？) to preserve canonical title style.
+ * - Normalizes full-width parentheses/brackets to standard half-width.
+ * - Supports an optional alias dictionary to map arbitrary raw or normalized model names to canonical names.
+ */
+export function normalizeModelName(
+  rawName: string,
+  aliasDictionary?: Record<string, string>
+): string {
+  if (!rawName || typeof rawName !== 'string') return '';
+
+  // Direct alias check before normalization
+  if (aliasDictionary && aliasDictionary[rawName]) {
+    return aliasDictionary[rawName];
+  }
+
+  const s = normalizeCore(rawName);
+
   // Check alias dictionary on normalized string
   if (aliasDictionary && aliasDictionary[s]) {
     return aliasDictionary[s];
   }
 
   return s;
+}
+
+/** Test helper to inspect or reset cache */
+export function clearNormalizeCache(): void {
+  normalizeCache.clear();
+}
+export function getNormalizeCacheSize(): number {
+  return normalizeCache.size;
 }
 
 /**

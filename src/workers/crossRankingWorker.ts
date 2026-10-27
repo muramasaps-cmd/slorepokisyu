@@ -1,85 +1,65 @@
-import { StoreProfile } from '../data/types';
 import {
-  calculateCrossStoreRanking,
-  CrossStoreRankingOptions,
-  CrossStoreRankingResult,
-  CandidateDateScanResult,
-  scanCandidateDates,
-} from '../utils/crossStoreRanking';
+  CrossRankingController,
+  CrossRankingWorkerRequest,
+  CrossRankingWorkerResponse,
+} from './crossRankingController';
 
-export type CrossRankingWorkerRequest =
-  | {
-      type: 'CALCULATE_CROSS_RANKING';
-      stores: StoreProfile[];
-      targetDate: string;
-      options?: CrossStoreRankingOptions;
-    }
-  | {
-      type: 'SCAN_CANDIDATE_DATES';
-      stores: StoreProfile[];
-      dates: string[];
-      options?: {
-        topN?: number;
-        diffMetric?: 'actual' | 'baseGames';
-        baseGames?: number;
-        legacyCrossShrink?: boolean;
-      };
-    };
+export type { CrossRankingWorkerRequest, CrossRankingWorkerResponse };
 
-export type CrossRankingWorkerResponse =
-  | { type: 'PROGRESS'; progress: number; currentStore?: string }
-  | { type: 'RESULT'; result: CrossStoreRankingResult }
-  | { type: 'SCAN_PROGRESS'; progress: number; currentDate?: string; currentStore?: string }
-  | { type: 'SCAN_RESULT'; result: CandidateDateScanResult }
-  | { type: 'ERROR'; error: string };
+const controller = new CrossRankingController();
+let messageQueue: CrossRankingWorkerRequest[] = [];
+let isProcessing = false;
 
-self.onmessage = (event: MessageEvent<CrossRankingWorkerRequest>) => {
-  const data = event.data;
+function pumpQueue() {
+  if (isProcessing) return;
+  if (messageQueue.length === 0) return;
 
-  if (data.type === 'CALCULATE_CROSS_RANKING') {
-    const { stores, targetDate, options } = data;
-    try {
-      self.postMessage({ type: 'PROGRESS', progress: 5 } satisfies CrossRankingWorkerResponse);
-      const result = calculateCrossStoreRanking(stores, targetDate, {
-        ...options,
-        onProgress: (progress, currentStore) => {
-          self.postMessage({
-            type: 'PROGRESS',
-            progress,
-            currentStore,
-          } satisfies CrossRankingWorkerResponse);
-        },
-      });
-      self.postMessage({ type: 'PROGRESS', progress: 100 } satisfies CrossRankingWorkerResponse);
-      self.postMessage({ type: 'RESULT', result } satisfies CrossRankingWorkerResponse);
-    } catch (err) {
-      self.postMessage({
-        type: 'ERROR',
-        error: err instanceof Error ? err.message : String(err),
-      } satisfies CrossRankingWorkerResponse);
-    }
-  } else if (data.type === 'SCAN_CANDIDATE_DATES') {
-    const { stores, dates, options } = data;
-    try {
-      self.postMessage({ type: 'SCAN_PROGRESS', progress: 5 } satisfies CrossRankingWorkerResponse);
-      const result = scanCandidateDates(stores, dates, {
-        ...options,
-        onProgress: (progress, currentDate, currentStore) => {
-          self.postMessage({
-            type: 'SCAN_PROGRESS',
-            progress,
-            currentDate,
-            currentStore,
-          } satisfies CrossRankingWorkerResponse);
-        },
-      });
-      self.postMessage({ type: 'SCAN_PROGRESS', progress: 100 } satisfies CrossRankingWorkerResponse);
-      self.postMessage({ type: 'SCAN_RESULT', result } satisfies CrossRankingWorkerResponse);
-    } catch (err) {
-      self.postMessage({
-        type: 'ERROR',
-        error: err instanceof Error ? err.message : String(err),
-      } satisfies CrossRankingWorkerResponse);
+  // Identify highest ranking and scan request IDs in queue to discard superseded requests
+  let maxRankingReq = 0;
+  let maxScanReq = 0;
+  for (const m of messageQueue) {
+    if (m.type === 'CALCULATE_CROSS_RANKING' && m.requestId) {
+      if (m.requestId > maxRankingReq) maxRankingReq = m.requestId;
+    } else if (m.type === 'SCAN_CANDIDATE_DATES' && m.requestId) {
+      if (m.requestId > maxScanReq) maxScanReq = m.requestId;
     }
   }
+
+  // Filter out any stale ranking or scan requests from the queue
+  if (maxRankingReq > 0 || maxScanReq > 0) {
+    messageQueue = messageQueue.filter((m) => {
+      if (m.type === 'CALCULATE_CROSS_RANKING' && m.requestId && m.requestId < maxRankingReq) {
+        return false;
+      }
+      if (m.type === 'SCAN_CANDIDATE_DATES' && m.requestId && m.requestId < maxScanReq) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  const nextMsg = messageQueue.shift();
+  if (!nextMsg) return;
+
+  isProcessing = true;
+  // Yield briefly with setTimeout(..., 0) so pending message events can be enqueued
+  setTimeout(() => {
+    try {
+      controller.handle(nextMsg, (res) => self.postMessage(res));
+    } catch (err) {
+      self.postMessage({
+        type: 'ERROR',
+        error: err instanceof Error ? err.message : String(err),
+      } satisfies CrossRankingWorkerResponse);
+    } finally {
+      isProcessing = false;
+      pumpQueue();
+    }
+  }, 0);
+}
+
+self.onmessage = (event: MessageEvent<CrossRankingWorkerRequest>) => {
+  controller.registerRequest(event.data);
+  messageQueue.push(event.data);
+  pumpQueue();
 };

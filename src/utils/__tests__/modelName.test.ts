@@ -163,3 +163,266 @@ describe('getStoreRatesForModel', () => {
     });
   });
 });
+
+// =========================================================================
+// Prompt 55: Reference Implementations & Comprehensive Verification Tests
+// =========================================================================
+
+/**
+ * Verbatim un-cached reference implementation of normalizeModelName
+ */
+function normalizeModelNameReference(
+  rawName: string,
+  aliasDictionary?: Record<string, string>
+): string {
+  if (!rawName || typeof rawName !== 'string') return '';
+
+  if (aliasDictionary && aliasDictionary[rawName]) {
+    return aliasDictionary[rawName];
+  }
+
+  let s = rawName.replace(/\u3000/g, ' ').trim().replace(/\s+/g, ' ');
+
+  s = s.replace(/[Ａ-Ｚａ-ｚ０-９]/g, (c) =>
+    String.fromCharCode(c.charCodeAt(0) - 0xfee0)
+  );
+
+  const kanaMap: Record<string, string> = {
+    'ｶﾞ': 'ガ', 'ｷﾞ': 'ギ', 'ｸﾞ': 'グ', 'ｹﾞ': 'ゲ', 'ｺﾞ': 'ゴ',
+    'ｻﾞ': 'ザ', 'ｼﾞ': 'ジ', 'ｽﾞ': 'ズ', 'ｾﾞ': 'ゼ', 'ｿﾞ': 'ゾ',
+    'ﾀﾞ': 'ダ', 'ﾁﾞ': 'ヂ', 'ﾂﾞ': 'ヅ', 'ﾃﾞ': 'デ', 'ﾄﾞ': 'ド',
+    'ﾊﾞ': 'バ', 'ﾋﾞ': 'ビ', 'ﾌﾞ': 'ブ', 'ﾍﾞ': 'ベ', 'ﾎﾞ': 'ボ',
+    'ﾊﾟ': 'パ', 'ﾋﾟ': 'ピ', 'ﾌﾟ': 'プ', 'ﾍﾟ': 'ペ', 'ﾎﾟ': 'ポ',
+    'ｳﾞ': 'ヴ',
+    'ｱ': 'ア', 'ｲ': 'イ', 'ｳ': 'ウ', 'ｴ': 'エ', 'ｵ': 'オ',
+    'ｶ': 'カ', 'ｷ': 'キ', 'ｸ': 'ク', 'ｹ': 'ケ', 'ｺ': 'コ',
+    'ｻ': 'サ', 'ｼ': 'シ', 'ｽ': 'ス', 'ｾ': 'セ', 'ｿ': 'ソ',
+    'ﾀ': 'タ', 'ﾁ': 'チ', 'ﾂ': 'ツ', 'ﾃ': 'テ', 'ﾄ': 'ト',
+    'ﾅ': 'ナ', 'ﾆ': 'ニ', 'ﾇ': 'ヌ', 'ﾈ': 'ネ', 'ﾉ': 'ノ',
+    'ﾊ': 'ハ', 'ﾋ': 'ヒ', 'ﾌ': 'フ', 'ﾍ': 'ヘ', 'ﾎ': 'ホ',
+    'ﾏ': 'マ', 'ﾐ': 'ミ', 'ﾑ': 'ム', 'ﾒ': 'メ', 'ﾓ': 'モ',
+    'ﾔ': 'ヤ', 'ﾕ': 'ユ', 'ﾖ': 'ヨ',
+    'ﾗ': 'ラ', 'ﾘ': 'リ', 'ﾙ': 'ル', 'ﾚ': 'レ', 'ﾛ': 'ロ',
+    'ﾜ': 'ワ', 'ｦ': 'ヲ', 'ﾝ': 'ン',
+    'ｧ': 'ァ', 'ｨ': 'ィ', 'ｩ': 'ゥ', 'ｪ': 'ェ', 'ｫ': 'ォ',
+    'ｯ': 'ッ', 'ｬ': 'ャ', 'ｭ': 'ュ', 'ｮ': 'ョ',
+    'ｰ': 'ー', '･': '・',
+  };
+
+  for (const [k, v] of Object.entries(kanaMap)) {
+    if (s.includes(k)) {
+      s = s.split(k).join(v);
+    }
+  }
+
+  s = s.replace(/[\uFF5E~]/g, '〜');
+  s = s.replace(/!/g, '！');
+  s = s.replace(/\?/g, '？');
+  s = s.replace(/（/g, '(').replace(/）/g, ')');
+  s = s.replace(/［/g, '[').replace(/］/g, ']');
+  s = s.replace(/－/g, '-').replace(/＋/g, '+');
+  s = s.replace(/\uFF9E/g, '゛').replace(/\uFF9F/g, '゜');
+
+  if (aliasDictionary && aliasDictionary[s]) {
+    return aliasDictionary[s];
+  }
+
+  return s;
+}
+
+/**
+ * Verbatim un-cached reference implementations for model filter utilities
+ */
+function isJugglerReference(name: string): boolean {
+  if (!name) return false;
+  return /ジャグラー|juggler|jugler/i.test(name);
+}
+
+function isSmartSlotReference(name: string): boolean {
+  if (!name) return false;
+  const trimmed = name.trim();
+  if (/^[Ll][\s　・]?[^\w]/u.test(trimmed) || /^[Ll]パチスロ/i.test(trimmed) || /^[Ll]スマスロ/i.test(trimmed)) {
+    return true;
+  }
+  if (/スマスロ|スマート/i.test(trimmed)) {
+    return true;
+  }
+  if (/^[Ll][A-Za-z0-9\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(trimmed) && !/^L[A-Z]{3,}/.test(trimmed)) {
+    return true;
+  }
+  return false;
+}
+
+function isATypeReference(name: string): boolean {
+  if (!name) return false;
+  if (isJugglerReference(name)) return true;
+
+  const normalKeywords = [
+    'ハナハナ', 'ディスクアップ', 'アレックス', 'パルサー', 'クランキー',
+    'バーサス', 'ハナビ', '花火', 'サンダー', 'ゲッターマウス',
+    'マッピー', 'a-slot', 'aタイプ', 'うまい棒', 'ハイビ',
+    'シオサイ', 'ニューパル', 'ガメラ', '新ハナビ', 'ディスク',
+  ];
+
+  const lower = name.toLowerCase();
+  return normalKeywords.some((kw) => lower.includes(kw.toLowerCase()));
+}
+
+import { isJuggler, isSmartSlot, isAType } from '../modelFilterUtils';
+import fs from 'fs';
+import path from 'path';
+import { createSyntheticCrossStoreData, BENCHMARK_35_MODELS } from '../../scripts/benchmark_scope_all';
+import { calculateCrossStoreModelRows, calculateModelMonthlyTrends, estimateCrossStoreModelSettings } from '../modelCrossStore';
+import { calculateCrossStoreRanking } from '../crossStoreRanking';
+import { calculateTargetMachineRanking } from '../targetMachineRanking';
+
+describe('Prompt 55: normalizeModelNameReference vs Cached Implementation', () => {
+  const testInputs: Array<{ label: string; value: any }> = [
+    { label: '全角英数', value: 'Ｌパチスロ北斗の拳７ ＳアイムジャグラーＥＸ スマスロ１２３' },
+    { label: '半角カナ', value: 'ﾊﾟﾁｽﾛ ｶﾞﾙﾊﾟﾝ ﾏｲｼﾞｬｸﾞﾗｰV' },
+    { label: '濁点つき半角カナ', value: 'ｳﾞ ｶﾞｷﾞｸﾞｹﾞｺﾞ ｻﾞｼﾞｽﾞｾﾞｿﾞ ﾀﾞﾁﾞﾂﾞﾃﾞﾄﾞ ﾊﾞﾋﾞﾌﾞﾍﾞﾎﾞ ﾊﾟﾋﾟﾌﾟﾍﾟﾎﾟ' },
+    { label: '～と~', value: 'Re:ゼロ~ 甲賀忍法帖～' },
+    { label: '半角の!?', value: '押忍!番長4? 本当!?' },
+    { label: '全角括弧', value: '（スマスロ）［新台］モンキーターンV' },
+    { label: '全角スペース', value: 'マイジャグラー\u3000V\u3000II' },
+    { label: '前後空白', value: '   甲鉄城のカバネリ   ' },
+    { label: '連続空白', value: 'L     からくり    サーカス' },
+    { label: '空文字', value: '' },
+    { label: 'undefined', value: undefined },
+    { label: 'null', value: null },
+    { label: '数値', value: 12345 },
+  ];
+
+  const aliasDict: Record<string, string> = {
+    'Lパチスロ北斗の拳7 SアイムジャグラーEX スマスロ123': '北斗7アイムミックス',
+    '甲鉄城のカバネリ': 'カバネリ正規名',
+    '押忍！番長4？ 本当！？': '番長4正規名',
+  };
+
+  testInputs.forEach(({ label, value }) => {
+    it(`matches reference for [${label}] WITHOUT alias dictionary`, () => {
+      const expected = normalizeModelNameReference(value);
+      const actual = normalizeModelName(value);
+      expect(actual).toBe(expected);
+    });
+
+    it(`matches reference for [${label}] WITH alias dictionary`, () => {
+      const expected = normalizeModelNameReference(value, aliasDict);
+      const actual = normalizeModelName(value, aliasDict);
+      expect(actual).toBe(expected);
+    });
+  });
+
+  it('updates dynamically when alias dictionary is modified without returning stale cache', () => {
+    const raw = '  マイジャグ5  ';
+    const dict1 = { 'マイジャグ5': 'マイジャグラーV' };
+    const dict2 = { 'マイジャグ5': 'マイジャグラーV (別バージョン)' };
+
+    expect(normalizeModelName(raw, dict1)).toBe('マイジャグラーV');
+    expect(normalizeModelName(raw, dict2)).toBe('マイジャグラーV (別バージョン)');
+    expect(normalizeModelName(raw)).toBe('マイジャグ5');
+  });
+
+  it('preserves exact output even when cache capacity is exceeded (overflow test)', () => {
+    const testSample = 'Ｌパチスロ北斗の拳';
+    const expected = normalizeModelNameReference(testSample);
+
+    // Warm up cache
+    expect(normalizeModelName(testSample)).toBe(expected);
+
+    // Overflow cache by inserting 50,001 keys
+    for (let i = 0; i <= 50005; i++) {
+      normalizeModelName(`パチスロ検証機種名_${i}`);
+    }
+
+    // Verify cache eviction preserves identical output
+    expect(normalizeModelName(testSample)).toBe(expected);
+  });
+});
+
+describe('Prompt 55: modelFilterUtils vs Reference Implementation', () => {
+  it('matches reference outputs for isJuggler, isSmartSlot, isAType across all benchmark models', () => {
+    for (const model of BENCHMARK_35_MODELS) {
+      expect(isJuggler(model)).toBe(isJugglerReference(model));
+      expect(isSmartSlot(model)).toBe(isSmartSlotReference(model));
+      expect(isAType(model)).toBe(isATypeReference(model));
+    }
+  });
+
+  it('handles edge cases consistently between cached and reference implementations', () => {
+    const edgeCases = [
+      '',
+      '   ',
+      'L',
+      'l',
+      'LL',
+      'L パチスロ',
+      'スマートスロット',
+      'ジャグラー',
+      'JUGGLER',
+      'jugler',
+      'a-slot',
+      'Aタイプ',
+      '新ハナビ',
+      '甲鉄城のカバネリ',
+    ];
+
+    for (const name of edgeCases) {
+      expect(isJuggler(name)).toBe(isJugglerReference(name));
+      expect(isSmartSlot(name)).toBe(isSmartSlotReference(name));
+      expect(isAType(name)).toBe(isATypeReference(name));
+    }
+  });
+
+  it('preserves correctness across filter cache eviction threshold (20,000 keys)', () => {
+    const target = 'アイムジャグラーEX';
+    expect(isJuggler(target)).toBe(true);
+
+    // Generate 20,005 calls to trigger cache clear
+    for (let i = 0; i < 20005; i++) {
+      isJuggler(`ダミー機種_${i}`);
+      isSmartSlot(`ダミー機種_${i}`);
+      isAType(`ダミー機種_${i}`);
+    }
+
+    expect(isJuggler(target)).toBe(true);
+    expect(isSmartSlot(target)).toBe(false);
+    expect(isAType(target)).toBe(true);
+  });
+});
+
+describe('Prompt 55: Cross-Store Golden Byte-for-Byte Consistency Test', () => {
+  it('matches pre-optimization golden JSON byte-for-byte on fixed seed (3 stores x 60 days x 40 machines)', () => {
+    const goldenFilePath = path.resolve(process.cwd(), 'src/utils/__tests__/golden/crossStoreModelGolden.json');
+    expect(fs.existsSync(goldenFilePath)).toBe(true);
+
+    const goldenJsonString = fs.readFileSync(goldenFilePath, 'utf-8').trim();
+
+    const stores = createSyntheticCrossStoreData({ numStores: 3, numDays: 60, numMachines: 40, seed: 42 });
+    const targetDate = '2024-03-02';
+    const targetModel = BENCHMARK_35_MODELS[0];
+
+    const modelRows = calculateCrossStoreModelRows(stores);
+    const monthlyTrends = calculateModelMonthlyTrends(stores, targetModel);
+    const modelSettings = estimateCrossStoreModelSettings(stores, targetModel);
+    const crossRanking = calculateCrossStoreRanking(stores, targetDate);
+    const targetMachineRanking = calculateTargetMachineRanking(
+      targetDate,
+      stores[0].dailyRecords,
+      stores[0].specialDayRules
+    );
+
+    const currentResult = {
+      modelRows,
+      monthlyTrends,
+      modelSettings,
+      crossRanking,
+      targetMachineRanking,
+    };
+
+    const currentJsonString = JSON.stringify(currentResult, null, 2).trim();
+
+    // Byte-level / exact string equality
+    expect(currentJsonString).toBe(goldenJsonString);
+  });
+});

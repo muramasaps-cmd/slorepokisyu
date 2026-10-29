@@ -3,7 +3,7 @@ import { isJapaneseHoliday } from './holidayUtils';
 import { isDateSpecialDay } from './dataEngine';
 import { StoreCommonPeriod } from './storeComparison';
 
-export type ConditionDimension = 'dow' | 'tail' | 'special' | 'machineTail';
+export type ConditionDimension = 'dow' | 'tail' | 'special' | 'machineTail' | 'monthPhase';
 export type ConditionMetric = 'avgDiff' | 'payoutRate' | 'highPayoutRate';
 export type ConditionViewMode = 'heatmap' | 'table' | 'chart';
 
@@ -12,6 +12,7 @@ export interface ConditionColumnDef {
   label: string;
   shortLabel: string;
   sampleDays?: string;
+  group?: 'edge' | 'decade';
 }
 
 export const DOW_COLUMNS: readonly ConditionColumnDef[] = [
@@ -60,7 +61,66 @@ export const MACHINE_TAIL_COLUMNS: readonly ConditionColumnDef[] = [
   { key: 'zoro', label: '末尾ゾロ目', shortLabel: 'ゾロ目' },
 ] as const;
 
-export function getConditionColumns(dimension: ConditionDimension): readonly ConditionColumnDef[] {
+export const DEFAULT_MONTH_EDGE_DAYS = 5;
+
+export function clampMonthEdgeDays(days?: number): number {
+  if (days === undefined || days === null || isNaN(days)) {
+    return DEFAULT_MONTH_EDGE_DAYS;
+  }
+  return Math.max(1, Math.min(10, Math.round(days)));
+}
+
+export function getMonthPhaseColumns(
+  monthEdgeDays: number = DEFAULT_MONTH_EDGE_DAYS
+): readonly ConditionColumnDef[] {
+  const n = clampMonthEdgeDays(monthEdgeDays);
+  return [
+    {
+      key: 'monthStart',
+      label: `月初（1〜${n}日）`,
+      shortLabel: '月初',
+      sampleDays: `1〜${n}日`,
+      group: 'edge',
+    },
+    {
+      key: 'monthEnd',
+      label: `月末（月末${n}日間）`,
+      shortLabel: '月末',
+      sampleDays: `月末${n}日間`,
+      group: 'edge',
+    },
+    {
+      key: 'early',
+      label: '上旬（1〜10日）',
+      shortLabel: '上旬',
+      sampleDays: '1〜10日',
+      group: 'decade',
+    },
+    {
+      key: 'mid',
+      label: '中旬（11〜20日）',
+      shortLabel: '中旬',
+      sampleDays: '11〜20日',
+      group: 'decade',
+    },
+    {
+      key: 'late',
+      label: '下旬（21日〜月末）',
+      shortLabel: '下旬',
+      sampleDays: '21日〜月末',
+      group: 'decade',
+    },
+  ] as const;
+}
+
+export interface GetConditionColumnsOptions {
+  monthEdgeDays?: number;
+}
+
+export function getConditionColumns(
+  dimension: ConditionDimension,
+  options?: GetConditionColumnsOptions
+): readonly ConditionColumnDef[] {
   switch (dimension) {
     case 'dow':
       return DOW_COLUMNS;
@@ -70,9 +130,41 @@ export function getConditionColumns(dimension: ConditionDimension): readonly Con
       return SPECIAL_COLUMNS;
     case 'machineTail':
       return MACHINE_TAIL_COLUMNS;
+    case 'monthPhase':
+      return getMonthPhaseColumns(options?.monthEdgeDays);
     default:
       return DOW_COLUMNS;
   }
+}
+
+export const MONTH_PHASE_DEFINITION_TEXT =
+  '月内の時期（上旬1〜10日・中旬11〜20日・下旬21日〜月末）および月初（1〜N日）・月末（暦の末日からN日間）の出玉傾向を分析します。\n月初・月末は上旬・下旬と日が重なり、月末は各月の暦の日数（平年28日、閏年29日、30日、31日）に基づいて判定されます。';
+
+export function getRecordYearMonthDay(r: {
+  date: string;
+  year?: number;
+  month?: number;
+  day?: number;
+}): { year: number; month: number; day: number; daysInMonth: number } {
+  let year = r.year;
+  let month = r.month;
+  let day = r.day;
+
+  if (!year || !month || !day) {
+    const parts = (r.date || '').split(/[-/.]/);
+    if (parts.length >= 3) {
+      if (!year) year = parseInt(parts[0], 10);
+      if (!month) month = parseInt(parts[1], 10);
+      if (!day) day = parseInt(parts[2], 10);
+    }
+  }
+
+  const y = year || 2025;
+  const m = month || 1;
+  const d = day || 1;
+  const daysInMonth = new Date(y, m, 0).getDate();
+
+  return { year: y, month: m, day: d, daysInMonth };
 }
 
 export const SPECIAL_DEFINITION_TEXT =
@@ -218,6 +310,7 @@ export interface ConditionBucketStat {
   label: string;
   shortLabel: string;
   sampleDays?: string;
+  group?: 'edge' | 'decade';
   count: number;
   isWeekend: boolean;
   isHoliday: boolean;
@@ -260,6 +353,7 @@ export interface CalculateConditionStatsOptions {
   specialDayRules?: SpecialDayRules;
   totalMachinesApprox?: number;
   includeMonthDayZoro?: boolean;
+  monthEdgeDays?: number;
 }
 
 export function calculateConditionStats(
@@ -273,9 +367,11 @@ export function calculateConditionStats(
     specialDayRules,
     totalMachinesApprox = 587,
     includeMonthDayZoro = true,
+    monthEdgeDays,
   } = options;
 
-  const columns = getConditionColumns(dimension);
+  const columns = getConditionColumns(dimension, { monthEdgeDays });
+  const nEdge = clampMonthEdgeDays(monthEdgeDays);
 
   if (!dailyRecords || dailyRecords.length === 0) {
     return columns.map((col) => ({
@@ -283,6 +379,7 @@ export function calculateConditionStats(
       label: col.label,
       shortLabel: col.shortLabel,
       sampleDays: col.sampleDays,
+      group: col.group,
       count: 0,
       isWeekend: col.key === '土' || col.key === '日',
       isHoliday: col.key === '祝',
@@ -468,6 +565,28 @@ export function calculateConditionStats(
       });
 
       records = tailRecordsList;
+    } else if (dimension === 'monthPhase') {
+      isWeekend = false;
+      isHoliday = false;
+      isStoreEvent = false;
+
+      records = dailyRecords.filter((r) => {
+        const { day, daysInMonth } = getRecordYearMonthDay(r);
+        switch (col.key) {
+          case 'monthStart':
+            return day >= 1 && day <= nEdge;
+          case 'monthEnd':
+            return day >= daysInMonth - nEdge + 1 && day <= daysInMonth;
+          case 'early':
+            return day >= 1 && day <= 10;
+          case 'mid':
+            return day >= 11 && day <= 20;
+          case 'late':
+            return day >= 21 && day <= daysInMonth;
+          default:
+            return false;
+        }
+      });
     }
 
     const count = records.length;
@@ -478,6 +597,7 @@ export function calculateConditionStats(
         label: col.label,
         shortLabel: col.shortLabel,
         sampleDays: col.sampleDays,
+        group: col.group,
         count: 0,
         isWeekend,
         isHoliday,
@@ -579,6 +699,7 @@ export function calculateConditionStats(
       label: col.label,
       shortLabel: col.shortLabel,
       sampleDays: col.sampleDays,
+      group: col.group,
       count,
       isWeekend,
       isHoliday,
@@ -630,10 +751,11 @@ export function calculateAllStoresTotalConditionStats(
   dimension: ConditionDimension,
   options: {
     perspective?: 'hall' | 'player';
+    monthEdgeDays?: number;
   } = {}
 ): ConditionBucketStat[] {
-  const { perspective = 'player' } = options;
-  const columns = getConditionColumns(dimension);
+  const { perspective = 'player', monthEdgeDays } = options;
+  const columns = getConditionColumns(dimension, { monthEdgeDays });
 
   return columns.map((col) => {
     let totalInCoins = 0;
@@ -776,6 +898,7 @@ export function calculateAllStoresTotalConditionStats(
       label: col.label,
       shortLabel: col.shortLabel,
       sampleDays: col.sampleDays,
+      group: col.group,
       count,
       isWeekend,
       isHoliday,
@@ -812,9 +935,10 @@ export function calculateMultiStoreConditions(
     period?: StoreCommonPeriod | null;
     perspective?: 'hall' | 'player';
     includeTotalRow?: boolean;
+    monthEdgeDays?: number;
   } = {}
 ): StoreConditionRow[] {
-  const { period, perspective = 'player', includeTotalRow = true } = options;
+  const { period, perspective = 'player', includeTotalRow = true, monthEdgeDays } = options;
 
   const rows: StoreConditionRow[] = stores.map((store) => {
     let records = store.dailyRecords || [];
@@ -832,6 +956,7 @@ export function calculateMultiStoreConditions(
       specialDayRules: store.specialDayRules,
       totalMachinesApprox: store.totalMachinesApprox || 500,
       includeMonthDayZoro: false, // In multi-store digit day mode, follow strict 11, 22 zorome standard
+      monthEdgeDays,
     });
 
     return {
@@ -843,7 +968,10 @@ export function calculateMultiStoreConditions(
   });
 
   if (includeTotalRow && stores.length > 1) {
-    const totalStats = calculateAllStoresTotalConditionStats(rows, dimension, { perspective });
+    const totalStats = calculateAllStoresTotalConditionStats(rows, dimension, {
+      perspective,
+      monthEdgeDays,
+    });
     const allStoreDates = new Set<string>();
     rows.forEach((r) => {
       r.stats.forEach((s) => s.records.forEach((rec) => allStoreDates.add(rec.date)));

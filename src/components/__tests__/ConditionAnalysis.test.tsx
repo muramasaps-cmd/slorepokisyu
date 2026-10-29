@@ -11,6 +11,7 @@ import {
   isFewDays,
   FEW_DAYS_LABEL,
   DIGIT_DAY_DEFINITION_TEXT,
+  MONTH_PHASE_DEFINITION_TEXT,
   DOW_COLUMNS,
   TAIL_COLUMNS,
 } from '../../utils/conditionAnalysis';
@@ -440,4 +441,155 @@ describe('ConditionAnalysis Component & Utilities', () => {
     expect(html).toContain('表示:');
     expect(html).toContain('単位:');
   });
+
+  describe('Prompt 60-2: 月内の時期 (monthPhase) UI表示と機能', () => {
+    it('12. Dimension switching: renders monthPhase title, description, 5 columns, and 2 group headers', () => {
+      const htmlSingle = renderToString(
+        <ConditionAnalysis
+          dailyRecords={sampleRecords}
+          initialDimension="monthPhase"
+        />
+      );
+
+      // Title & Subtitle & Description
+      expect(htmlSingle).toContain('月初・月末／上旬・中旬・下旬別の利益・出玉傾向分析');
+      expect(htmlSingle).toContain('(月初・月末 &amp; 上旬・中旬・下旬)');
+      expect(htmlSingle).toContain(MONTH_PHASE_DEFINITION_TEXT.slice(0, 20));
+
+      // 5th Dimension button
+      expect(htmlSingle).toContain('月初・月末・旬');
+
+      // Month edge days switcher (3日/5日/7日)
+      expect(htmlSingle).toContain('月初・月末:');
+      expect(htmlSingle).toContain('3日');
+      expect(htmlSingle).toContain('5日');
+      expect(htmlSingle).toContain('7日');
+
+      // 2 Group Headers
+      expect(htmlSingle).toContain('月初／月末');
+      expect(htmlSingle).toContain('上旬／中旬／下旬');
+
+      // 5 Column Labels (default 5 days)
+      expect(htmlSingle).toContain('月初（1〜5日）');
+      expect(htmlSingle).toContain('月末（月末5日間）');
+      expect(htmlSingle).toContain('上旬（1〜10日）');
+      expect(htmlSingle).toContain('中旬（11〜20日）');
+      expect(htmlSingle).toContain('下旬（21日〜月末）');
+
+      // Day count under column headers
+      expect(htmlSingle).toContain('日');
+    });
+
+    it('13. Month edge days switching: updates column labels and values when monthEdgeDays changes', () => {
+      const html3Days = renderToString(
+        <ConditionAnalysis
+          dailyRecords={sampleRecords}
+          initialDimension="monthPhase"
+          initialMonthEdgeDays={3}
+        />
+      );
+
+      expect(html3Days).toContain('月初（1〜3日）');
+      expect(html3Days).toContain('月末（月末3日間）');
+      expect(html3Days).toContain('上旬（1〜10日）');
+
+      const html7Days = renderToString(
+        <ConditionAnalysis
+          dailyRecords={sampleRecords}
+          initialDimension="monthPhase"
+          initialMonthEdgeDays={7}
+        />
+      );
+
+      expect(html7Days).toContain('月初（1〜7日）');
+      expect(html7Days).toContain('月末（月末7日間）');
+    });
+
+    it('14. Multi-store mode with monthPhase: renders store rows and 全店合計 row', () => {
+      const htmlMulti = renderToString(
+        <ConditionAnalysis
+          stores={[storeA, storeB]}
+          initialDimension="monthPhase"
+        />
+      );
+
+      // Title in multi-store mode
+      expect(htmlMulti).toContain('店舗 × 月内の時期 ヒートマップ');
+
+      // Group headers
+      expect(htmlMulti).toContain('月初／月末');
+      expect(htmlMulti).toContain('上旬／中旬／下旬');
+
+      // Stores and Total row
+      expect(htmlMulti).toContain('メガホールA店');
+      expect(htmlMulti).toContain('ギガホールB店');
+      expect(htmlMulti).toContain('全店合計');
+    });
+
+    it('15. Table view with monthPhase: renders grouped matrix table, TOP3/Worst3, and sortable table with group badge', () => {
+      const htmlTable = renderToString(
+        <ConditionAnalysis
+          dailyRecords={sampleRecords}
+          initialDimension="monthPhase"
+          initialViewMode="table"
+        />
+      );
+
+      // Grouped matrix table
+      expect(htmlTable).toContain('月内の時期 集計マトリクス表');
+      expect(htmlTable).toContain('月初／月末');
+      expect(htmlTable).toContain('上旬／中旬／下旬');
+
+      // TOP 3 & Worst 3
+      expect(htmlTable).toContain('出玉還元 TOP 3 (高差枚・好待遇条件)');
+      expect(htmlTable).toContain('出玉 ワースト 3 (回収・低勝率条件)');
+
+      // Detailed sortable table with group badge
+      expect(htmlTable).toContain('条件区分');
+      expect(htmlTable).toContain('月初（1〜5日）');
+    });
+
+    it('16. Chart view with monthPhase: renders chart container', () => {
+      const htmlChart = renderToString(
+        <ConditionAnalysis
+          dailyRecords={sampleRecords}
+          initialDimension="monthPhase"
+          initialViewMode="chart"
+        />
+      );
+
+      expect(htmlChart).toContain('recharts-responsive-container');
+    });
+
+    it('17. Backward compatibility: existing 4 dimensions (dow, tail, special, machineTail) remain intact', () => {
+      // dow
+      const htmlDow = renderToString(
+        <ConditionAnalysis dailyRecords={sampleRecords} initialDimension="dow" />
+      );
+      expect(htmlDow).toContain('曜日・祝日別 利益・出玉傾向分析');
+      expect(htmlDow).not.toContain('月初・月末:');
+
+      // tail
+      const htmlTail = renderToString(
+        <ConditionAnalysis dailyRecords={sampleRecords} initialDimension="tail" />
+      );
+      expect(htmlTail).toContain('〇のつく日別の利益・出玉傾向分析');
+      expect(htmlTail).not.toContain('月初・月末:');
+
+      // special
+      const htmlSpecial = renderToString(
+        <ConditionAnalysis dailyRecords={sampleRecords} initialDimension="special" />
+      );
+      expect(htmlSpecial).toContain('特日／通常日別の利益・出玉傾向分析');
+      expect(htmlSpecial).not.toContain('月初・月末:');
+
+      // machineTail
+      const htmlMachineTail = renderToString(
+        <ConditionAnalysis dailyRecords={sampleRecords} initialDimension="machineTail" />
+      );
+      expect(htmlMachineTail).toContain('台番号末尾別の利益・出玉傾向分析');
+      expect(htmlMachineTail).not.toContain('月初・月末:');
+    });
+  });
 });
+

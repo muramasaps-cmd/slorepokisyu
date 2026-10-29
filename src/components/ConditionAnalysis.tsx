@@ -18,6 +18,7 @@ import {
   DIGIT_DAY_DEFINITION_TEXT,
   DIGIT_DAY_EXPLANATION,
   DOW_EXPLANATION,
+  MONTH_PHASE_DEFINITION_TEXT,
   FEW_DAYS_LABEL,
   isFewDays,
   getFewDaysClass,
@@ -39,6 +40,7 @@ import { SpecialDayPatterns } from './SpecialDayPatterns';
 import {
   Calendar,
   CalendarDays,
+  CalendarRange,
   Sparkles,
   Flame,
   TrendingUp,
@@ -90,6 +92,10 @@ export interface ConditionAnalysisProps {
   initialMetric?: ConditionMetric;
   metric?: ConditionMetric;
   onMetricChange?: (metric: ConditionMetric) => void;
+
+  initialMonthEdgeDays?: number;
+  monthEdgeDays?: number;
+  onMonthEdgeDaysChange?: (days: number) => void;
 
   initialViewMode?: ConditionViewMode;
   viewMode?: ConditionViewMode;
@@ -270,6 +276,10 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
   metric: controlledMetric,
   onMetricChange,
 
+  initialMonthEdgeDays = 5,
+  monthEdgeDays: controlledMonthEdgeDays,
+  onMonthEdgeDaysChange,
+
   initialViewMode = 'heatmap',
   viewMode: controlledViewMode,
   onViewModeChange,
@@ -296,6 +306,14 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
   const handleMetricChange = (m: ConditionMetric) => {
     setInternalMetric(m);
     onMetricChange?.(m);
+  };
+
+  // MonthEdgeDays state (N = 3, 5, 7. Default 5)
+  const [internalMonthEdgeDays, setInternalMonthEdgeDays] = useState<number>(initialMonthEdgeDays);
+  const currentMonthEdgeDays = controlledMonthEdgeDays ?? internalMonthEdgeDays;
+  const handleMonthEdgeDaysChange = (days: number) => {
+    setInternalMonthEdgeDays(days);
+    onMonthEdgeDaysChange?.(days);
   };
 
   // ViewMode state
@@ -328,8 +346,9 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
       period,
       perspective,
       includeTotalRow: true,
+      monthEdgeDays: currentMonthEdgeDays,
     });
-  }, [stores, currentDimension, period, perspective]);
+  }, [stores, currentDimension, period, perspective, currentMonthEdgeDays]);
 
   // Single store bucket stats (or selected store in multi-store mode, or all-stores total)
   const singleStats: ConditionBucketStat[] = useMemo(() => {
@@ -337,7 +356,10 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
       if (selectedStoreIndex === -1 && stores.length > 1) {
         const totalRow = multiStoreRows.find((r) => r.isTotal);
         if (totalRow) return totalRow.stats;
-        return calculateAllStoresTotalConditionStats(multiStoreRows, currentDimension, { perspective });
+        return calculateAllStoresTotalConditionStats(multiStoreRows, currentDimension, {
+          perspective,
+          monthEdgeDays: currentMonthEdgeDays,
+        });
       }
       const targetIdx = selectedStoreIndex >= 0 ? selectedStoreIndex : 0;
       const targetStore = stores[targetIdx] || stores[0];
@@ -351,12 +373,14 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
         specialDayRules: targetStore.specialDayRules || specialDayRules,
         totalMachinesApprox: targetStore.totalMachinesApprox,
         includeMonthDayZoro: false,
+        monthEdgeDays: currentMonthEdgeDays,
       });
     }
     return calculateConditionStats(dailyRecords, currentDimension, {
       perspective,
       oldEventDays,
       specialDayRules,
+      monthEdgeDays: currentMonthEdgeDays,
     });
   }, [
     isMultiStore,
@@ -369,6 +393,7 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
     perspective,
     oldEventDays,
     specialDayRules,
+    currentMonthEdgeDays,
   ]);
 
   const activeSelectedStoreName = useMemo(() => {
@@ -550,7 +575,7 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
 
 
   // Determine section headers
-  const columns = getConditionColumns(currentDimension);
+  const columns = getConditionColumns(currentDimension, { monthEdgeDays: currentMonthEdgeDays });
   const isDow = currentDimension === 'dow';
 
   const defaultTitle =
@@ -566,6 +591,10 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
       ? isMultiStore
         ? '店舗 × 特日／通常日 ヒートマップ'
         : '特日／通常日別の利益・出玉傾向分析'
+      : currentDimension === 'monthPhase'
+      ? isMultiStore
+        ? '店舗 × 月内の時期 ヒートマップ'
+        : '月初・月末／上旬・中旬・下旬別の利益・出玉傾向分析'
       : isMultiStore
       ? '店舗 × 台番号末尾 ヒートマップ'
       : '台番号末尾別の利益・出玉傾向分析';
@@ -581,6 +610,8 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
         : DIGIT_DAY_EXPLANATION
       : currentDimension === 'special'
       ? SPECIAL_DEFINITION_TEXT
+      : currentDimension === 'monthPhase'
+      ? MONTH_PHASE_DEFINITION_TEXT
       : MACHINE_TAIL_DEFINITION_TEXT;
 
   const descriptionText = customDescription || defaultDescription;
@@ -693,6 +724,8 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                 <CalendarDays className="w-5 h-5" />
               ) : currentDimension === 'special' ? (
                 <Sparkles className="w-5 h-5" />
+              ) : currentDimension === 'monthPhase' ? (
+                <CalendarRange className="w-5 h-5" />
               ) : (
                 <Hash className="w-5 h-5" />
               )}
@@ -709,6 +742,8 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                     ? '(0〜9のつく日 & ゾロ目の日)'
                     : currentDimension === 'special'
                     ? '(特日 vs 通常日 & 前日・翌日)'
+                    : currentDimension === 'monthPhase'
+                    ? '(月初・月末 & 上旬・中旬・下旬)'
                     : '(末尾0〜9 & 末尾ゾロ目)'}
                 </div>
               )}
@@ -720,13 +755,13 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
         {/* Global Switchers */}
         {!hideControls && (
           <div className="flex flex-wrap items-center gap-2 w-full text-xs">
-            {/* 1. Dimension Switcher (切り口: 曜日・祝日 / のつく日・ゾロ目 / 特日／通常日 / 末尾) */}
+            {/* 1. Dimension Switcher (切り口: 曜日・祝日 / のつく日・ゾロ目 / 特日／通常日 / 月初・月末・旬 / 末尾) */}
             {!fixedDimension && (
-              <div className="flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <span className="text-2xs font-bold text-slate-400 select-none hidden sm:inline">
                   切り口:
                 </span>
-                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl font-bold">
+                <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-xl font-bold">
                   <button
                     type="button"
                     onClick={() => handleDimensionChange('dow')}
@@ -762,6 +797,18 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                   >
                     <Sparkles className="w-3.5 h-3.5" />
                     特日／通常日
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDimensionChange('monthPhase')}
+                    className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                      currentDimension === 'monthPhase'
+                        ? 'bg-white text-indigo-700 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <CalendarRange className="w-3.5 h-3.5" />
+                    月初・月末・旬
                   </button>
                   <button
                     type="button"
@@ -823,6 +870,31 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                 </button>
               </div>
             </div>
+
+            {/* 2b. Month Edge Days Switcher (対象日数: 3日 / 5日 / 7日) */}
+            {currentDimension === 'monthPhase' && (
+              <div className="flex items-center gap-1.5" data-testid="month-edge-days-selector">
+                <span className="text-2xs font-bold text-slate-400 select-none hidden sm:inline">
+                  月初・月末:
+                </span>
+                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl font-bold">
+                  {[3, 5, 7].map((days) => (
+                    <button
+                      key={days}
+                      type="button"
+                      onClick={() => handleMonthEdgeDaysChange(days)}
+                      className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                        currentMonthEdgeDays === days
+                          ? 'bg-white text-indigo-700 shadow-2xs font-bold'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      {`${days}日`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* 3. View Mode Switcher (表示: ヒートマップ / 表 / グラフ) */}
             <div className="flex items-center gap-1.5">
@@ -907,19 +979,69 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
           <div className="overflow-x-auto">
             <table className="w-full text-xs text-center border-collapse">
               <thead>
-                <tr className="bg-slate-100 text-slate-600 text-[11px]">
-                  <th className="p-2.5 text-left sticky left-0 bg-slate-100 z-10 whitespace-nowrap min-w-[100px]">
-                    店舗名
-                  </th>
-                  {columns.map((col) => (
-                    <th
-                      key={col.key}
-                      className="p-2 font-bold whitespace-nowrap min-w-[56px] text-center"
-                    >
-                      {col.label}
+                {currentDimension === 'monthPhase' ? (
+                  <>
+                    <tr className="bg-slate-100 text-slate-600 text-[11px] border-b border-slate-200">
+                      <th className="p-2 text-left sticky left-0 bg-slate-100 z-10 whitespace-nowrap min-w-[100px]">
+                        店舗名
+                      </th>
+                      <th
+                        colSpan={2}
+                        className="p-1.5 font-bold text-center bg-indigo-50/70 text-indigo-900 border-r-2 border-slate-300"
+                      >
+                        月初／月末
+                      </th>
+                      <th
+                        colSpan={3}
+                        className="p-1.5 font-bold text-center bg-slate-50 text-slate-800"
+                      >
+                        上旬／中旬／下旬
+                      </th>
+                    </tr>
+                    <tr className="bg-slate-100 text-slate-600 text-[11px]">
+                      <th className="p-2.5 text-left sticky left-0 bg-slate-100 z-10 whitespace-nowrap min-w-[100px]">
+                        {/* 店舗名 */}
+                      </th>
+                      {columns.map((col, idx) => {
+                        const isGroupEnd =
+                          col.group === 'edge' && columns[idx + 1]?.group === 'decade';
+                        const colDays = isMultiStore
+                          ? (multiStoreRows.find((r) => r.isTotal)?.stats.find((s) => s.key === col.key)?.count ??
+                             multiStoreRows[0]?.stats.find((s) => s.key === col.key)?.count ??
+                             singleStats.find((s) => s.key === col.key)?.count ?? 0)
+                          : (singleStats.find((s) => s.key === col.key)?.count ?? 0);
+
+                        return (
+                          <th
+                            key={col.key}
+                            className={`p-2 font-bold whitespace-nowrap min-w-[56px] text-center ${
+                              isGroupEnd ? 'border-r-2 border-slate-300' : ''
+                            }`}
+                          >
+                            <div>{col.label}</div>
+                            <div className="text-[10px] font-normal text-slate-500 mt-0.5">
+                              {`${colDays}日`}
+                            </div>
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  </>
+                ) : (
+                  <tr className="bg-slate-100 text-slate-600 text-[11px]">
+                    <th className="p-2.5 text-left sticky left-0 bg-slate-100 z-10 whitespace-nowrap min-w-[100px]">
+                      店舗名
                     </th>
-                  ))}
-                </tr>
+                    {columns.map((col) => (
+                      <th
+                        key={col.key}
+                        className="p-2 font-bold whitespace-nowrap min-w-[56px] text-center"
+                      >
+                        {col.label}
+                      </th>
+                    ))}
+                  </tr>
+                )}
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {isMultiStore ? (
@@ -963,7 +1085,11 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                             )}
                           </div>
                         </td>
-                        {columns.map((col) => {
+                        {columns.map((col, idx) => {
+                          const isGroupEnd =
+                            currentDimension === 'monthPhase' &&
+                            col.group === 'edge' &&
+                            columns[idx + 1]?.group === 'decade';
                           const stat =
                             row.stats.find((s) => s.key === col.key) || {
                               ...col,
@@ -1014,7 +1140,9 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                           return (
                             <td
                               key={col.key}
-                              className={`p-1 sm:p-1.5 ${row.isTotal ? 'border-t-2 border-slate-300' : ''}`}
+                              className={`p-1 sm:p-1.5 ${row.isTotal ? 'border-t-2 border-slate-300' : ''} ${
+                                isGroupEnd ? 'border-r-2 border-slate-300' : ''
+                              }`}
                             >
                               <div
                                 title={tooltipText}
@@ -1046,7 +1174,11 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                     <td className="p-2.5 text-left font-bold text-slate-900 sticky left-0 bg-white hover:bg-slate-50 z-10 whitespace-nowrap">
                       {currentStoreName}
                     </td>
-                    {columns.map((col) => {
+                    {columns.map((col, idx) => {
+                      const isGroupEnd =
+                        currentDimension === 'monthPhase' &&
+                        col.group === 'edge' &&
+                        columns[idx + 1]?.group === 'decade';
                       const stat =
                         singleStats.find((s) => s.key === col.key) || {
                           ...col,
@@ -1081,7 +1213,10 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                             }`;
 
                       return (
-                        <td key={col.key} className="p-1 sm:p-1.5">
+                        <td
+                          key={col.key}
+                          className={`p-1 sm:p-1.5 ${isGroupEnd ? 'border-r-2 border-slate-300' : ''}`}
+                        >
                           <div
                             title={tooltipText}
                             className={`p-2 rounded-lg text-xs relative transition-all select-none ${bgClass} ${
@@ -1330,38 +1465,53 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                   >
                     {singleStats.map((entry, index) => {
                       let fillColor = '#6366f1';
+                      const isMonthPhase = currentDimension === 'monthPhase';
+                      const isEdge = isMonthPhase && (entry.key === 'monthStart' || entry.key === 'monthEnd');
+
                       if (currentMetric === 'payoutRate') {
-                        fillColor = entry.payoutRate >= 100 ? '#10b981' : '#f43f5e';
+                        if (isMonthPhase) {
+                          fillColor = isEdge
+                            ? entry.payoutRate >= 100 ? '#059669' : '#dc2626'
+                            : entry.payoutRate >= 100 ? '#34d399' : '#f87171';
+                        } else {
+                          fillColor = entry.payoutRate >= 100 ? '#10b981' : '#f43f5e';
+                        }
                       } else if (currentMetric === 'highPayoutRate') {
-                        fillColor = entry.highPayoutRate >= 50 ? '#3b82f6' : '#f59e0b';
+                        if (isMonthPhase) {
+                          fillColor = isEdge
+                            ? entry.highPayoutRate >= 50 ? '#1d4ed8' : '#d97706'
+                            : entry.highPayoutRate >= 50 ? '#60a5fa' : '#fbbf24';
+                        } else {
+                          fillColor = entry.highPayoutRate >= 50 ? '#3b82f6' : '#f59e0b';
+                        }
                       } else if (unit === 'yen') {
                         fillColor =
                           entry.displayDailyProfit >= 0
                             ? isHall
-                              ? '#10b981'
-                              : '#3b82f6'
-                            : '#f43f5e';
+                              ? (isMonthPhase && isEdge ? '#047857' : '#10b981')
+                              : (isMonthPhase && isEdge ? '#1d4ed8' : '#3b82f6')
+                            : (isMonthPhase && isEdge ? '#be123c' : '#f43f5e');
                       } else if (unit === 'coins') {
                         fillColor =
                           entry.displayTotalCoins >= 0
                             ? isHall
-                              ? '#10b981'
-                              : '#3b82f6'
-                            : '#f43f5e';
+                              ? (isMonthPhase && isEdge ? '#047857' : '#10b981')
+                              : (isMonthPhase && isEdge ? '#1d4ed8' : '#3b82f6')
+                            : (isMonthPhase && isEdge ? '#be123c' : '#f43f5e');
                       } else {
                         fillColor =
                           entry.displayDiffCoins > 0
                             ? isHall
-                              ? '#818cf8'
-                              : '#3b82f6'
-                            : '#f43f5e';
+                              ? (isMonthPhase && isEdge ? '#4338ca' : '#818cf8')
+                              : (isMonthPhase && isEdge ? '#1d4ed8' : '#3b82f6')
+                            : (isMonthPhase && isEdge ? '#be123c' : '#f43f5e');
                       }
                       return (
                         <Cell
                           key={`cell-${index}`}
                           fill={fillColor}
-                          stroke={entry.isStoreEvent ? '#f59e0b' : 'none'}
-                          strokeWidth={entry.isStoreEvent ? 2 : 0}
+                          stroke={isMonthPhase && isEdge ? '#312e81' : entry.isStoreEvent ? '#f59e0b' : 'none'}
+                          strokeWidth={isMonthPhase && isEdge ? 1.5 : entry.isStoreEvent ? 2 : 0}
                         />
                       );
                     })}
@@ -1426,6 +1576,169 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
               </div>
             </div>
           )}
+          {/* Grouped Comparison Matrix for Month Phase */}
+          {currentDimension === 'monthPhase' && (
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-2xs">
+              <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <CalendarRange className="w-4 h-4 text-indigo-600" />
+                  <span className="text-xs font-bold text-slate-800">
+                    月内の時期 集計マトリクス表 {isMultiStore && stores && stores.length > 1 ? `(${activeSelectedStoreName})` : ''}
+                  </span>
+                </div>
+                <span className="text-[11px] text-slate-500">
+                  月初・月末（{currentMonthEdgeDays}日間） / 上旬・中旬・下旬
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-center border-collapse">
+                  <thead>
+                    <tr className="bg-slate-100 text-slate-600 text-[11px] border-b border-slate-200">
+                      <th className="p-2 text-left sticky left-0 bg-slate-100 z-10 whitespace-nowrap min-w-[120px]">
+                        指標
+                      </th>
+                      <th
+                        colSpan={2}
+                        className="p-1.5 font-bold text-center bg-indigo-50/70 text-indigo-900 border-r-2 border-slate-300"
+                      >
+                        月初／月末
+                      </th>
+                      <th
+                        colSpan={3}
+                        className="p-1.5 font-bold text-center bg-slate-50 text-slate-800"
+                      >
+                        上旬／中旬／下旬
+                      </th>
+                    </tr>
+                    <tr className="bg-slate-50 text-slate-600 text-[11px] border-b border-slate-200">
+                      <th className="p-2 text-left sticky left-0 bg-slate-50 z-10 whitespace-nowrap min-w-[120px]">
+                        {/* 指標 */}
+                      </th>
+                      {columns.map((col, idx) => {
+                        const isGroupEnd =
+                          col.group === 'edge' && columns[idx + 1]?.group === 'decade';
+                        const colStat = singleStats.find((s) => s.key === col.key);
+                        const count = colStat?.count ?? 0;
+                        return (
+                          <th
+                            key={col.key}
+                            className={`p-2 font-bold whitespace-nowrap min-w-[70px] text-center ${
+                              isGroupEnd ? 'border-r-2 border-slate-300' : ''
+                            }`}
+                          >
+                            <div>{col.label}</div>
+                            <div className="text-[10px] font-normal text-slate-500 mt-0.5">
+                              {`${count}日`}
+                            </div>
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    <tr className="hover:bg-slate-50">
+                      <td className="p-2 text-left font-bold text-slate-900 sticky left-0 bg-white">
+                        {isHall ? '店平均差枚' : '客平均差枚'}
+                      </td>
+                      {columns.map((col, idx) => {
+                        const isGroupEnd =
+                          col.group === 'edge' && columns[idx + 1]?.group === 'decade';
+                        const stat = singleStats.find((s) => s.key === col.key);
+                        const diffVal = stat ? (isHall ? -stat.avgDiffCoins : stat.avgDiffCoins) : 0;
+                        const isFew = stat ? stat.count < 3 : true;
+                        return (
+                          <td
+                            key={col.key}
+                            className={`p-2 font-extrabold ${
+                              isGroupEnd ? 'border-r-2 border-slate-300' : ''
+                            } ${
+                              diffVal > 0
+                                ? isHall
+                                  ? 'text-indigo-600'
+                                  : 'text-blue-600'
+                                : diffVal < 0
+                                ? 'text-rose-600'
+                                : 'text-slate-600'
+                            }`}
+                          >
+                            <div>{diffVal > 0 ? `+${diffVal}` : diffVal}枚</div>
+                            {isFew && (
+                              <span className="inline-block text-[9px] font-normal text-amber-700 bg-amber-50 rounded px-1 mt-0.5">
+                                日数少
+                              </span>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                    <tr className="hover:bg-slate-50">
+                      <td className="p-2 text-left font-bold text-slate-900 sticky left-0 bg-white">
+                        機械割 (出玉率)
+                      </td>
+                      {columns.map((col, idx) => {
+                        const isGroupEnd =
+                          col.group === 'edge' && columns[idx + 1]?.group === 'decade';
+                        const stat = singleStats.find((s) => s.key === col.key);
+                        return (
+                          <td
+                            key={col.key}
+                            className={`p-2 font-bold ${
+                              isGroupEnd ? 'border-r-2 border-slate-300' : ''
+                            } ${
+                              stat && stat.payoutRate >= 100 ? 'text-emerald-700' : 'text-slate-700'
+                            }`}
+                          >
+                            {stat && stat.count > 0 ? `${stat.payoutRate.toFixed(2)}%` : '-'}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                    <tr className="hover:bg-slate-50">
+                      <td className="p-2 text-left font-bold text-slate-900 sticky left-0 bg-white">
+                        客勝率 (高出率台割合)
+                      </td>
+                      {columns.map((col, idx) => {
+                        const isGroupEnd =
+                          col.group === 'edge' && columns[idx + 1]?.group === 'decade';
+                        const stat = singleStats.find((s) => s.key === col.key);
+                        return (
+                          <td
+                            key={col.key}
+                            className={`p-2 font-semibold text-slate-700 ${
+                              isGroupEnd ? 'border-r-2 border-slate-300' : ''
+                            }`}
+                          >
+                            {stat && stat.count > 0 ? `${stat.playerWinRate}%` : '-'}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                    <tr className="hover:bg-slate-50">
+                      <td className="p-2 text-left font-bold text-slate-900 sticky left-0 bg-white">
+                        平均稼働G数
+                      </td>
+                      {columns.map((col, idx) => {
+                        const isGroupEnd =
+                          col.group === 'edge' && columns[idx + 1]?.group === 'decade';
+                        const stat = singleStats.find((s) => s.key === col.key);
+                        return (
+                          <td
+                            key={col.key}
+                            className={`p-2 font-semibold text-slate-600 ${
+                              isGroupEnd ? 'border-r-2 border-slate-300' : ''
+                            }`}
+                          >
+                            {stat && stat.count > 0 ? `${formatNumber(stat.avgGames)}G` : '-'}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           {/* TOP 3 & Worst 3 Cards */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* TOP 3 Card */}
@@ -1712,8 +2025,19 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                           )}
                         </td>
                         <td className="px-4 py-3">
-                          <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                          <div className="font-bold text-slate-900 flex items-center gap-1.5 flex-wrap">
                             <span>{d.label}</span>
+                            {currentDimension === 'monthPhase' && d.group && (
+                              <span
+                                className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
+                                  d.group === 'edge'
+                                    ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                                    : 'bg-slate-100 text-slate-700 border border-slate-200'
+                                }`}
+                              >
+                                {d.group === 'edge' ? '月初／月末' : '上旬／中旬／下旬'}
+                              </span>
+                            )}
                             {d.isStoreEvent && (
                               <span className="bg-amber-500 text-slate-950 text-[10px] font-black px-1.5 py-0.2 rounded">
                                 特日

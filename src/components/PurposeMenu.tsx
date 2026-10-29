@@ -272,7 +272,7 @@ export const PurposeMenu: React.FC<PurposeMenuProps> = ({
         {
           id: 'conditions',
           title: '曜日・のつく日・特日・末尾の傾向',
-          desc: '曜日・のつく日・特日・末尾ごとの出玉の強さ',
+          desc: '曜日・のつく日・特日・末尾・月初・月末・旬ごとの出玉の強さ',
           icon: Calendar,
           hash: '#analysis/conditions',
           isActive: !isHome && activeTab === 'analysis' && analysisSubTab === 'conditions',

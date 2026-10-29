@@ -118,6 +118,7 @@ export interface ParsedHashResult {
   date?: string;
   viewMode?: 'chart' | 'table';
   subTab?: AnalysisSubTab;
+  conditionDim?: ConditionDimension;
   section?: string;
   isHome?: boolean;
   analysisScope?: AnalysisScope;
@@ -240,10 +241,12 @@ export function parseHash(hashStr: string): ParsedHashResult {
 
   // Legacy #trends -> analysis (sub: conditions)
   if (pathPart === 'trends' || pathPart === 'conditions' || pathPart === 'condition') {
+    const dimParam = (params.get('dim') || params.get('dimension')) as ConditionDimension;
     return {
       tab: 'analysis',
       subTab: 'conditions',
       scope: 'store',
+      ...(dimParam ? { conditionDim: dimParam } : {}),
       ...parseAnalysisParams(),
       ...(section ? { section } : {}),
       ...(isHomeParam ? { isHome: true } : {}),
@@ -289,10 +292,12 @@ export function parseHash(hashStr: string): ParsedHashResult {
     if (subTab === 'compare' && !params.get('scope')) {
       aParams.analysisScope = 'all';
     }
+    const dimParam = (params.get('dim') || params.get('dimension')) as ConditionDimension;
     return {
       tab: 'analysis',
       subTab,
       scope: 'store',
+      ...(dimParam ? { conditionDim: dimParam } : {}),
       ...aParams,
       ...(section ? { section } : {}),
       ...(isHomeParam ? { isHome: true } : {}),
@@ -842,6 +847,9 @@ export default function App() {
       }
       if (parsed.subTab) {
         setAnalysisSubTab(parsed.subTab);
+      }
+      if (parsed.conditionDim) {
+        setConditionDimension(parsed.conditionDim);
       }
       if (currentHash.startsWith('#compare')) {
         const redirectHash = '#analysis/compare?scope=all';

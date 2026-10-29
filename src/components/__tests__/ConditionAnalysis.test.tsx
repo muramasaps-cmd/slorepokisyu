@@ -590,6 +590,87 @@ describe('ConditionAnalysis Component & Utilities', () => {
       expect(htmlMachineTail).toContain('台番号末尾別の利益・出玉傾向分析');
       expect(htmlMachineTail).not.toContain('月初・月末:');
     });
+
+    it('18. Prompt 60-3: MonthPhase view renders folding button "年月ごとの推移を見る" (default closed)', () => {
+      const html = renderToString(
+        <ConditionAnalysis dailyRecords={sampleRecords} initialDimension="monthPhase" />
+      );
+
+      // Button exists
+      expect(html).toContain('年月ごとの推移を見る');
+      expect(html).toContain('展開する');
+
+      // Table is not rendered when closed
+      expect(html).not.toContain('表示期間:');
+
+      // Other dimensions do not have this accordion
+      const htmlDow = renderToString(
+        <ConditionAnalysis dailyRecords={sampleRecords} initialDimension="dow" />
+      );
+      expect(htmlDow).not.toContain('年月ごとの推移を見る');
+    });
+
+    it('19. Prompt 60-3: MonthPhase expanded view renders Year-Month × Period matrix table with "一部" badge', () => {
+      // 2025-01 data has only 8 days (not 1..31), so it's partial ("一部")
+      const htmlExpanded = renderToString(
+        <ConditionAnalysis
+          dailyRecords={sampleRecords}
+          initialDimension="monthPhase"
+          initialMonthPhaseByMonthOpen={true}
+        />
+      );
+
+      // Accordion header indicates open state
+      expect(htmlExpanded).toContain('閉じる');
+
+      // Table headers
+      expect(htmlExpanded).toContain('月初／月末');
+      expect(htmlExpanded).toContain('上旬／中旬／下旬');
+      expect(htmlExpanded).toContain('月初（1〜5日）');
+      expect(htmlExpanded).toContain('月末（月末5日間）');
+      expect(htmlExpanded).toContain('上旬（1〜10日）');
+      expect(htmlExpanded).toContain('中旬（11〜20日）');
+      expect(htmlExpanded).toContain('下旬（21日〜月末）');
+
+      // Row heading: Year-Month with "一部"
+      expect(htmlExpanded).toContain('2025年1月');
+      expect(htmlExpanded).toContain('一部');
+
+      // Period mode buttons
+      expect(htmlExpanded).toContain('直近12か月');
+      expect(htmlExpanded).toContain('全期間');
+    });
+
+    it('20. Prompt 60-3: Multi-store MonthPhase expanded view renders store selector with 全店合計 and each store', () => {
+      const htmlMultiExpanded = renderToString(
+        <ConditionAnalysis
+          stores={[storeA, storeB]}
+          initialDimension="monthPhase"
+          initialMonthPhaseByMonthOpen={true}
+        />
+      );
+
+      // Store selection controls
+      expect(htmlMultiExpanded).toContain('店舗選択:');
+      expect(htmlMultiExpanded).toContain('全店合計');
+      expect(htmlMultiExpanded).toContain('メガホールA店');
+      expect(htmlMultiExpanded).toContain('ギガホールB店');
+    });
+
+    it('21. Prompt 60-3: MonthPhase expanded view respects top metric switcher (payoutRate / highPayoutRate)', () => {
+      const htmlPayout = renderToString(
+        <ConditionAnalysis
+          dailyRecords={sampleRecords}
+          initialDimension="monthPhase"
+          initialMetric="payoutRate"
+          initialMonthPhaseByMonthOpen={true}
+        />
+      );
+
+      // Contains percentage symbol in cells
+      expect(htmlPayout).toContain('%');
+    });
   });
 });
+
 

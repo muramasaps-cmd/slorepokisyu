@@ -167,6 +167,29 @@ export function getRecordYearMonthDay(r: {
   return { year: y, month: m, day: d, daysInMonth };
 }
 
+export function isRecordInMonthPhase(
+  r: { date: string; year?: number; month?: number; day?: number },
+  phaseKey: string,
+  monthEdgeDays: number = DEFAULT_MONTH_EDGE_DAYS
+): boolean {
+  const { day, daysInMonth } = getRecordYearMonthDay(r);
+  const nEdge = clampMonthEdgeDays(monthEdgeDays);
+  switch (phaseKey) {
+    case 'monthStart':
+      return day >= 1 && day <= nEdge;
+    case 'monthEnd':
+      return day >= daysInMonth - nEdge + 1 && day <= daysInMonth;
+    case 'early':
+      return day >= 1 && day <= 10;
+    case 'mid':
+      return day >= 11 && day <= 20;
+    case 'late':
+      return day >= 21 && day <= daysInMonth;
+    default:
+      return false;
+  }
+}
+
 export const SPECIAL_DEFINITION_TEXT =
   '特定日（旧イベント日・〇のつく日）と通常営業日、および特日の前日・翌日の出玉・高出率台投入傾向を比較分析します。';
 
@@ -570,23 +593,7 @@ export function calculateConditionStats(
       isHoliday = false;
       isStoreEvent = false;
 
-      records = dailyRecords.filter((r) => {
-        const { day, daysInMonth } = getRecordYearMonthDay(r);
-        switch (col.key) {
-          case 'monthStart':
-            return day >= 1 && day <= nEdge;
-          case 'monthEnd':
-            return day >= daysInMonth - nEdge + 1 && day <= daysInMonth;
-          case 'early':
-            return day >= 1 && day <= 10;
-          case 'mid':
-            return day >= 11 && day <= 20;
-          case 'late':
-            return day >= 21 && day <= daysInMonth;
-          default:
-            return false;
-        }
-      });
+      records = dailyRecords.filter((r) => isRecordInMonthPhase(r, col.key, nEdge));
     }
 
     const count = records.length;
@@ -988,4 +995,213 @@ export function calculateMultiStoreConditions(
 
   return rows;
 }
+
+export interface MonthPhaseByMonthRow {
+  yearMonth: string; // e.g. "2025-01"
+  year: number;
+  month: number;
+  displayMonth: string; // e.g. "2025年1月"
+  label: string; // e.g. "2025年1月（一部）"
+  isPartial: boolean;
+  partialLabel?: string; // "一部" if isPartial, otherwise undefined
+  daysCount: number;
+  stats: ConditionBucketStat[];
+}
+
+export interface CalculateMonthPhaseByMonthOptions extends CalculateConditionStatsOptions {
+  periodMode?: 'recent12' | 'all'; // 既定は 'recent12'
+  maxMonths?: number; // 既定は 12 (recent12 の場合)
+  period?: StoreCommonPeriod | null;
+  stores?: StoreProfile[];
+  selectedStoreId?: string;
+  isAllStoresTotal?: boolean;
+}
+
+/**
+ * Prompt 60-3: 年月 × 時期（月初・上旬・中旬・下旬・月末）の推移集計
+ * 行: 年月（新しい順、既定は直近12か月、全期間切替可能）
+ * 列: 60-1と同じ5区分 (monthStart, monthEnd, early, mid, late)
+ * 各セル: calculateConditionStats と同一の純関数集計 (台あたり差枚、出率、高出率台の率)
+ * 月の途中までしかデータがない月（取り込みの最初と最後の月など）は isPartial: true で「一部」を注記
+ */
+export function calculateMonthPhaseByMonth(
+  dailyRecords: DailyRecord[] = [],
+  options: CalculateMonthPhaseByMonthOptions = {}
+): MonthPhaseByMonthRow[] {
+  const {
+    perspective = 'player',
+    monthEdgeDays = DEFAULT_MONTH_EDGE_DAYS,
+    periodMode = 'recent12',
+    maxMonths = 12,
+    period,
+    stores,
+    selectedStoreId = ALL_STORES_TOTAL_STORE_ID,
+    isAllStoresTotal,
+  } = options;
+
+  const isMultiStoreMode = Boolean(
+    stores && stores.length > 1 && (selectedStoreId === ALL_STORES_TOTAL_STORE_ID || isAllStoresTotal)
+  );
+
+  let recordsToUse = dailyRecords || [];
+  let targetOldEventDays = options.oldEventDays;
+  let targetSpecialDayRules = options.specialDayRules;
+  let targetTotalMachines = options.totalMachinesApprox;
+
+  if (stores && stores.length > 0 && selectedStoreId && selectedStoreId !== ALL_STORES_TOTAL_STORE_ID) {
+    const store = stores.find((s) => s.id === selectedStoreId);
+    if (store) {
+      recordsToUse = store.dailyRecords || [];
+      targetOldEventDays = store.oldEventDays || targetOldEventDays;
+      targetSpecialDayRules = store.specialDayRules || targetSpecialDayRules;
+      targetTotalMachines = store.totalMachinesApprox || targetTotalMachines;
+    }
+  }
+
+  // Filter single store records by common period if specified
+  if (period && period.startDate && period.endDate && period.hasCommonPeriod !== false) {
+    if (!isMultiStoreMode) {
+      recordsToUse = recordsToUse.filter(
+        (r) => r.date >= period.startDate! && r.date <= period.endDate!
+      );
+    }
+  }
+
+  // Determine all available yearMonths
+  const yearMonthSet = new Set<string>();
+  if (isMultiStoreMode && stores) {
+    stores.forEach((s) => {
+      let recs = s.dailyRecords || [];
+      if (period && period.startDate && period.endDate && period.hasCommonPeriod !== false) {
+        recs = recs.filter((r) => r.date >= period.startDate! && r.date <= period.endDate!);
+      }
+      recs.forEach((r) => {
+        const ym = r.yearMonth || r.date.slice(0, 7);
+        if (ym) yearMonthSet.add(ym);
+      });
+    });
+  } else {
+    recordsToUse.forEach((r) => {
+      const ym = r.yearMonth || r.date.slice(0, 7);
+      if (ym) yearMonthSet.add(ym);
+    });
+  }
+
+  if (yearMonthSet.size === 0) {
+    return [];
+  }
+
+  // Sort descending: newest month first
+  let sortedYms = Array.from(yearMonthSet).sort((a, b) => b.localeCompare(a));
+
+  // Limit to maxMonths if recent12
+  if (periodMode === 'recent12' && maxMonths > 0) {
+    sortedYms = sortedYms.slice(0, maxMonths);
+  }
+
+  return sortedYms.map((ym) => {
+    const [yStr, mStr] = ym.split('-');
+    const year = parseInt(yStr, 10);
+    const month = parseInt(mStr, 10);
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const displayMonth = `${year}年${month}月`;
+
+    if (isMultiStoreMode && stores) {
+      // Build per-store condition rows for this month
+      const monthStoreRows: StoreConditionRow[] = stores.map((store) => {
+        let recs = (store.dailyRecords || []).filter(
+          (r) => (r.yearMonth || r.date.slice(0, 7)) === ym
+        );
+        if (period && period.startDate && period.endDate && period.hasCommonPeriod !== false) {
+          recs = recs.filter((r) => r.date >= period.startDate! && r.date <= period.endDate!);
+        }
+
+        const stats = calculateConditionStats(recs, 'monthPhase', {
+          perspective,
+          oldEventDays: store.oldEventDays,
+          specialDayRules: store.specialDayRules,
+          totalMachinesApprox: store.totalMachinesApprox || 500,
+          includeMonthDayZoro: false,
+          monthEdgeDays,
+        });
+
+        return {
+          storeId: store.id,
+          storeName: store.name,
+          totalDays: new Set(recs.map((r) => r.date)).size,
+          stats,
+        };
+      });
+
+      const totalStats = calculateAllStoresTotalConditionStats(monthStoreRows, 'monthPhase', {
+        perspective,
+        monthEdgeDays,
+      });
+
+      // Days and partial detection across all stores for this month
+      const allDatesInMonth = new Set<string>();
+      stores.forEach((s) => {
+        let recs = (s.dailyRecords || []).filter(
+          (r) => (r.yearMonth || r.date.slice(0, 7)) === ym
+        );
+        if (period && period.startDate && period.endDate && period.hasCommonPeriod !== false) {
+          recs = recs.filter((r) => r.date >= period.startDate! && r.date <= period.endDate!);
+        }
+        recs.forEach((r) => allDatesInMonth.add(r.date));
+      });
+
+      const daysInMonthList = Array.from(allDatesInMonth).map((d) =>
+        parseInt(d.split(/[-/.]/)[2] || '0', 10)
+      );
+      const minDay = daysInMonthList.length > 0 ? Math.min(...daysInMonthList) : 1;
+      const maxDay = daysInMonthList.length > 0 ? Math.max(...daysInMonthList) : daysInMonth;
+      const isPartial = minDay > 1 || maxDay < daysInMonth;
+
+      return {
+        yearMonth: ym,
+        year,
+        month,
+        displayMonth,
+        label: `${displayMonth}${isPartial ? '（一部）' : ''}`,
+        isPartial,
+        partialLabel: isPartial ? '一部' : undefined,
+        daysCount: allDatesInMonth.size,
+        stats: totalStats,
+      };
+    }
+
+    // Single store
+    const monthRecords = recordsToUse.filter(
+      (r) => (r.yearMonth || r.date.slice(0, 7)) === ym
+    );
+
+    const stats = calculateConditionStats(monthRecords, 'monthPhase', {
+      ...options,
+      perspective,
+      oldEventDays: targetOldEventDays,
+      specialDayRules: targetSpecialDayRules,
+      totalMachinesApprox: targetTotalMachines,
+      monthEdgeDays,
+    });
+
+    const days = monthRecords.map((r) => getRecordYearMonthDay(r).day);
+    const minDay = days.length > 0 ? Math.min(...days) : 1;
+    const maxDay = days.length > 0 ? Math.max(...days) : daysInMonth;
+    const isPartial = minDay > 1 || maxDay < daysInMonth;
+    const daysCount = new Set(monthRecords.map((r) => r.date)).size;
+
+    return {
+      yearMonth: ym,
+      year,
+      month,
+      displayMonth,
+      label: `${displayMonth}${isPartial ? '（一部）' : ''}`,
+      isPartial,
+      partialLabel: isPartial ? '一部' : undefined,
+      daysCount,
+      stats,
+    };
+  });
+}
+
 

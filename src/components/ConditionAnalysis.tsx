@@ -26,6 +26,8 @@ import {
   calculateConditionStats,
   calculateMultiStoreConditions,
   calculateAllStoresTotalConditionStats,
+  calculateMonthPhaseByMonth,
+  MonthPhaseByMonthRow,
   ALL_STORES_TOTAL_STORE_ID,
   ALL_STORES_TOTAL_NAME,
   StoreConditionRow,
@@ -100,6 +102,10 @@ export interface ConditionAnalysisProps {
   initialViewMode?: ConditionViewMode;
   viewMode?: ConditionViewMode;
   onViewModeChange?: (view: ConditionViewMode) => void;
+
+  initialMonthPhaseByMonthOpen?: boolean;
+  initialMonthPhasePeriodMode?: 'recent12' | 'all';
+  initialMonthPhaseSelectedStoreId?: string;
 
   title?: string;
   description?: string;
@@ -284,6 +290,10 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
   viewMode: controlledViewMode,
   onViewModeChange,
 
+  initialMonthPhaseByMonthOpen = false,
+  initialMonthPhasePeriodMode = 'recent12',
+  initialMonthPhaseSelectedStoreId = ALL_STORES_TOTAL_STORE_ID,
+
   title: customTitle,
   description: customDescription,
   hideControls = false,
@@ -335,6 +345,17 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
     return stores && stores.length > 1 ? -1 : 0;
   });
   const [chartMode, setChartMode] = useState<'multi' | 'single'>('multi');
+
+  // Prompt 60-3: 年月 × 時期（折りたたみ・既定は閉じる）
+  const [isMonthPhaseByMonthOpen, setIsMonthPhaseByMonthOpen] = useState<boolean>(
+    initialMonthPhaseByMonthOpen
+  );
+  const [monthPhasePeriodMode, setMonthPhasePeriodMode] = useState<'recent12' | 'all'>(
+    initialMonthPhasePeriodMode
+  );
+  const [monthPhaseSelectedStoreId, setMonthPhaseSelectedStoreId] = useState<string>(
+    initialMonthPhaseSelectedStoreId
+  );
 
   const isHall = perspective === 'hall';
   const isMultiStore = Boolean(stores && stores.length >= 1);
@@ -405,6 +426,34 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
     }
     return currentStoreName;
   }, [isMultiStore, stores, selectedStoreIndex, currentStoreName]);
+
+  // Prompt 60-3: 年月 × 時期（各月行の集計データ）
+  const monthPhaseRows: MonthPhaseByMonthRow[] = useMemo(() => {
+    if (currentDimension !== 'monthPhase') return [];
+
+    return calculateMonthPhaseByMonth(dailyRecords, {
+      perspective,
+      monthEdgeDays: currentMonthEdgeDays,
+      periodMode: monthPhasePeriodMode,
+      period,
+      stores,
+      selectedStoreId: isMultiStore && stores && stores.length > 1 ? monthPhaseSelectedStoreId : undefined,
+      oldEventDays,
+      specialDayRules,
+    });
+  }, [
+    currentDimension,
+    dailyRecords,
+    perspective,
+    currentMonthEdgeDays,
+    monthPhasePeriodMode,
+    period,
+    stores,
+    isMultiStore,
+    monthPhaseSelectedStoreId,
+    oldEventDays,
+    specialDayRules,
+  ]);
 
   // Ranking calculation for single stats
   const rankedSingleStats = useMemo(() => {
@@ -1268,6 +1317,256 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
             </div>
             <span className="text-slate-400">※ セルクリックまたはホバーで詳細数値を表示</span>
           </div>
+
+          {/* Prompt 60-3: 年月 × 時期（折りたたみ・既定は閉じる） */}
+          {currentDimension === 'monthPhase' && (
+            <div className="pt-3 border-t border-slate-200" data-testid="month-phase-by-month-container">
+              <button
+                type="button"
+                onClick={() => setIsMonthPhaseByMonthOpen((prev) => !prev)}
+                aria-expanded={isMonthPhaseByMonthOpen}
+                className="w-full flex items-center justify-between p-2.5 sm:p-3 bg-slate-50 hover:bg-slate-100 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 transition-colors cursor-pointer select-none"
+              >
+                <div className="flex items-center gap-2">
+                  <CalendarRange className="w-4 h-4 text-indigo-600" />
+                  <span>年月ごとの推移を見る</span>
+                  <span className="text-[11px] font-normal text-slate-500">
+                    （行: 年月 × 列: 時期）
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 text-slate-500">
+                  <span className="text-2xs font-normal">
+                    {isMonthPhaseByMonthOpen ? '閉じる' : '展開する'}
+                  </span>
+                  {isMonthPhaseByMonthOpen ? (
+                    <ChevronUp className="w-4 h-4 text-slate-600" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-slate-600" />
+                  )}
+                </div>
+              </button>
+
+              {isMonthPhaseByMonthOpen && (
+                <div className="mt-3 space-y-3 bg-slate-50/50 p-3 sm:p-4 rounded-xl border border-slate-200">
+                  {/* Controls: Store selector (if multi-store) & Period mode selector */}
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    {isMultiStore && stores && stores.length > 1 ? (
+                      <div className="flex items-center gap-1.5" data-testid="month-phase-store-selector">
+                        <span className="text-2xs font-bold text-slate-500">店舗選択:</span>
+                        <div className="flex flex-wrap items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 text-xs font-semibold shadow-2xs">
+                          <button
+                            type="button"
+                            onClick={() => setMonthPhaseSelectedStoreId(ALL_STORES_TOTAL_STORE_ID)}
+                            className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                              monthPhaseSelectedStoreId === ALL_STORES_TOTAL_STORE_ID
+                                ? 'bg-indigo-50 text-indigo-700 font-bold border border-indigo-200'
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            <span
+                              className="w-2 h-2 rounded-full"
+                              style={{ backgroundColor: ALL_STORES_COLOR }}
+                            />
+                            <span>{ALL_STORES_TOTAL_NAME}</span>
+                          </button>
+                          {stores.map((s) => (
+                            <button
+                              key={s.id}
+                              type="button"
+                              onClick={() => setMonthPhaseSelectedStoreId(s.id)}
+                              className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                                monthPhaseSelectedStoreId === s.id
+                                  ? 'bg-indigo-50 text-indigo-700 font-bold border border-indigo-200'
+                                  : 'text-slate-600 hover:text-slate-900'
+                              }`}
+                            >
+                              <span
+                                className="w-2 h-2 rounded-full"
+                                style={{ backgroundColor: getStoreColor(s.id, stores) }}
+                              />
+                              <span>{s.name}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                        <Building2 className="w-3.5 h-3.5 text-slate-500" />
+                        <span>{activeSelectedStoreName}</span>
+                      </div>
+                    )}
+
+                    {/* Period Mode Selector (直近12か月 / 全期間) */}
+                    <div className="flex items-center gap-1.5 ml-auto" data-testid="month-phase-period-selector">
+                      <span className="text-2xs font-bold text-slate-500">表示期間:</span>
+                      <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 text-xs font-semibold shadow-2xs">
+                        <button
+                          type="button"
+                          onClick={() => setMonthPhasePeriodMode('recent12')}
+                          className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                            monthPhasePeriodMode === 'recent12'
+                              ? 'bg-indigo-50 text-indigo-700 font-bold border border-indigo-200'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          直近12か月
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setMonthPhasePeriodMode('all')}
+                          className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                            monthPhasePeriodMode === 'all'
+                              ? 'bg-indigo-50 text-indigo-700 font-bold border border-indigo-200'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          全期間
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Heatmap Table */}
+                  <div className="overflow-x-auto bg-white rounded-xl border border-slate-200 shadow-2xs">
+                    <table className="w-full text-xs text-center border-collapse">
+                      <thead>
+                        <tr className="bg-slate-100 text-slate-600 text-[11px] border-b border-slate-200">
+                          <th className="p-2 text-left sticky left-0 bg-slate-100 z-10 whitespace-nowrap min-w-[110px]">
+                            年月
+                          </th>
+                          <th
+                            colSpan={2}
+                            className="p-1.5 font-bold text-center bg-indigo-50/70 text-indigo-900 border-r-2 border-slate-300"
+                          >
+                            月初／月末
+                          </th>
+                          <th
+                            colSpan={3}
+                            className="p-1.5 font-bold text-center bg-slate-50 text-slate-800"
+                          >
+                            上旬／中旬／下旬
+                          </th>
+                        </tr>
+                        <tr className="bg-slate-100 text-slate-600 text-[11px] border-b border-slate-200">
+                          <th className="p-2 text-left sticky left-0 bg-slate-100 z-10 whitespace-nowrap min-w-[110px]">
+                            {/* 年月 */}
+                          </th>
+                          {columns.map((col, idx) => {
+                            const isGroupEnd =
+                              col.group === 'edge' && columns[idx + 1]?.group === 'decade';
+                            return (
+                              <th
+                                key={col.key}
+                                className={`p-2 font-bold whitespace-nowrap min-w-[56px] text-center ${
+                                  isGroupEnd ? 'border-r-2 border-slate-300' : ''
+                                }`}
+                              >
+                                <div>{col.label}</div>
+                              </th>
+                            );
+                          })}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {monthPhaseRows.length === 0 ? (
+                          <tr>
+                            <td
+                              colSpan={columns.length + 1}
+                              className="p-6 text-center text-slate-400 text-xs"
+                            >
+                              表示可能な年月データがありません
+                            </td>
+                          </tr>
+                        ) : (
+                          monthPhaseRows.map((row) => (
+                            <tr key={row.yearMonth} className="hover:bg-slate-50">
+                              <td className="p-2.5 text-left font-bold text-slate-900 sticky left-0 bg-white hover:bg-slate-50 z-10 whitespace-nowrap">
+                                <div className="flex items-center gap-1.5">
+                                  <span>{row.displayMonth}</span>
+                                  {row.isPartial && (
+                                    <span
+                                      className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded px-1 shrink-0"
+                                      title="月の途中までしかデータがありません"
+                                    >
+                                      一部
+                                    </span>
+                                  )}
+                                  <span className="text-[10px] text-slate-400 font-normal shrink-0">
+                                    ({row.daysCount}日)
+                                  </span>
+                                </div>
+                              </td>
+                              {columns.map((col, idx) => {
+                                const isGroupEnd =
+                                  col.group === 'edge' && columns[idx + 1]?.group === 'decade';
+                                const stat =
+                                  row.stats.find((s) => s.key === col.key) || {
+                                    ...col,
+                                    count: 0,
+                                    avgDiffCoins: 0,
+                                    payoutRate: 100,
+                                    highPayoutRate: 0,
+                                    totalDiffCoins: 0,
+                                    totalMachines: 0,
+                                  };
+                                const rawVal = getMetricRawValue(stat as ConditionBucketStat, currentMetric);
+                                const { bgClass, isFewDays: few } = getConditionHeatmapColor(
+                                  currentMetric,
+                                  rawVal,
+                                  stat.count,
+                                  perspective
+                                );
+
+                                const tooltipText =
+                                  stat.count === 0
+                                    ? `${row.displayMonth} - ${col.label}: 該当日なし`
+                                    : `【${row.displayMonth}${row.isPartial ? '（一部）' : ''} - ${col.label}】\n・該当日数: ${
+                                        stat.count
+                                      }日\n・総差枚: ${
+                                        stat.totalDiffCoins >= 0 ? '+' : ''
+                                      }${formatNumber(stat.totalDiffCoins)}枚\n・台あたり平均差枚: ${
+                                        stat.avgDiffCoins >= 0 ? '+' : ''
+                                      }${stat.avgDiffCoins}枚/台\n・出玉率: ${stat.payoutRate.toFixed(
+                                        2
+                                      )}%\n・勝率: ${stat.highPayoutRate.toFixed(1)}%${
+                                        few ? '\n※3日未満のため参考値' : ''
+                                      }`;
+
+                                return (
+                                  <td
+                                    key={col.key}
+                                    className={`p-1 sm:p-1.5 ${
+                                      isGroupEnd ? 'border-r-2 border-slate-300' : ''
+                                    }`}
+                                  >
+                                    <div
+                                      title={tooltipText}
+                                      className={`p-2 rounded-lg text-xs relative transition-all select-none ${bgClass} ${
+                                        few ? getFewDaysClass(stat.count) : ''
+                                      }`}
+                                    >
+                                      <div>
+                                        {getMetricDisplayValue(stat as ConditionBucketStat, currentMetric)}
+                                      </div>
+                                      {few && (
+                                        <span className="block text-[9px] leading-tight font-normal text-amber-700 bg-amber-50/80 rounded px-0.5 mt-0.5 whitespace-nowrap">
+                                          {FEW_DAYS_LABEL}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 

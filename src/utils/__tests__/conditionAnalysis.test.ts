@@ -17,6 +17,9 @@ import {
   calculateConditionStats,
   calculateAllStoresTotalConditionStats,
   calculateMultiStoreConditions,
+  calculateMonthPhaseByMonth,
+  isRecordInMonthPhase,
+  MonthPhaseByMonthRow,
   ALL_STORES_TOTAL_NAME,
   ALL_STORES_TOTAL_STORE_ID,
 } from '../conditionAnalysis';
@@ -455,4 +458,180 @@ describe('Prompt 60-1: 条件別分析 - 月内の時期 (monthPhase) 計算ロ�
       expect(JSON.parse(goldenJsonString)).toEqual(JSON.parse(savedGoldenString));
     });
   });
+
+  describe('Prompt 60-3: 年月 × 時期のヒートマップ (calculateMonthPhaseByMonth)', () => {
+    // 3か月の合成データ:
+    // 1月: 2025-01-15〜2025-01-31 (開始が15日 -> isPartial: true, 「一部」)
+    // 2月: 2025-02-01〜2025-02-28 (平年28日、全日存在 -> isPartial: false, 「一部」なし)
+    // 3月: 2025-03-01〜2025-03-20 (終了が20日 -> isPartial: true, 「一部」)
+    const month1Records = [
+      createSimpleRecord('2025-01-15', 10, 5000, 1000, 6), // 中旬 (15日)
+      createSimpleRecord('2025-01-20', 10, 5000, 2000, 8), // 中旬 (20日)
+      createSimpleRecord('2025-01-25', 10, 5000, -1000, 4), // 下旬 (25日)
+      createSimpleRecord('2025-01-28', 10, 5000, 500, 5), // 下旬 & 月末 (28日)
+      createSimpleRecord('2025-01-31', 10, 5000, 1500, 7), // 下旬 & 月末 (31日)
+    ];
+
+    const month2Records: DailyRecord[] = [];
+    for (let day = 1; day <= 28; day++) {
+      const dateStr = `2025-02-${String(day).padStart(2, '0')}`;
+      const diff = day % 2 === 0 ? 1000 : -500;
+      const winMachs = day % 2 === 0 ? 7 : 3;
+      month2Records.push(createSimpleRecord(dateStr, 10, 5000, diff, winMachs));
+    }
+
+    const month3Records = [
+      createSimpleRecord('2025-03-01', 10, 5000, 2000, 7), // 月初 & 上旬 (1日)
+      createSimpleRecord('2025-03-05', 10, 5000, 1000, 6), // 月初 & 上旬 (5日)
+      createSimpleRecord('2025-03-08', 10, 5000, -500, 4), // 上旬 (8日)
+      createSimpleRecord('2025-03-15', 10, 5000, 3000, 9), // 中旬 (15日)
+      createSimpleRecord('2025-03-20', 10, 5000, 500, 5), // 中旬 (20日)
+    ];
+
+    const threeMonthRecords = [...month1Records, ...month2Records, ...month3Records];
+
+    it('1. 行は年月（新しい順）で並び、各月行の見出しに「一部」が正しく注記されること', () => {
+      const rows = calculateMonthPhaseByMonth(threeMonthRecords);
+
+      expect(rows).toHaveLength(3);
+
+      // 新しい順: 2025-03, 2025-02, 2025-01
+      expect(rows[0].yearMonth).toBe('2025-03');
+      expect(rows[1].yearMonth).toBe('2025-02');
+      expect(rows[2].yearMonth).toBe('2025-01');
+
+      // 2025-03: 1日〜20日で月末31日までないため一部
+      expect(rows[0].isPartial).toBe(true);
+      expect(rows[0].partialLabel).toBe('一部');
+      expect(rows[0].label).toBe('2025年3月（一部）');
+      expect(rows[0].displayMonth).toBe('2025年3月');
+      expect(rows[0].daysCount).toBe(5);
+
+      // 2025-02: 1日〜28日まで全日揃っているため一部ではない
+      expect(rows[1].isPartial).toBe(false);
+      expect(rows[1].partialLabel).toBeUndefined();
+      expect(rows[1].label).toBe('2025年2月');
+      expect(rows[1].displayMonth).toBe('2025年2月');
+      expect(rows[1].daysCount).toBe(28);
+
+      // 2025-01: 15日〜31日で1日〜14日がないため一部
+      expect(rows[2].isPartial).toBe(true);
+      expect(rows[2].partialLabel).toBe('一部');
+      expect(rows[2].label).toBe('2025年1月（一部）');
+      expect(rows[2].displayMonth).toBe('2025年1月');
+      expect(rows[2].daysCount).toBe(5);
+    });
+
+    it('2. 各セル（5つの時期列）の集計数値が手計算結果と完全に一致すること', () => {
+      const rows = calculateMonthPhaseByMonth(threeMonthRecords, { monthEdgeDays: 5 });
+      const janRow = rows.find((r) => r.yearMonth === '2025-01')!;
+
+      // 5列が存在すること
+      expect(janRow.stats).toHaveLength(5);
+      expect(janRow.stats.map((s) => s.key)).toEqual([
+        'monthStart',
+        'monthEnd',
+        'early',
+        'mid',
+        'late',
+      ]);
+
+      // 2025-01 手計算検証:
+      // monthStart (1〜5日): 0件
+      const mStart = janRow.stats.find((s) => s.key === 'monthStart')!;
+      expect(mStart.count).toBe(0);
+      expect(mStart.avgDiffCoins).toBe(0);
+
+      // early (1〜10日): 0件
+      const early = janRow.stats.find((s) => s.key === 'early')!;
+      expect(early.count).toBe(0);
+
+      // mid (11〜20日): 15日(+1000枚/6勝), 20日(+2000枚/8勝)
+      // avgDiffCoins: (100 + 200) / 2 = 150.0
+      // payoutRate: (100.67 + 101.33) / 2 = 101.00%
+      // highPayoutRate: (6 + 8) / (10 + 10) = 14 / 20 = 70.0%
+      const mid = janRow.stats.find((s) => s.key === 'mid')!;
+      expect(mid.count).toBe(2);
+      expect(mid.avgDiffCoins).toBe(150.0);
+      expect(mid.payoutRate).toBe(101.0);
+      expect(mid.highPayoutRate).toBe(70.0);
+
+      // late (21〜31日): 25日(-1000/4勝), 28日(+500/5勝), 31日(+1500/7勝)
+      // avgDiffCoins: (-100 + 50 + 150) / 3 = 100 / 3 = 33.3
+      // payoutRate: (99.33 + 100.33 + 101.00) / 3 = 100.22%
+      // highPayoutRate: (4 + 5 + 7) / 30 = 16 / 30 = 53.3%
+      const late = janRow.stats.find((s) => s.key === 'late')!;
+      expect(late.count).toBe(3);
+      expect(late.avgDiffCoins).toBe(33.3);
+      expect(late.payoutRate).toBe(100.22);
+      expect(late.highPayoutRate).toBe(53.3);
+
+      // monthEnd (月末5日間: 27〜31日): 28日(+500/5勝), 31日(+1500/7勝)
+      // avgDiffCoins: (50 + 150) / 2 = 100.0
+      // payoutRate: (100.33 + 101.00) / 2 = 100.67%
+      // highPayoutRate: (5 + 7) / 20 = 12 / 20 = 60.0%
+      const mEnd = janRow.stats.find((s) => s.key === 'monthEnd')!;
+      expect(mEnd.count).toBe(2);
+      expect(mEnd.avgDiffCoins).toBe(100.0);
+      expect(mEnd.payoutRate).toBe(100.67);
+      expect(mEnd.highPayoutRate).toBe(60.0);
+    });
+
+    it('3. calculateConditionStats との数値一致 (重複せず純関数計算が共有されていること)', () => {
+      const rows = calculateMonthPhaseByMonth(month3Records, { monthEdgeDays: 5 });
+      const marRow = rows.find((r) => r.yearMonth === '2025-03')!;
+
+      const directStats = calculateConditionStats(month3Records, 'monthPhase', {
+        monthEdgeDays: 5,
+      });
+
+      expect(marRow.stats.map((s) => s.avgDiffCoins)).toEqual(
+        directStats.map((s) => s.avgDiffCoins)
+      );
+      expect(marRow.stats.map((s) => s.payoutRate)).toEqual(
+        directStats.map((s) => s.payoutRate)
+      );
+      expect(marRow.stats.map((s) => s.highPayoutRate)).toEqual(
+        directStats.map((s) => s.highPayoutRate)
+      );
+    });
+
+    it('4. 期間切替（直近12か月 vs 全期間）の動作確認', () => {
+      // 15か月分の合成データ
+      const fifteenMonthRecords: DailyRecord[] = [];
+      for (let m = 1; m <= 15; m++) {
+        const year = 2024 + Math.floor((m - 1) / 12);
+        const month = ((m - 1) % 12) + 1;
+        const dateStr = `${year}-${String(month).padStart(2, '0')}-10`;
+        fifteenMonthRecords.push(createSimpleRecord(dateStr, 10, 5000, 1000, 5));
+      }
+
+      // 既定 (recent12): 直近12か月
+      const recentRows = calculateMonthPhaseByMonth(fifteenMonthRecords);
+      expect(recentRows).toHaveLength(12);
+
+      // 全期間 (all): 15か月すべて
+      const allRows = calculateMonthPhaseByMonth(fifteenMonthRecords, { periodMode: 'all' });
+      expect(allRows).toHaveLength(15);
+    });
+
+    it('5. isRecordInMonthPhase が境界値を正確に判定すること', () => {
+      // 4月 (30日間) N=5
+      const recApril1 = { date: '2025-04-01' };
+      const recApril5 = { date: '2025-04-05' };
+      const recApril6 = { date: '2025-04-06' };
+      const recApril25 = { date: '2025-04-25' };
+      const recApril26 = { date: '2025-04-26' };
+      const recApril30 = { date: '2025-04-30' };
+
+      expect(isRecordInMonthPhase(recApril1, 'monthStart', 5)).toBe(true);
+      expect(isRecordInMonthPhase(recApril5, 'monthStart', 5)).toBe(true);
+      expect(isRecordInMonthPhase(recApril6, 'monthStart', 5)).toBe(false);
+
+      expect(isRecordInMonthPhase(recApril25, 'monthEnd', 5)).toBe(false);
+      expect(isRecordInMonthPhase(recApril26, 'monthEnd', 5)).toBe(true);
+      expect(isRecordInMonthPhase(recApril30, 'monthEnd', 5)).toBe(true);
+    });
+  });
 });
+

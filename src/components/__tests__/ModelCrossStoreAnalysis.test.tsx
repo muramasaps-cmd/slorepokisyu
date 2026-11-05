@@ -113,7 +113,7 @@ describe('Prompt 52: ModelCrossStoreAnalysis Component', () => {
     expect(html).toContain('秋葉原限定パチスロ');
   });
 
-  it('displays setting estimation section with setting equivalent and high setting range for registered model', () => {
+  it('displays setting estimation section with setting equivalent, low/mid/high tiers, and sorted by high settings', () => {
     const html = renderToString(
       <ModelCrossStoreAnalysis
         stores={[storeA, storeB]}
@@ -121,9 +121,16 @@ describe('Prompt 52: ModelCrossStoreAnalysis Component', () => {
       />
     );
 
-    // Setting estimation section title
+    // Setting estimation section title and sort indicator
     expect(html).toContain('出率ベース設定推定');
-    // For マイジャグラーV (default registered spec), setting equivalent and high setting range are shown
+    expect(html).toContain('高設定(設定5と6)の多い順');
+
+    // 3 tiers for low (1-2), mid (3-4), high (5-6)
+    expect(html).toContain('低設定(設定1と2)');
+    expect(html).toContain('中設定(設定3と4)');
+    expect(html).toContain('高設定(設定5と6)');
+
+    // For マイジャグラーV (default registered spec), setting equivalent and high setting range are also shown
     expect(html).toContain('平均設定相当');
     expect(html).toContain('高設定割合 (設定4以上)');
     expect(html).toContain('設定');

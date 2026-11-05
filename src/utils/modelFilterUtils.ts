@@ -1,4 +1,4 @@
-import { DailyRecord } from '../data/types';
+import { DailyRecord, DailyTailRecord, DailyMachineRecord } from '../data/types';
 
 /**
  * Machine model classification & filtering utilities.
@@ -176,6 +176,63 @@ export function isModelMatchingFilter(
 }
 
 /**
+ * Aggregates tail records (0..9 and ゾロ目) from a filtered machine list.
+ */
+export function aggregateTailsFromMachines(machines: DailyMachineRecord[]): DailyTailRecord[] {
+  const tails: DailyTailRecord[] = [];
+  for (let t = 0; t <= 9; t++) {
+    const matching = machines.filter((m) => {
+      if (m.tailDigit !== undefined && m.tailDigit !== null) {
+        return m.tailDigit === t;
+      }
+      return (
+        typeof m.machineNum === 'number' &&
+        !isNaN(m.machineNum) &&
+        ((m.machineNum % 10 + 10) % 10 === t)
+      );
+    });
+    if (matching.length > 0) {
+      const totDiff = matching.reduce((sum, m) => sum + (m.diff || 0), 0);
+      const totGames = matching.reduce((sum, m) => sum + (m.games || 0), 0);
+      const wins = matching.filter((m) => (m.diff || 0) > 0).length;
+      tails.push({
+        tailName: `末尾${t}`,
+        tailNum: t,
+        avgDiffCoins: Math.round(totDiff / matching.length),
+        totalDiffCoins: totDiff,
+        avgGames: Math.round(totGames / matching.length),
+        winRate: Math.round((wins / matching.length) * 1000) / 10,
+        winMachines: wins,
+        totalMachines: matching.length,
+      });
+    }
+  }
+
+  const zoroMatching = machines.filter(
+    (m) =>
+      Boolean(m.isZoro) ||
+      (typeof m.machineNum === 'number' && m.machineNum >= 11 && m.machineNum % 11 === 0)
+  );
+  if (zoroMatching.length > 0) {
+    const totDiff = zoroMatching.reduce((sum, m) => sum + (m.diff || 0), 0);
+    const totGames = zoroMatching.reduce((sum, m) => sum + (m.games || 0), 0);
+    const wins = zoroMatching.filter((m) => (m.diff || 0) > 0).length;
+    tails.push({
+      tailName: '末尾 ゾロ目',
+      tailNum: null,
+      avgDiffCoins: Math.round(totDiff / zoroMatching.length),
+      totalDiffCoins: totDiff,
+      avgGames: Math.round(totGames / zoroMatching.length),
+      winRate: Math.round((wins / zoroMatching.length) * 1000) / 10,
+      winMachines: wins,
+      totalMachines: zoroMatching.length,
+    });
+  }
+
+  return tails;
+}
+
+/**
  * Filters an array of daily records so that each day's machine count, total diff coins,
  * average games, win rate, and models breakdown are recalculated using ONLY the matching models.
  * Days with zero matching operating machines are excluded so averages remain mathematically accurate.
@@ -215,6 +272,7 @@ export function filterDailyRecordsByModels(
           winMachines,
           winRate,
           machines: matchedMachines,
+          tails: aggregateTailsFromMachines(matchedMachines),
         });
       }
       continue;
@@ -264,6 +322,7 @@ export function filterDailyRecordsByModels(
       winRate,
       models: matchedModels,
       machines: matchedMachines,
+      tails: matchedMachines ? aggregateTailsFromMachines(matchedMachines) : [],
     });
   }
 

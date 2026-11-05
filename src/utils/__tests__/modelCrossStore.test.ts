@@ -4,6 +4,7 @@ import {
   calculateCrossStoreModelRows,
   calculateModelMonthlyTrends,
   estimateCrossStoreModelSettings,
+  calculateSettingTierProportions,
 } from '../modelCrossStore';
 import { DailyRecord, StoreProfile } from '../../data/types';
 import { DEFAULT_JUGGLER_SPECS } from '../settingSpecs';
@@ -201,7 +202,56 @@ describe('Prompt 52: 機種の横断（機種×店舗）- modelCrossStore.ts', (
       expect(est[0].settingEquivalent).toBeDefined();
       expect(est[0].settingEquivalent).toBeGreaterThan(1);
       expect(est[0].highSettingRange).toBeDefined();
+      expect(est[0].lowSettingRate).toBeDefined();
+      expect(est[0].midSettingRate).toBeDefined();
+      expect(est[0].highSettingRate).toBeDefined();
       expect(est[0].unregisteredMessage).toBeUndefined();
+    });
+
+    it('calculates setting tier proportions (低設定 1-2, 中設定 3-4, 高設定 5-6) correctly', () => {
+      const myJugglerSpec = DEFAULT_JUGGLER_SPECS.find((s) => s.modelName === 'マイジャグラーV')!;
+      expect(myJugglerSpec).toBeDefined();
+
+      // Low payout (~98.0%) -> Low settings should dominate
+      const lowResult = calculateSettingTierProportions(98.0, myJugglerSpec);
+      expect(lowResult.lowRate).toBeGreaterThan(lowResult.midRate);
+      expect(lowResult.lowRate).toBeGreaterThan(lowResult.highRate);
+      expect(lowResult.lowRate + lowResult.midRate + lowResult.highRate).toBeCloseTo(100.0, 1);
+
+      // High payout (~104.0%) -> High settings should be substantial
+      const highResult = calculateSettingTierProportions(104.0, myJugglerSpec);
+      expect(highResult.highRate).toBeGreaterThan(lowResult.highRate);
+      expect(highResult.lowRate + highResult.midRate + highResult.highRate).toBeCloseTo(100.0, 1);
+    });
+
+    it('sorts multiple stores and total in descending order of highSettingRate', () => {
+      // Store High: 20 machines, avgDiff = +300 (higher payout)
+      const storeHigh = createMockStore('store-high', '高設定多め店', [
+        createMockDailyRecord('2025-01-06', 'マイジャグラーV', 10, 300, 6000),
+      ]);
+      // Store Low: 20 machines, avgDiff = -100 (lower payout)
+      const storeLow = createMockStore('store-low', '低設定多め店', [
+        createMockDailyRecord('2025-01-06', 'マイジャグラーV', 10, -100, 6000),
+      ]);
+
+      const est = estimateCrossStoreModelSettings(
+        [storeLow, storeHigh],
+        'マイジャグラーV',
+        DEFAULT_JUGGLER_SPECS
+      );
+
+      // Total of 2 stores + 1 total = 3 rows
+      expect(est.length).toBe(3);
+
+      // Must be sorted in descending order of highSettingRate
+      for (let i = 0; i < est.length - 1; i++) {
+        expect(est[i].highSettingRate!).toBeGreaterThanOrEqual(est[i + 1].highSettingRate!);
+      }
+
+      // Store with higher payout rate must appear before store with lower payout rate
+      const idxHigh = est.findIndex((e) => e.storeId === 'store-high');
+      const idxLow = est.findIndex((e) => e.storeId === 'store-low');
+      expect(idxHigh).toBeLessThan(idxLow);
     });
 
     it('indicates spec is missing without error when an unknown model is evaluated', () => {
@@ -215,6 +265,8 @@ describe('Prompt 52: 機種の横断（機種×店舗）- modelCrossStore.ts', (
       expect(est[0].hasSpec).toBe(false);
       expect(est[0].settingEquivalent).toBeUndefined();
       expect(est[0].highSettingRange).toBeUndefined();
+      expect(est[0].lowSettingRate).toBeUndefined();
+      expect(est[0].highSettingRate).toBeUndefined();
       expect(est[0].unregisteredMessage).toContain('仕様未登録');
     });
   });

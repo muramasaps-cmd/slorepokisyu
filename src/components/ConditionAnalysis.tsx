@@ -111,6 +111,8 @@ export interface ConditionAnalysisProps {
   description?: string;
   hideControls?: boolean;
   period?: StoreCommonPeriod | null;
+  activeFilterLabel?: string;
+  isModelFilterActive?: boolean;
 }
 
 // Custom Chart Tooltip (Prompt 59: defined outside component to prevent remounting)
@@ -298,6 +300,8 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
   description: customDescription,
   hideControls = false,
   period,
+  activeFilterLabel,
+  isModelFilterActive,
 }) => {
   // Dimension state
   const [internalDimension, setInternalDimension] = useState<ConditionDimension>(
@@ -780,9 +784,16 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
               )}
             </div>
             <div className="min-w-0 flex-1">
-              <h2 className="text-base sm:text-lg font-bold text-slate-900 min-w-0 break-normal">
-                {titleText}
-              </h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-base sm:text-lg font-bold text-slate-900 min-w-0 break-normal">
+                  {titleText}
+                </h2>
+                {isModelFilterActive && activeFilterLabel && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-2xs font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                    <span>{`「${activeFilterLabel}」適用中`}</span>
+                  </span>
+                )}
+              </div>
               {!isMultiStore && (
                 <div className="text-xs font-normal text-slate-500 mt-0.5">
                   {currentDimension === 'dow'
@@ -800,6 +811,23 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
           </div>
           <p className="text-xs text-slate-500 mt-1 leading-relaxed">{descriptionText}</p>
         </div>
+
+        {/* Model Filter Active Banner */}
+        {isModelFilterActive && (
+          <div className="p-3 bg-indigo-50/90 border border-indigo-200 rounded-xl text-indigo-950 text-xs flex flex-wrap items-center justify-between gap-2 shadow-2xs animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <span className="px-2 py-0.5 bg-indigo-600 text-white font-extrabold text-2xs rounded-full">
+                ヘッダ機種絞込適用中
+              </span>
+              <span className="font-bold">
+                対象機種: <span className="text-indigo-900 font-black">{`「${activeFilterLabel}」`}</span> に絞り込んで条件別傾向（曜日・特日・台番号末尾等）を集計中
+              </span>
+            </div>
+            <span className="text-indigo-700 text-[11px]">
+              ※ 画面上部の機種セレクタから全機種・別機種に切り替え可能
+            </span>
+          </div>
+        )}
 
         {/* Global Switchers */}
         {!hideControls && (

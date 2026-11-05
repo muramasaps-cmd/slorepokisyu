@@ -54,6 +54,12 @@ export interface ModelMonthlyTrendPoint {
   [storeKey: string]: number | string | undefined; // 'store_storeId' -> avgDiffCoins
 }
 
+export interface SettingTierProportions {
+  lowRate: number; // 低設定 (設定1と2) の割合 (%)
+  midRate: number; // 中設定 (設定3と4) の割合 (%)
+  highRate: number; // 高設定 (設定5と6) の割合 (%)
+}
+
 export interface ModelStoreSettingEstimation {
   storeId: string;
   storeName: string;
@@ -64,6 +70,10 @@ export interface ModelStoreSettingEstimation {
   settingEquivalent?: number; // 平均設定相当 (例: 3.42)
   highSettingRange?: HighSettingRange; // 高設定(設定4以上)の割合範囲
   unregisteredMessage?: string;
+  lowSettingRate?: number; // 低設定 (設定1と2) の割合 (%)
+  midSettingRate?: number; // 中設定 (設定3と4) の割合 (%)
+  highSettingRate?: number; // 高設定 (設定5と6) の割合 (%)
+  settingTiers?: SettingTierProportions;
 }
 
 /**
@@ -405,8 +415,135 @@ export function calculateModelMonthlyTrends(
 }
 
 /**
+ * 設定スペックから設定番号を取得
+ */
+export function parseSettingNumFromSpec(
+  setting: { label: string; settingNum?: number },
+  index: number
+): number {
+  if (typeof setting.settingNum === 'number' && !isNaN(setting.settingNum)) {
+    return setting.settingNum;
+  }
+  const match = setting.label.match(/\d+/);
+  if (match) {
+    return parseInt(match[0], 10);
+  }
+  if (setting.label.includes('L')) return 1;
+  if (setting.label.includes('H')) return 6;
+  return index + 1;
+}
+
+/**
+ * 出率と機種スペックから低設定(1-2), 中設定(3-4), 高設定(5-6)の各割合(%)を推定
+ * 最大エントロピー法（期待出率一致制約）に基づき、連続的かつ単調に各階層の割合を算出します。
+ */
+export function calculateSettingTierProportions(
+  payoutRate: number,
+  spec: ModelSettingSpec
+): SettingTierProportions {
+  if (!spec || !spec.settings || spec.settings.length === 0) {
+    return { lowRate: 0, midRate: 0, highRate: 0 };
+  }
+
+  const validSettings = spec.settings.filter((s) => s.payoutRate > 0);
+  if (validSettings.length === 0) {
+    return { lowRate: 0, midRate: 0, highRate: 0 };
+  }
+
+  // 各設定の設定番号と機械割を取得して出率順にソート
+  const sorted = validSettings
+    .map((s, idx) => ({
+      settingNum: parseSettingNumFromSpec(s, idx),
+      payoutRate: s.payoutRate,
+    }))
+    .sort((a, b) => a.payoutRate - b.payoutRate);
+
+  const n = sorted.length;
+  const minPayout = sorted[0].payoutRate;
+  const maxPayout = sorted[n - 1].payoutRate;
+
+  const isLow = (s: number) => s <= 2;
+  const isMid = (s: number) => s === 3 || s === 4;
+  const isHigh = (s: number) => s >= 5;
+
+  // 境界値処理
+  if (payoutRate <= minPayout || maxPayout === minPayout) {
+    const s = sorted[0].settingNum;
+    return {
+      lowRate: isLow(s) ? 100 : 0,
+      midRate: isMid(s) ? 100 : 0,
+      highRate: isHigh(s) ? 100 : 0,
+    };
+  }
+
+  if (payoutRate >= maxPayout) {
+    const s = sorted[n - 1].settingNum;
+    return {
+      lowRate: isLow(s) ? 100 : 0,
+      midRate: isMid(s) ? 100 : 0,
+      highRate: isHigh(s) ? 100 : 0,
+    };
+  }
+
+  // 二分探索で期待出率が一致するラグランジュ乗数 lambda を算出
+  const computeWeights = (lambda: number) => {
+    const exps = sorted.map((s) =>
+      Math.exp(Math.max(-50, Math.min(50, lambda * (s.payoutRate - payoutRate))))
+    );
+    const sumExp = exps.reduce((a, b) => a + b, 0);
+    return exps.map((e) => (sumExp > 0 ? e / sumExp : 1 / n));
+  };
+
+  const computeExpected = (lambda: number) => {
+    const probs = computeWeights(lambda);
+    return probs.reduce((acc, p, i) => acc + p * sorted[i].payoutRate, 0);
+  };
+
+  let lowLambda = -10;
+  let highLambda = 10;
+  while (computeExpected(lowLambda) > payoutRate && lowLambda > -100) lowLambda *= 2;
+  while (computeExpected(highLambda) < payoutRate && highLambda < 100) highLambda *= 2;
+
+  for (let iter = 0; iter < 30; iter++) {
+    const midLambda = (lowLambda + highLambda) / 2;
+    const exp = computeExpected(midLambda);
+    if (exp < payoutRate) {
+      lowLambda = midLambda;
+    } else {
+      highLambda = midLambda;
+    }
+  }
+
+  const bestLambda = (lowLambda + highLambda) / 2;
+  const probs = computeWeights(bestLambda);
+
+  let rawLow = 0;
+  let rawMid = 0;
+  let rawHigh = 0;
+
+  for (let i = 0; i < n; i++) {
+    const sNum = sorted[i].settingNum;
+    if (isLow(sNum)) rawLow += probs[i];
+    else if (isMid(sNum)) rawMid += probs[i];
+    else if (isHigh(sNum)) rawHigh += probs[i];
+    else rawLow += probs[i];
+  }
+
+  const highRate = Math.round(rawHigh * 1000) / 10;
+  let midRate = Math.round(rawMid * 1000) / 10;
+  let lowRate = Math.round((100 - highRate - midRate) * 10) / 10;
+  if (lowRate < 0) {
+    lowRate = 0;
+    midRate = Math.round((100 - highRate) * 10) / 10;
+  }
+
+  return { lowRate, midRate, highRate };
+}
+
+/**
  * Estimates payout-based setting parameters for a given model in each store (and total)
- * - Returns settingEquivalent and highSettingRange if spec is found.
+ * - Returns settingEquivalent, highSettingRange, and 3-tier proportions (低設定 1-2, 中設定 3-4, 高設定 5-6).
+ * - Results are sorted in descending order of high setting proportion (高設定の多い順).
  * - Displays unregistered message if spec is missing.
  */
 export function estimateCrossStoreModelSettings(
@@ -438,6 +575,7 @@ export function estimateCrossStoreModelSettings(
     if (spec && spec.settings && spec.settings.length > 0) {
       const equiv = interpolateSettingEquivalent(metric.payoutRate, spec);
       const highRange = calculateHighSettingRange(metric.payoutRate, spec, 4);
+      const tiers = calculateSettingTierProportions(metric.payoutRate, spec);
       results.push({
         storeId: store.id,
         storeName: store.name,
@@ -447,6 +585,10 @@ export function estimateCrossStoreModelSettings(
         specName: spec.modelName,
         settingEquivalent: equiv,
         highSettingRange: highRange,
+        lowSettingRate: tiers.lowRate,
+        midSettingRate: tiers.midRate,
+        highSettingRate: tiers.highRate,
+        settingTiers: tiers,
       });
     } else {
       results.push({
@@ -466,6 +608,7 @@ export function estimateCrossStoreModelSettings(
     if (spec && spec.settings && spec.settings.length > 0) {
       const equiv = interpolateSettingEquivalent(totalPayoutRate, spec);
       const highRange = calculateHighSettingRange(totalPayoutRate, spec, 4);
+      const tiers = calculateSettingTierProportions(totalPayoutRate, spec);
       results.push({
         storeId: ALL_STORES_TOTAL_STORE_ID,
         storeName: ALL_STORES_TOTAL_NAME,
@@ -475,6 +618,10 @@ export function estimateCrossStoreModelSettings(
         specName: spec.modelName,
         settingEquivalent: equiv,
         highSettingRange: highRange,
+        lowSettingRate: tiers.lowRate,
+        midSettingRate: tiers.midRate,
+        highSettingRate: tiers.highRate,
+        settingTiers: tiers,
       });
     } else {
       results.push({
@@ -488,5 +635,16 @@ export function estimateCrossStoreModelSettings(
     }
   }
 
-  return results;
+  // Sort results by high setting proportion descending (高設定の多い順)
+  return results.sort((a, b) => {
+    if (a.hasSpec !== b.hasSpec) {
+      return a.hasSpec ? -1 : 1;
+    }
+    const highA = a.highSettingRate ?? 0;
+    const highB = b.highSettingRate ?? 0;
+    if (highB !== highA) {
+      return highB - highA;
+    }
+    return b.payoutRate - a.payoutRate;
+  });
 }

@@ -422,7 +422,13 @@ describe('Prompt 55: Cross-Store Golden Byte-for-Byte Consistency Test', () => {
 
     const currentJsonString = JSON.stringify(currentResult, null, 2).trim();
 
+    if (process.env.UPDATE_GOLDEN === 'true') {
+      fs.writeFileSync(goldenFilePath, currentJsonString, 'utf-8');
+    }
+
     // Byte-level / exact string equality
-    expect(currentJsonString).toBe(goldenJsonString);
+    expect(currentJsonString).toBe(
+      process.env.UPDATE_GOLDEN === 'true' ? currentJsonString : goldenJsonString
+    );
   });
 });

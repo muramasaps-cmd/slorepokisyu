@@ -16,6 +16,7 @@ import {
   TAIL_COLUMNS,
 } from '../../utils/conditionAnalysis';
 import { DailyRecord, StoreProfile } from '../../data/types';
+import { filterDailyRecordsByModels } from '../../utils/modelFilterUtils';
 
 function createSampleRecord(date: string, dow: string, avgDiff: number, totalMachines = 10): DailyRecord {
   const day = parseInt(date.slice(8, 10), 10);
@@ -669,6 +670,110 @@ describe('ConditionAnalysis Component & Utilities', () => {
 
       // Contains percentage symbol in cells
       expect(htmlPayout).toContain('%');
+    });
+
+    it('22. MachineTail dimension (店舗 × 台番号末尾 ヒートマップ) reflects model selection filter', () => {
+      // Store with 2 models: Juggler (positive on tail 7) and Smart Slot (negative on tail 7)
+      const mockRecordWithMachines: DailyRecord = {
+        ...sampleRecords[0],
+        date: '2025-01-07',
+        models: [
+          {
+            modelName: 'マイジャグラーV',
+            avgDiffCoins: 1200,
+            totalDiffCoins: 1200,
+            avgGames: 7000,
+            winRate: 100,
+            winMachines: 1,
+            totalMachines: 1,
+          },
+          {
+            modelName: 'L パチスロ北斗の拳',
+            avgDiffCoins: -800,
+            totalDiffCoins: -800,
+            avgGames: 6000,
+            winRate: 0,
+            winMachines: 0,
+            totalMachines: 1,
+          },
+        ],
+        machines: [
+          {
+            machineNum: 107, // tail 7
+            modelName: 'マイジャグラーV',
+            games: 7000,
+            diff: 1200,
+            tailDigit: 7,
+          },
+          {
+            machineNum: 207, // tail 7
+            modelName: 'L パチスロ北斗の拳',
+            games: 6000,
+            diff: -800,
+            tailDigit: 7,
+          },
+        ],
+      };
+
+      const storeWithBothModels: StoreProfile = {
+        id: 'store-dual',
+        name: 'デュアルホール',
+        address: '東京都',
+        oldEventDays: '7のつく日',
+        exchangeRate: '46枚貸/52枚交換',
+        rateLend: 46,
+        rateExchange: 52,
+        totalMachinesApprox: 2,
+        dataRange: '2025-01',
+        dailyRecords: [mockRecordWithMachines],
+      };
+
+      // 1. All models (unfiltered): tail 7 average = (+1200 + -800) / 2 = +200
+      const allModelStats = calculateConditionStats([mockRecordWithMachines], 'machineTail');
+      const allTail7 = allModelStats.find((s) => s.key === '7')!;
+      expect(allTail7.avgDiffCoins).toBe(200);
+      expect(allTail7.totalMachines).toBe(2);
+
+      // 2. Filter to Juggler only: tail 7 average = +1200, 1 machine
+      const jugglerFilteredRecords = filterDailyRecordsByModels(
+        [mockRecordWithMachines],
+        'juggler',
+        []
+      );
+      const jugglerStats = calculateConditionStats(jugglerFilteredRecords, 'machineTail');
+      const jugglerTail7 = jugglerStats.find((s) => s.key === '7')!;
+      expect(jugglerTail7.avgDiffCoins).toBe(1200);
+      expect(jugglerTail7.totalMachines).toBe(1);
+
+      // 3. Filter to Smart Slot only: tail 7 average = -800, 1 machine
+      const smartSlotFilteredRecords = filterDailyRecordsByModels(
+        [mockRecordWithMachines],
+        'smart_slot',
+        []
+      );
+      const smartSlotStats = calculateConditionStats(smartSlotFilteredRecords, 'machineTail');
+      const smartSlotTail7 = smartSlotStats.find((s) => s.key === '7')!;
+      expect(smartSlotTail7.avgDiffCoins).toBe(-800);
+      expect(smartSlotTail7.totalMachines).toBe(1);
+
+      // 4. Render ConditionAnalysis multi-store view with Juggler filtered store
+      const filteredStore: StoreProfile = {
+        ...storeWithBothModels,
+        dailyRecords: jugglerFilteredRecords,
+      };
+
+      const htmlMultiTail = renderToString(
+        <ConditionAnalysis
+          stores={[filteredStore, storeB]}
+          initialDimension="machineTail"
+          activeFilterLabel="ジャグラーシリーズ"
+          isModelFilterActive={true}
+        />
+      );
+
+      expect(htmlMultiTail).toContain('店舗 × 台番号末尾 ヒートマップ');
+      expect(htmlMultiTail).toContain('「ジャグラーシリーズ」適用中');
+      expect(htmlMultiTail).toContain('ヘッダ機種絞込適用中');
     });
   });
 });

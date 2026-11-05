@@ -38,6 +38,7 @@ import {
   Calculator,
   BarChart2,
   Filter,
+  Flame,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -591,12 +592,18 @@ export const ModelCrossStoreAnalysis: React.FC<ModelCrossStoreAnalysisProps> = (
 
             {/* 2-B. Setting Estimation per Store (settingRange.ts) */}
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
                 <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
                   <Calculator className="w-4 h-4 text-emerald-600" />
                   <span>出率ベース設定推定 (店舗別・全店合計)</span>
                 </h4>
-                <span className="text-[10px] text-slate-400">settingRange.ts 準拠</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <Flame className="w-3 h-3 text-emerald-600" />
+                    <span>高設定(設定5と6)の多い順</span>
+                  </span>
+                  <span className="text-[10px] text-slate-400">settingRange.ts 準拠</span>
+                </div>
               </div>
 
               <div className="space-y-2.5">
@@ -605,21 +612,32 @@ export const ModelCrossStoreAnalysis: React.FC<ModelCrossStoreAnalysisProps> = (
                     推定対象データがありません
                   </div>
                 ) : (
-                  settingEstimations.map((est) => {
+                  settingEstimations.map((est, rankIdx) => {
                     const isTotal = est.storeId === ALL_STORES_TOTAL_STORE_ID;
                     const color = isTotal ? ALL_STORES_COLOR : getStoreColor(est.storeId, stores);
 
                     return (
                       <div
                         key={est.storeId}
-                        className={`p-3 rounded-xl border text-xs transition-all ${
+                        className={`p-3.5 rounded-xl border text-xs transition-all ${
                           isTotal
-                            ? 'bg-slate-100/90 border-slate-300 shadow-2xs'
-                            : 'bg-white border-slate-200'
+                            ? 'bg-slate-50/90 border-slate-300 shadow-2xs ring-1 ring-slate-200'
+                            : 'bg-white border-slate-200 hover:border-slate-300'
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2 mb-2">
-                          <div className="flex items-center gap-1.5 font-bold text-slate-900">
+                          <div className="flex items-center gap-2 font-bold text-slate-900">
+                            <span
+                              className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                isTotal
+                                  ? 'bg-slate-200 text-slate-700'
+                                  : rankIdx === 0
+                                  ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                                  : 'bg-slate-100 text-slate-600'
+                              }`}
+                            >
+                              {isTotal ? '全体' : `#${rankIdx + 1}`}
+                            </span>
                             <span
                               className="w-2.5 h-2.5 rounded-full shrink-0"
                               style={{ backgroundColor: color }}
@@ -632,18 +650,76 @@ export const ModelCrossStoreAnalysis: React.FC<ModelCrossStoreAnalysisProps> = (
                         </div>
 
                         {est.hasSpec ? (
-                          <div className="grid grid-cols-2 gap-2 bg-slate-50/80 p-2 rounded-lg border border-slate-100">
-                            <div>
-                              <span className="text-[10px] text-slate-400 block">平均設定相当</span>
-                              <span className="font-mono font-bold text-indigo-700 text-sm">
-                                設定 {est.settingEquivalent?.toFixed(2)}
-                              </span>
+                          <div className="space-y-2.5">
+                            {/* 3段階設定推定: 低設定(設定1と2), 中設定(設定3と4), 高設定(設定5と6) */}
+                            <div className="grid grid-cols-3 gap-2">
+                              {/* 低設定 (設定1と2) */}
+                              <div className="p-2 rounded-lg bg-blue-50/80 border border-blue-200/70">
+                                <span className="text-[10px] text-blue-700 font-bold block">
+                                  低設定(設定1と2)
+                                </span>
+                                <span className="font-mono font-bold text-blue-900 text-sm">
+                                  {est.lowSettingRate !== undefined ? `${est.lowSettingRate.toFixed(1)}%` : '-'}
+                                </span>
+                              </div>
+
+                              {/* 中設定 (設定3と4) */}
+                              <div className="p-2 rounded-lg bg-amber-50/80 border border-amber-200/70">
+                                <span className="text-[10px] text-amber-700 font-bold block">
+                                  中設定(設定3と4)
+                                </span>
+                                <span className="font-mono font-bold text-amber-900 text-sm">
+                                  {est.midSettingRate !== undefined ? `${est.midSettingRate.toFixed(1)}%` : '-'}
+                                </span>
+                              </div>
+
+                              {/* 高設定 (設定5と6) */}
+                              <div className="p-2 rounded-lg bg-emerald-50 border border-emerald-300 ring-1 ring-emerald-200">
+                                <span className="text-[10px] text-emerald-800 font-black block flex items-center gap-1">
+                                  <Flame className="w-3 h-3 text-emerald-600 shrink-0" />
+                                  <span>高設定(設定5と6)</span>
+                                </span>
+                                <span className="font-mono font-black text-emerald-800 text-sm">
+                                  {est.highSettingRate !== undefined ? `${est.highSettingRate.toFixed(1)}%` : '-'}
+                                </span>
+                              </div>
                             </div>
-                            <div>
-                              <span className="text-[10px] text-slate-400 block">高設定割合 (設定4以上)</span>
-                              <span className="font-mono font-bold text-emerald-700 text-sm">
-                                {est.highSettingRange?.minRate.toFixed(1)}% 〜 {est.highSettingRange?.maxRate.toFixed(1)}%
-                              </span>
+
+                            {/* 視覚的スタックバー */}
+                            <div className="space-y-1">
+                              <div className="h-2 w-full rounded-full bg-slate-100 overflow-hidden flex">
+                                <div
+                                  className="bg-blue-400 h-full transition-all duration-300"
+                                  style={{ width: `${est.lowSettingRate ?? 0}%` }}
+                                  title={`低設定(設定1と2): ${est.lowSettingRate}%`}
+                                />
+                                <div
+                                  className="bg-amber-400 h-full transition-all duration-300"
+                                  style={{ width: `${est.midSettingRate ?? 0}%` }}
+                                  title={`中設定(設定3と4): ${est.midSettingRate}%`}
+                                />
+                                <div
+                                  className="bg-emerald-500 h-full transition-all duration-300"
+                                  style={{ width: `${est.highSettingRate ?? 0}%` }}
+                                  title={`高設定(設定5と6): ${est.highSettingRate}%`}
+                                />
+                              </div>
+                            </div>
+
+                            {/* 詳細指標 (平均設定相当 & 設定4以上範囲) */}
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-[11px] text-slate-500 bg-slate-50/80 px-2.5 py-1.5 rounded-lg border border-slate-100">
+                              <div>
+                                <span className="text-slate-400 mr-1.5">平均設定相当:</span>
+                                <span className="font-mono font-bold text-indigo-700">
+                                  設定 {est.settingEquivalent?.toFixed(2)}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="text-slate-400 mr-1.5">高設定割合 (設定4以上):</span>
+                                <span className="font-mono font-medium text-emerald-700">
+                                  {est.highSettingRange?.minRate.toFixed(1)}% 〜 {est.highSettingRange?.maxRate.toFixed(1)}%
+                                </span>
+                              </div>
                             </div>
                           </div>
                         ) : (

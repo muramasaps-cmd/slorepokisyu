@@ -2228,19 +2228,6 @@
   ],
   "modelSettings": [
     {
-      "storeId": "store_1",
-      "storeName": "ホール店舗_1",
-      "payoutRate": 99.87,
-      "totalGames": 480692,
-      "hasSpec": true,
-      "specName": "マイジャグラーV",
-      "settingEquivalent": 2.98,
-      "highSettingRange": {
-        "minRate": 0,
-        "maxRate": 49.5
-      }
-    },
-    {
       "storeId": "store_2",
       "storeName": "ホール店舗_2",
       "payoutRate": 99.88,
@@ -2251,19 +2238,35 @@
       "highSettingRange": {
         "minRate": 0,
         "maxRate": 49.7
+      },
+      "lowSettingRate": 54.4,
+      "midSettingRate": 31.9,
+      "highSettingRate": 13.7,
+      "settingTiers": {
+        "lowRate": 54.4,
+        "midRate": 31.9,
+        "highRate": 13.7
       }
     },
     {
-      "storeId": "store_3",
-      "storeName": "ホール店舗_3",
-      "payoutRate": 99.63,
-      "totalGames": 480669,
+      "storeId": "store_1",
+      "storeName": "ホール店舗_1",
+      "payoutRate": 99.87,
+      "totalGames": 480692,
       "hasSpec": true,
       "specName": "マイジャグラーV",
-      "settingEquivalent": 2.86,
+      "settingEquivalent": 2.98,
       "highSettingRange": {
         "minRate": 0,
-        "maxRate": 45.3
+        "maxRate": 49.5
+      },
+      "lowSettingRate": 54.6,
+      "midSettingRate": 31.8,
+      "highSettingRate": 13.6,
+      "settingTiers": {
+        "lowRate": 54.6,
+        "midRate": 31.8,
+        "highRate": 13.6
       }
     },
     {
@@ -2277,6 +2280,35 @@
       "highSettingRange": {
         "minRate": 0,
         "maxRate": 48.1
+      },
+      "lowSettingRate": 55.5,
+      "midSettingRate": 31.5,
+      "highSettingRate": 13,
+      "settingTiers": {
+        "lowRate": 55.5,
+        "midRate": 31.5,
+        "highRate": 13
+      }
+    },
+    {
+      "storeId": "store_3",
+      "storeName": "ホール店舗_3",
+      "payoutRate": 99.63,
+      "totalGames": 480669,
+      "hasSpec": true,
+      "specName": "マイジャグラーV",
+      "settingEquivalent": 2.86,
+      "highSettingRange": {
+        "minRate": 0,
+        "maxRate": 45.3
+      },
+      "lowSettingRate": 57.4,
+      "midSettingRate": 30.9,
+      "highSettingRate": 11.7,
+      "settingTiers": {
+        "lowRate": 57.4,
+        "midRate": 30.9,
+        "highRate": 11.7
       }
     }
   ],

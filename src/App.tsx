@@ -2161,6 +2161,8 @@ export default function App() {
                     ? analysisCommonPeriod
                     : null
                 }
+                activeFilterLabel={activeFilterLabel}
+                isModelFilterActive={isModelFilterActive}
               />
             )}
 

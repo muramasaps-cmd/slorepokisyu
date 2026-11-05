@@ -515,7 +515,42 @@ export function calculateConditionStats(
       const tailRecordsList: DailyRecord[] = [];
 
       dailyRecords.forEach((r) => {
-        if (r.tails && r.tails.length > 0) {
+        if (r.machines && r.machines.length > 0) {
+          const matchingMachines = r.machines.filter((m) => {
+            if (isZoroCol) {
+              return m.isZoro || (m.machineNum >= 11 && m.machineNum % 11 === 0);
+            }
+            return (
+              m.tailDigit === targetDigit ||
+              (m.tailDigit === undefined && !isNaN(m.machineNum) && ((m.machineNum % 10 + 10) % 10 === targetDigit))
+            );
+          });
+
+          if (matchingMachines.length > 0) {
+            const count = matchingMachines.length;
+            const totalDiff = matchingMachines.reduce((sum, m) => sum + (m.diff || 0), 0);
+            const totalGames = matchingMachines.reduce((sum, m) => sum + (m.games || 0), 0);
+            const winMachs = matchingMachines.filter((m) => (m.diff || 0) > 0).length;
+            const avgDiff = Math.round((totalDiff / count) * 10) / 10;
+            const avgG = Math.round(totalGames / count);
+            const inCoins = totalGames * 3;
+            const outCoins = inCoins + totalDiff;
+            const payoutRate = inCoins > 0 ? Math.round((outCoins / inCoins) * 10000) / 100 : 100;
+
+            tailRecordsList.push({
+              ...r,
+              avgDiffCoins: avgDiff,
+              totalDiffCoins: totalDiff,
+              avgGames: avgG,
+              winMachines: winMachs,
+              totalMachines: count,
+              winRate: Math.round((winMachs / count) * 1000) / 10,
+              payoutRate,
+              gModelHallProfit: -totalDiff * 20,
+              gModelPlayerProfit: totalDiff * 20,
+            });
+          }
+        } else if (r.tails && r.tails.length > 0) {
           const matchingTail = r.tails.find((t) => {
             if (isZoroCol) {
               return t.tailNum === null || t.tailName.includes('ゾロ');
@@ -547,41 +582,6 @@ export function calculateConditionStats(
               payoutRate,
               gModelHallProfit: -diffCoins * 20,
               gModelPlayerProfit: diffCoins * 20,
-            });
-          }
-        } else if (r.machines && r.machines.length > 0) {
-          const matchingMachines = r.machines.filter((m) => {
-            if (isZoroCol) {
-              return m.isZoro || (m.machineNum >= 11 && m.machineNum % 11 === 0);
-            }
-            return (
-              m.tailDigit === targetDigit ||
-              m.machineNum % 10 === targetDigit
-            );
-          });
-
-          if (matchingMachines.length > 0) {
-            const count = matchingMachines.length;
-            const totalDiff = matchingMachines.reduce((sum, m) => sum + (m.diff || 0), 0);
-            const totalGames = matchingMachines.reduce((sum, m) => sum + (m.games || 0), 0);
-            const winMachs = matchingMachines.filter((m) => (m.diff || 0) > 0).length;
-            const avgDiff = Math.round((totalDiff / count) * 10) / 10;
-            const avgG = Math.round(totalGames / count);
-            const inCoins = totalGames * 3;
-            const outCoins = inCoins + totalDiff;
-            const payoutRate = inCoins > 0 ? Math.round((outCoins / inCoins) * 10000) / 100 : 100;
-
-            tailRecordsList.push({
-              ...r,
-              avgDiffCoins: avgDiff,
-              totalDiffCoins: totalDiff,
-              avgGames: avgG,
-              winMachines: winMachs,
-              totalMachines: count,
-              winRate: Math.round((winMachs / count) * 1000) / 10,
-              payoutRate,
-              gModelHallProfit: -totalDiff * 20,
-              gModelPlayerProfit: totalDiff * 20,
             });
           }
         }

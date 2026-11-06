@@ -36,6 +36,9 @@ export interface TargetFloorMapProps {
   selectedModel?: string;
   onSelectModel?: (model: string) => void;
   availableModels?: string[];
+  isModelFilterActive?: boolean;
+  activeFilterLabel?: string;
+  selectedModelNames?: string[];
 
   // Checked state for "空いていない"
   checkedState?: Record<number, MachineCheckStatus>;
@@ -85,6 +88,9 @@ export const TargetFloorMap: React.FC<TargetFloorMapProps> = ({
   selectedModel: controlledSelectedModel,
   onSelectModel,
   availableModels: propAvailableModels,
+  isModelFilterActive,
+  activeFilterLabel,
+  selectedModelNames,
   checkedState: controlledCheckedState,
   onToggleCheck: controlledOnToggleCheck,
   isCrossStore,
@@ -341,16 +347,24 @@ export const TargetFloorMap: React.FC<TargetFloorMapProps> = ({
     const color = getMachineColor(mach);
     const lift = isEvaluated ? computeLift(mach.expectedDiff, dayMean) : 0;
     const roundedLift = roundForDisplay(lift);
-    const isUnavailable = mach.machineNum !== undefined && currentCheckedMap[mach.machineNum] === 'unavailable';
-    const isRanked = isEvaluated && mach.rank > 0 && mach.rank <= currentTopN;
-
     const isModelMatch =
-      currentSelectedModel === 'all' ||
-      (mach.modelName && mach.modelName === currentSelectedModel);
+      (currentSelectedModel === 'all' ||
+        (mach.modelName && mach.modelName === currentSelectedModel)) &&
+      (!isModelFilterActive ||
+        !selectedModelNames ||
+        selectedModelNames.length === 0 ||
+        (mach.modelName && selectedModelNames.includes(mach.modelName)) ||
+        (activeFilterLabel && activeFilterLabel !== '全機種' && mach.modelName === activeFilterLabel));
+
+    // Prompt 64 Requirement 5: 選択機種以外の台は、薄い灰色で表示（ランキングには含めない）
+    const isRanked = isModelMatch && isEvaluated && mach.rank > 0 && mach.rank <= currentTopN;
 
     // Color theme styling
     let colorClasses = '';
-    if (color === 'green') {
+    if (!isModelMatch) {
+      // 選択機種以外の台: 薄い灰色
+      colorClasses = 'bg-slate-100 border-slate-200 text-slate-400 hover:bg-slate-200/60';
+    } else if (color === 'green') {
       colorClasses = 'bg-emerald-50 border-emerald-300 text-emerald-950 hover:bg-emerald-100 hover:border-emerald-400';
     } else if (color === 'red') {
       colorClasses = 'bg-rose-50 border-rose-300 text-rose-950 hover:bg-rose-100 hover:border-rose-400';
@@ -360,10 +374,10 @@ export const TargetFloorMap: React.FC<TargetFloorMapProps> = ({
     }
 
     const highlightClasses = isModelMatch
-      ? currentSelectedModel !== 'all'
+      ? (currentSelectedModel !== 'all' || (isModelFilterActive && activeFilterLabel !== '全機種'))
         ? 'ring-2 ring-indigo-500 shadow-md scale-[1.03] z-10 font-black'
         : 'hover:shadow-xs'
-      : 'opacity-35 grayscale-[50%] hover:opacity-75';
+      : 'opacity-40 grayscale-[40%] hover:opacity-75';
 
     return (
       <div

@@ -650,6 +650,7 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
             islandName: islName,
             confidence: mach.confidence,
             reliabilityRate: mach.stats.reliabilityRate,
+            reliability: mach.reliability ?? null,
             evidenceDays: mach.evidenceDays,
             cohortEvidenceDays: mach.cohortEvidenceDays,
             expectedDiff,

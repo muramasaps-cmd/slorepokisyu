@@ -73,6 +73,14 @@ interface TargetDateRankingProps {
   onSelectFunnelModel?: (modelName: string | null) => void;
   targetSection?: string;
   precomputedMachineRankingResult?: TargetMachineRankingResult | null;
+  // Prompt 64: 機種フィルター情報
+  isModelFilterActive?: boolean;
+  activeFilterLabel?: string;
+  modelPreset?: string;
+  selectedModelNames?: string[];
+  isSingleModelSelected?: boolean;
+  singleSelectedModelName?: string | null;
+  unfilteredDailyRecords?: DailyRecord[];
 }
 
 type ModelFilterType = 'all' | 'main' | 'smart_slot' | 'juggler_a' | 'small';
@@ -101,6 +109,13 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
   onSelectFunnelModel,
   targetSection,
   precomputedMachineRankingResult,
+  isModelFilterActive,
+  activeFilterLabel,
+  modelPreset,
+  selectedModelNames,
+  isSingleModelSelected,
+  singleSelectedModelName,
+  unfilteredDailyRecords,
 }) => {
   const [modelFilter, setModelFilter] = useState<ModelFilterType>('all');
   const [modelSort, setModelSort] = useState<ModelSortType>('score');
@@ -117,6 +132,13 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
   const [isStep5Expanded, setIsStep5Expanded] = useState<boolean>(() => {
     return targetSection === 'checklist' || targetSection === 'target-checklist';
   });
+
+  // Prompt 64: 選択機種の日数計算
+  const selectedModelDaysCount = useMemo(() => {
+    return dailyRecords.filter(
+      (r) => (r.machines && r.machines.length > 0) || (r.models && r.models.length > 0)
+    ).length;
+  }, [dailyRecords]);
 
   useEffect(() => {
     if (targetSection === 'models' || targetSection === 'target-model-ranking') {
@@ -290,7 +312,8 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
 
   const handleCopyText = (items: CrossStoreMachineRank[]) => {
     try {
-      const text = generateTargetListCopyText('当店舗', targetDate, items);
+      const targetModelLabel = isModelFilterActive ? activeFilterLabel : undefined;
+      const text = generateTargetListCopyText(storeName || '当店舗', targetDate, items, targetModelLabel);
       if (navigator?.clipboard?.writeText) {
         navigator.clipboard.writeText(text);
       } else {
@@ -312,7 +335,8 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
 
   const handleDownloadCsv = (items: CrossStoreMachineRank[]) => {
     try {
-      const csv = generateTargetListCsv('当店舗', targetDate, items);
+      const targetModelLabel = isModelFilterActive ? activeFilterLabel : undefined;
+      const csv = generateTargetListCsv(storeName || '当店舗', targetDate, items, targetModelLabel);
       const blob = new Blob([new Uint8Array([0xef, 0xbb, 0xbf]), csv], {
         type: 'text/csv;charset=utf-8;',
       });
@@ -670,15 +694,59 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
         </div>
       </div>
 
+      {/* 選択機種のデータが少ない（30日未満）ときの警告 (Prompt 64 Requirement 4) */}
+      {isModelFilterActive && selectedModelDaysCount < 30 && (
+        <div
+          className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs font-bold text-amber-900 flex items-center gap-2"
+          data-testid="single-store-low-data-warning"
+        >
+          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+          <span>選択機種のデータが少ないため、参考値です</span>
+        </div>
+      )}
+
       {/* Step ③: どの機種を狙うか */}
-      <div id="target-step-3" className="border-t border-slate-200 bg-white p-4 sm:p-5 space-y-3.5 scroll-mt-28">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="w-5 h-5 rounded-full bg-indigo-600 text-white text-xs font-black flex items-center justify-center shrink-0">
+      <div id="target-step-3" className="border-t border-slate-200 bg-white p-4 sm:p-5 space-y-3.5 scroll-mt-28" data-testid="target-step-3">
+        {isSingleModelSelected ? (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-indigo-50/70 border border-indigo-200 rounded-xl p-4">
+            <div className="flex items-center gap-3">
+              <span className="w-6 h-6 rounded-full bg-indigo-600 text-white text-xs font-black flex items-center justify-center shrink-0">
                 3
               </span>
-              <h3 className="text-sm sm:text-base font-black text-slate-900 tracking-tight flex items-center gap-2">
+              <div>
+                <h3 className="text-sm sm:text-base font-black text-indigo-950 flex items-center gap-2">
+                  <span>機種は「{singleSelectedModelName}」に絞られています</span>
+                  <span className="text-[10px] bg-indigo-200 text-indigo-800 px-1.5 py-0.5 rounded font-bold">
+                    1機種指定
+                  </span>
+                </h3>
+                <p className="text-2xs text-indigo-700 mt-0.5">
+                  機種の絞り込みが完了しているため、下のステップ④（台番ランキング）をご確認ください。
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const el = document.getElementById('target-step-4');
+                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+              className="self-start sm:self-auto px-3.5 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 shadow-2xs"
+              data-testid="btn-proceed-to-machines"
+            >
+              <span>台番ランキングに進む</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="w-5 h-5 rounded-full bg-indigo-600 text-white text-xs font-black flex items-center justify-center shrink-0">
+                    3
+                  </span>
+                  <h3 className="text-sm sm:text-base font-black text-slate-900 tracking-tight flex items-center gap-2">
                 <span>どの機種を狙うか</span>
                 <span className="text-xs font-normal text-slate-500">（機種別 期待差枚予測ランキング）</span>
               </h3>
@@ -935,6 +1003,8 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
             />
           </div>
         )}
+        </>
+      )}
       </div>
 
       {/* Step ④: どの台を狙うか */}

@@ -3,7 +3,7 @@ import React from 'react';
 import { renderToString } from 'react-dom/server';
 import { TargetTab, TargetScope } from '../TargetTab';
 import { parseHash } from '../../App';
-import { StoreProfile } from '../../data/types';
+import { StoreProfile, DailyRecord } from '../../data/types';
 import {
   generateSyntheticDailyRecords,
   createSyntheticMachineRecords,
@@ -371,6 +371,129 @@ describe('TargetTab Component', () => {
 
       const checklistHash = parseHash('#target?section=checklist');
       expect(checklistHash.section).toBe('checklist');
+    });
+  });
+
+  describe('Prompt 63: データの流れの統一 (TargetTab & currentStoreFiltered)', () => {
+    const dates = ['2025-01-10', '2025-01-11', '2025-01-12', '2025-01-13', '2025-01-14'];
+    const multiModelRecords = dates.map((date) => ({
+      date,
+      dayOfWeek: '金',
+      totalDiff: 2500,
+      totalGames: 20000,
+      totalMachines: 4,
+      machines: [
+        { machineNum: 101, modelName: 'マイジャグラーV', games: 6000, diff: 1200 },
+        { machineNum: 102, modelName: 'マイジャグラーV', games: 5500, diff: 800 },
+        { machineNum: 201, modelName: 'スマスロ北斗の拳', games: 5000, diff: 500 },
+        { machineNum: 202, modelName: 'スマスロ北斗の拳', games: 4500, diff: 0 },
+      ],
+    }));
+
+    const fullStore: StoreProfile = {
+      ...sampleStore1,
+      id: 'store-test-filter',
+      name: 'フィルターテスト店',
+      dailyRecords: multiModelRecords as unknown as DailyRecord[],
+      rateLend: 46,
+      rateExchange: 52,
+    };
+
+    it('機種を絞ったとき、狙い（この店）に渡るデータが、選んだ機種の台だけであること（他の機種の台が含まれない）', () => {
+      // Filter exclusively to マイジャグラーV
+      const jugglerOnlyRecords = multiModelRecords.map((r) => ({
+        ...r,
+        totalMachines: 2,
+        machines: r.machines.filter((m) => m.modelName === 'マイジャグラーV'),
+      }));
+
+      const storeFiltered: StoreProfile = {
+        ...fullStore,
+        dailyRecords: jugglerOnlyRecords as unknown as DailyRecord[],
+      };
+
+      const html = clean(
+        renderToString(
+          <TargetTab
+            targetDate="2025-01-15"
+            onTargetDateChange={vi.fn()}
+            scope="store"
+            onScopeChange={vi.fn()}
+            currentStore={fullStore}
+            currentStoreFiltered={storeFiltered}
+            stores={[fullStore]}
+            latestDataDate="2025-01-14"
+            perspective="player"
+            unit="coins"
+            rateLend={46}
+            rateExchange={52}
+            filteredStoresByModel={[storeFiltered]}
+            isModelFilterActive={true}
+            activeFilterLabel="マイジャグラーV"
+            onSelectStore={vi.fn()}
+          />
+        )
+      );
+
+      // Contains マイジャグラーV machines
+      expect(html).toContain('#101');
+      expect(html).toContain('#102');
+      expect(html).toContain('マイジャグラーV');
+
+      // Does NOT contain スマスロ北斗の拳 machines
+      expect(html).not.toContain('#201');
+      expect(html).not.toContain('#202');
+      expect(html).not.toContain('スマスロ北斗の拳');
+    });
+
+    it('機種フィルターが「全機種」のとき、変更前（currentStoreそのまま）と、順位・数値が完全に一致すること', () => {
+      // Unfiltered (全機種)
+      const htmlBefore = clean(
+        renderToString(
+          <TargetTab
+            targetDate="2025-01-15"
+            onTargetDateChange={vi.fn()}
+            scope="store"
+            onScopeChange={vi.fn()}
+            currentStore={fullStore}
+            stores={[fullStore]}
+            latestDataDate="2025-01-14"
+            perspective="player"
+            unit="coins"
+            rateLend={46}
+            rateExchange={52}
+            filteredStoresByModel={[fullStore]}
+            isModelFilterActive={false}
+            onSelectStore={vi.fn()}
+          />
+        )
+      );
+
+      // With currentStoreFiltered === fullStore (全機種モード)
+      const htmlAfter = clean(
+        renderToString(
+          <TargetTab
+            targetDate="2025-01-15"
+            onTargetDateChange={vi.fn()}
+            scope="store"
+            onScopeChange={vi.fn()}
+            currentStore={fullStore}
+            currentStoreFiltered={fullStore}
+            stores={[fullStore]}
+            latestDataDate="2025-01-14"
+            perspective="player"
+            unit="coins"
+            rateLend={46}
+            rateExchange={52}
+            filteredStoresByModel={[fullStore]}
+            isModelFilterActive={false}
+            onSelectStore={vi.fn()}
+          />
+        )
+      );
+
+      // Output rankings and calculations match completely
+      expect(htmlAfter).toBe(htmlBefore);
     });
   });
 });

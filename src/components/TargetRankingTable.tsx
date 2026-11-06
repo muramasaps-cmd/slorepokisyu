@@ -24,12 +24,13 @@ import {
   Layers,
 } from 'lucide-react';
 import { TargetFloorMap } from './TargetFloorMap';
+import { TargetExpectationScatter } from './TargetExpectationScatter';
 import { IslandDefinition } from '../data/types';
 import { MachineCheckStatus } from '../utils/crossStoreRanking';
 
 export type TargetRankingType = 'machine' | 'model';
 export type TargetRankingViewMode = 'simple' | 'detailed';
-export type TargetRankingDisplayType = 'table' | 'floorMap';
+export type TargetRankingDisplayType = 'table' | 'floorMap' | 'scatter';
 
 export const TARGET_TABLE_VIEW_MODE_STORAGE_KEY = 'slorepo_target_table_view_mode';
 export const TARGET_TABLE_DISPLAY_TYPE_STORAGE_KEY = 'slorepo_target_table_display_type';
@@ -78,6 +79,7 @@ export interface TargetRankingRow {
   // Confidence & Score
   confidence?: '高' | '中' | '低' | string;
   reliabilityRate?: number;
+  reliability?: number | null;
   evidenceDays?: number;
   cohortEvidenceDays?: number;
   score?: number;
@@ -962,7 +964,7 @@ export const TargetRankingTable: React.FC<TargetRankingTableProps> = ({
     if (typeof localStorage !== 'undefined') {
       try {
         const saved = localStorage.getItem(TARGET_TABLE_DISPLAY_TYPE_STORAGE_KEY);
-        if (saved === 'floorMap' || saved === 'table') return saved;
+        if (saved === 'floorMap' || saved === 'table' || saved === 'scatter') return saved;
       } catch {
         // ignore
       }
@@ -1408,6 +1410,18 @@ export const TargetRankingTable: React.FC<TargetRankingTableProps> = ({
               >
                 フロアマップ
               </button>
+              <button
+                type="button"
+                onClick={() => handleDisplayTypeChange('scatter')}
+                className={`px-3 py-1 rounded-lg transition-all cursor-pointer text-xs ${
+                  currentDisplayType === 'scatter'
+                    ? 'bg-indigo-600 text-white shadow-2xs font-black'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+                data-testid="header-display-mode-scatter-btn"
+              >
+                散布図
+              </button>
             </div>
           )}
 
@@ -1485,8 +1499,16 @@ export const TargetRankingTable: React.FC<TargetRankingTableProps> = ({
         />
       )}
 
-      {/* Table vs Floor Map switch (Prompt 60 Requirement 1) */}
-      {rankingType === 'machine' && currentDisplayType === 'floorMap' ? (
+      {/* Display Mode switch: Table vs Floor Map vs Scatter */}
+      {rankingType === 'machine' && currentDisplayType === 'scatter' ? (
+        <TargetExpectationScatter
+          rows={rows}
+          dayMean={dayMean}
+          onSelectMachine={(mach) => {
+            handleToggleRow(mach.id);
+          }}
+        />
+      ) : rankingType === 'machine' && currentDisplayType === 'floorMap' ? (
         <TargetFloorMap
           rows={rows}
           dayMeanExpectedDiff={dayMean}
@@ -1506,6 +1528,19 @@ export const TargetRankingTable: React.FC<TargetRankingTableProps> = ({
         />
       ) : (
         <>
+          {/* Prompt 62: 台番の詳細表示に、「平均との差 × 信頼性」の散布図を追加 */}
+          {rankingType === 'machine' && currentViewMode === 'detailed' && rows.length > 0 && (
+            <div className="p-3 sm:p-4 bg-slate-50/70 border-b border-slate-200" data-testid="detailed-scatter-section">
+              <TargetExpectationScatter
+                rows={rows}
+                dayMean={dayMean}
+                onSelectMachine={(mach) => {
+                  handleToggleRow(mach.id);
+                }}
+              />
+            </div>
+          )}
+
           {/* Mobile Card View (< 640px) (Prompt 59 Requirement 4) */}
           <div className="block sm:hidden divide-y divide-slate-100" data-testid="mobile-cards-container">
         {rows.length === 0 ? (

@@ -20,6 +20,7 @@ export interface TargetTabProps {
   scope: TargetScope;
   onScopeChange: (scope: TargetScope) => void;
   currentStore: StoreProfile | null;
+  currentStoreFiltered?: StoreProfile | null;
   stores: StoreProfile[];
   latestDataDate: string;
   perspective: 'hall' | 'player';
@@ -29,10 +30,13 @@ export interface TargetTabProps {
   filteredStoresByModel: StoreProfile[];
   activeFilterLabel?: string;
   isModelFilterActive?: boolean;
+  modelPreset?: string;
+  selectedModelNames?: string[];
   onSelectStore: (storeId: string) => void;
   onNavigateToValidation?: () => void;
   onOpenStoreManager?: () => void;
   targetSection?: string;
+  onFocusModelFilter?: () => void;
 }
 
 export const TargetTab: React.FC<TargetTabProps> = ({
@@ -41,6 +45,7 @@ export const TargetTab: React.FC<TargetTabProps> = ({
   scope,
   onScopeChange,
   currentStore,
+  currentStoreFiltered,
   stores,
   latestDataDate,
   perspective,
@@ -50,11 +55,47 @@ export const TargetTab: React.FC<TargetTabProps> = ({
   filteredStoresByModel,
   activeFilterLabel,
   isModelFilterActive,
+  modelPreset,
+  selectedModelNames,
   onSelectStore,
   onNavigateToValidation,
   onOpenStoreManager,
   targetSection,
+  onFocusModelFilter,
 }) => {
+  // Helper to focus header model selector (Prompt 64 Requirement 1)
+  const handleFocusHeaderModelFilter = () => {
+    if (onFocusModelFilter) {
+      onFocusModelFilter();
+    } else {
+      const el = document.getElementById('header-model-filter');
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const btn = el.querySelector('button');
+        if (btn) (btn as HTMLButtonElement).focus();
+      }
+    }
+  };
+
+  // Determine if exactly one model is selected (Prompt 64 Requirement 2)
+  const isSingleModelSelected = useMemo(() => {
+    return (
+      (modelPreset === 'custom' || !['smart_slot', 'a_type', 'juggler', 'all'].includes(modelPreset || '')) &&
+      Array.isArray(selectedModelNames) &&
+      selectedModelNames.length === 1
+    );
+  }, [modelPreset, selectedModelNames]);
+
+  const singleSelectedModelName = isSingleModelSelected && selectedModelNames ? selectedModelNames[0] : null;
+
+  // Selected model days count for current store (Prompt 64 Requirement 4)
+  const storeForModel = currentStoreFiltered || currentStore;
+  const selectedModelDaysCount = useMemo(() => {
+    if (!storeForModel?.dailyRecords) return 0;
+    return storeForModel.dailyRecords.filter(
+      (r) => (r.machines && r.machines.length > 0) || (r.models && r.models.length > 0)
+    ).length;
+  }, [storeForModel]);
   // Cascading funnel states (Prompt 47)
   const [funnelStoreId, setFunnelStoreId] = useState<string | null>(null);
   const [funnelModelName, setFunnelModelName] = useState<string | null>(null);
@@ -158,32 +199,34 @@ export const TargetTab: React.FC<TargetTabProps> = ({
     return stores.find((s) => s.id === funnelStoreId) || null;
   }, [scope, currentStore, funnelStoreId, stores]);
 
-  // Single-store target machine ranking computed once in parent TargetTab (Prompt 59)
+  // Single-store target machine ranking computed once in parent TargetTab (Prompt 59, 63)
   const singleStoreMachineRanking = useMemo(() => {
+    const storeToUse = currentStoreFiltered || currentStore;
     if (
       scope !== 'store' ||
-      !currentStore?.dailyRecords ||
-      currentStore.dailyRecords.length === 0 ||
+      !storeToUse?.dailyRecords ||
+      storeToUse.dailyRecords.length === 0 ||
       !effectiveTargetDate
     ) {
       return null;
     }
-    const hasMach = currentStore.dailyRecords.some((r) => r.machines && r.machines.length > 0);
+    const hasMach = storeToUse.dailyRecords.some((r) => r.machines && r.machines.length > 0);
     if (!hasMach) return null;
     return calculateTargetMachineRanking(
       effectiveTargetDate,
-      currentStore.dailyRecords,
-      currentStore.specialDayRules,
-      currentStore.customMachineRankingWeights,
+      storeToUse.dailyRecords,
+      currentStore?.specialDayRules,
+      currentStore?.customMachineRankingWeights,
       {
-        rankingWeights: currentStore.customRankingWeights,
-        includeReusedMachines: currentStore.includeReusedMachinesInStats ?? false,
-        aliasDictionary: currentStore.modelAliasDictionary,
+        rankingWeights: currentStore?.customRankingWeights,
+        includeReusedMachines: currentStore?.includeReusedMachinesInStats ?? false,
+        aliasDictionary: currentStore?.modelAliasDictionary,
       }
     );
   }, [
     scope,
     currentStore,
+    currentStoreFiltered,
     effectiveTargetDate,
   ]);
 
@@ -373,13 +416,17 @@ export const TargetTab: React.FC<TargetTabProps> = ({
           <button
             type="button"
             onClick={() => scrollToStep('target-step-3')}
-            className="px-2.5 sm:px-3 py-1.5 rounded-xl font-bold bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors whitespace-nowrap flex items-center gap-1.5 cursor-pointer shrink-0"
+            className={`px-2.5 sm:px-3 py-1.5 rounded-xl font-bold border transition-colors whitespace-nowrap flex items-center gap-1.5 cursor-pointer shrink-0 ${
+              isSingleModelSelected
+                ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+            }`}
             data-testid="nav-step-3"
           >
             <span className="w-4 h-4 rounded-full bg-slate-200 text-slate-700 text-[10px] font-black flex items-center justify-center">
               ③
             </span>
-            <span>どの機種を狙うか</span>
+            <span>{isSingleModelSelected ? `機種指定済 (${singleSelectedModelName})` : 'どの機種を狙うか'}</span>
           </button>
 
           <span className="text-slate-300 font-bold shrink-0 hidden sm:inline">›</span>
@@ -410,6 +457,22 @@ export const TargetTab: React.FC<TargetTabProps> = ({
             <span>当日のチェック</span>
           </button>
         </div>
+
+        {/* Model filter chip near step navigation (Prompt 64 Requirement 1) */}
+        {isModelFilterActive && activeFilterLabel && activeFilterLabel !== '全機種' && (
+          <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2" data-testid="target-nav-model-filter-bar">
+            <button
+              type="button"
+              onClick={handleFocusHeaderModelFilter}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 transition-colors cursor-pointer shadow-2xs"
+              data-testid="target-nav-model-filter-chip"
+              title="クリックでヘッダーの機種選択に移動"
+            >
+              <Cpu className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+              <span>対象機種: {activeFilterLabel}（絞り込み中）</span>
+            </button>
+          </div>
+        )}
 
         {/* Selected chips row (Prompt 47 Requirement 3) */}
         {(funnelStoreObj || funnelModelName) && (
@@ -509,6 +572,10 @@ export const TargetTab: React.FC<TargetTabProps> = ({
         islandConfig={currentStore?.islandConfig}
         storeId={currentStore?.id}
         onNavigateToChecklist={() => scrollToStep('target-step-5')}
+        isModelFilterActive={isModelFilterActive}
+        activeFilterLabel={activeFilterLabel}
+        onFocusModelFilter={handleFocusHeaderModelFilter}
+        selectedModelDaysCount={selectedModelDaysCount}
       />
 
       {/* Step ①: Unified Top Control Bar: Target Date & Scope Switcher */}
@@ -690,7 +757,7 @@ export const TargetTab: React.FC<TargetTabProps> = ({
             <TargetDateRanking
               targetDate={effectiveTargetDate}
               setTargetDate={onTargetDateChange}
-              dailyRecords={currentStore.dailyRecords || []}
+              dailyRecords={(currentStoreFiltered || currentStore).dailyRecords || []}
               perspective={perspective}
               unit={unit}
               rateLend={rateLend}
@@ -710,6 +777,13 @@ export const TargetTab: React.FC<TargetTabProps> = ({
               onSelectFunnelModel={setFunnelModelName}
               targetSection={targetSection}
               precomputedMachineRankingResult={singleStoreMachineRanking}
+              isModelFilterActive={isModelFilterActive}
+              activeFilterLabel={activeFilterLabel}
+              modelPreset={modelPreset}
+              selectedModelNames={selectedModelNames}
+              isSingleModelSelected={isSingleModelSelected}
+              singleSelectedModelName={singleSelectedModelName}
+              unfilteredDailyRecords={currentStore?.dailyRecords}
             />
           </div>
         ) : (
@@ -726,6 +800,10 @@ export const TargetTab: React.FC<TargetTabProps> = ({
             initialTargetDate={effectiveTargetDate}
             activeFilterLabel={activeFilterLabel}
             isModelFilterActive={isModelFilterActive}
+            modelPreset={modelPreset}
+            selectedModelNames={selectedModelNames}
+            isSingleModelSelected={isSingleModelSelected}
+            singleSelectedModelName={singleSelectedModelName}
             onSelectStore={onSelectStore}
             targetSection={targetSection}
             funnelStoreId={funnelStoreId}

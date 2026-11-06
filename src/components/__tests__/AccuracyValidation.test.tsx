@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import React from 'react';
 import { renderToString } from 'react-dom/server';
 import { AccuracyValidation } from '../AccuracyValidation';
+import { DailyRecord } from '../../data/types';
 import {
   generateSyntheticDailyRecords,
   createSyntheticMachineRecords,
@@ -101,5 +102,51 @@ describe('AccuracyValidation (Prompt 37 requirements)', () => {
 
     // Because machine data is present, the unimported alert banner should not be present
     expect(cleanHtml).not.toContain('台番別データ未取り込み');
+  });
+
+  it('Prompt 63: receives and validates records restricted to the selected model', () => {
+    // Synthetic records with 2 models: ModelA (10 machines) and ModelB (10 machines)
+    const mixedRecords = createSyntheticMachineRecords({
+      daysCount: 15,
+      machinesCount: 20,
+    });
+    // Give half to ModelA and half to ModelB
+    const multiModelRecords = mixedRecords.map((dr) => ({
+      ...dr,
+      machines: (dr.machines || []).map((m, idx) => ({
+        ...m,
+        modelName: idx < 10 ? 'マイジャグラーV' : 'アイムジャグラーEX',
+      })),
+      models: [
+        { modelName: 'マイジャグラーV', games: 30000, diff: 5000, machineCount: 10 },
+        { modelName: 'アイムジャグラーEX', games: 25000, diff: -2000, machineCount: 10 },
+      ],
+    }));
+
+    // Filter to only 'マイジャグラーV' (mirroring filteredStoresByModel logic in App.tsx)
+    const filteredToModelA = multiModelRecords.map((dr) => ({
+      ...dr,
+      machines: (dr.machines || []).filter((m) => m.modelName === 'マイジャグラーV'),
+      models: (dr.models || []).filter((m) => m.modelName === 'マイジャグラーV'),
+    }));
+
+    // Verify all machines and models in filtered data are strictly マイジャグラーV
+    for (const dr of filteredToModelA) {
+      expect(dr.machines?.every((m) => m.modelName === 'マイジャグラーV')).toBe(true);
+      expect(dr.models?.every((m) => m.modelName === 'マイジャグラーV')).toBe(true);
+      expect(dr.machines?.some((m) => m.modelName === 'アイムジャグラーEX')).toBe(false);
+    }
+
+    // Render AccuracyValidation with filtered records
+    const html = renderToString(
+      <AccuracyValidation
+        dailyRecords={filteredToModelA as unknown as DailyRecord[]}
+        storeName="テスト店舗（機種絞り込み後）"
+        onSaveStoreWeights={() => {}}
+      />
+    );
+    expect(html).toContain('テスト店舗（機種絞り込み後）');
+    // Ensure it rendered properly without crash
+    expect(html).toContain('検証結果の結論');
   });
 });

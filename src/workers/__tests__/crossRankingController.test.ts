@@ -4,7 +4,7 @@ import {
   computeStoresSignature,
   CrossRankingWorkerResponse,
 } from '../crossRankingController';
-import { StoreProfile } from '../../data/types';
+import { StoreProfile, DailyRecord } from '../../data/types';
 import {
   calculateCrossStoreRanking,
   scanCandidateDates,
@@ -210,5 +210,66 @@ describe('CrossRankingController', () => {
     expect(emitted.length).toBeGreaterThan(0);
     expect(emitted.some((r) => r.type === 'PROGRESS')).toBe(true);
     expect(emitted.some((r) => r.type === 'RESULT')).toBe(true);
+  });
+
+  it('Prompt 63: 2機種（各10台、日数・最終日の台数が同じ）の合成データで、機種Aと機種Bに切り替えたとき、computeStoresSignature が別の値になること', () => {
+    const dates = ['2025-01-01', '2025-01-02', '2025-01-03', '2025-01-04', '2025-01-05'];
+
+    // Store with 10 machines of Model A
+    const recordsModelA = dates.map((date) => ({
+      date,
+      dayOfWeek: '水',
+      totalDiff: 2000,
+      totalGames: 50000,
+      totalMachines: 10,
+      machines: Array.from({ length: 10 }, (_, i) => ({
+        machineNum: 101 + i,
+        modelName: '機種A',
+        games: 5000,
+        diff: 200,
+      })),
+    }));
+
+    // Store with 10 machines of Model B (same days count, same machine count on each day including last day)
+    const recordsModelB = dates.map((date) => ({
+      date,
+      dayOfWeek: '水',
+      totalDiff: 2000,
+      totalGames: 50000,
+      totalMachines: 10,
+      machines: Array.from({ length: 10 }, (_, i) => ({
+        machineNum: 101 + i,
+        modelName: '機種B',
+        games: 5000,
+        diff: 200,
+      })),
+    }));
+
+    const storeA: StoreProfile = {
+      ...sampleStore1,
+      id: 'store-1',
+      name: 'テスト店舗',
+      dailyRecords: recordsModelA as unknown as DailyRecord[],
+    };
+
+    const storeB: StoreProfile = {
+      ...sampleStore1,
+      id: 'store-1',
+      name: 'テスト店舗',
+      dailyRecords: recordsModelB as unknown as DailyRecord[],
+    };
+
+    const sigA = computeStoresSignature([storeA]);
+    const sigB = computeStoresSignature([storeB]);
+
+    // Data content hash differs between Model A and Model B despite having identical day counts and machine counts
+    expect(sigA).not.toBe(sigB);
+
+    // Also verify when modelFilter parameter is provided
+    const sigWithFilterA = computeStoresSignature([storeA], { preset: 'custom', selectedModelNames: ['機種A'] });
+    const sigWithFilterB = computeStoresSignature([storeA], { preset: 'custom', selectedModelNames: ['機種B'] });
+    expect(sigWithFilterA).not.toBe(sigWithFilterB);
+    expect(sigWithFilterA).toContain('__filter:custom:機種A');
+    expect(sigWithFilterB).toContain('__filter:custom:機種B');
   });
 });

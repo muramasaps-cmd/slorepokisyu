@@ -183,6 +183,9 @@ export interface CrossStoreRankingOptions {
   /** 30-4: 基準ゲーム数（既定値: 5000） */
   baseGames?: number;
   backtestResults?: Record<string, StoreBacktestEdgeSummary>;
+  /** Prompt 64: 機種フィルター情報 */
+  activeFilterLabel?: string;
+  isModelFilterActive?: boolean;
 }
 
 /**
@@ -688,10 +691,13 @@ export function calculateCrossStoreRanking(
     const hasModelData = records.some((r) => r.models && r.models.length > 0);
 
     if (!hasModelData && !hasMachineData) {
+      const reason = (options?.isModelFilterActive || options?.activeFilterLabel)
+        ? `選択した機種（${options?.activeFilterLabel || '指定機種'}）の台がありません`
+        : '機種別・台番別の明細データがありません（日別サマリーのみ）';
       excludedStores.push({
         storeId: store.id,
         storeName: store.name,
-        reason: '機種別・台番別の明細データがありません（日別サマリーのみ）',
+        reason,
       });
       continue;
     }
@@ -1225,12 +1231,16 @@ export function generateTargetListCopyText(
     uncertainty80?: UncertaintyInterval;
     reasons: string[];
     islandName?: string | null;
-  }>
+  }>,
+  targetModelLabel?: string
 ): string {
   const lines: string[] = [
     `【${storeName}】来店日: ${targetDate} 狙い台リスト`,
-    `----------------------------------------`,
   ];
+  if (targetModelLabel) {
+    lines.push(`対象機種: ${targetModelLabel}`);
+  }
+  lines.push(`----------------------------------------`);
 
   if (items.length === 0) {
     lines.push('対象の狙い台はありません。');
@@ -1271,7 +1281,8 @@ export function generateTargetListCsv(
     uncertainty80?: UncertaintyInterval;
     reasons: string[];
     islandName?: string | null;
-  }>
+  }>,
+  targetModelLabel?: string
 ): string {
   const header = [
     '店舗名',
@@ -1318,7 +1329,13 @@ export function generateTargetListCsv(
     ].join(',');
   });
 
-  return [header.join(','), ...rows].join('\r\n');
+  const resultLines: string[] = [];
+  if (targetModelLabel) {
+    resultLines.push(`# 対象機種: ${targetModelLabel}`);
+  }
+  resultLines.push(header.join(','));
+  resultLines.push(...rows);
+  return resultLines.join('\r\n');
 }
 
 /**

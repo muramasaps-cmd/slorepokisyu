@@ -540,4 +540,43 @@ describe('TargetRankingTable Component', () => {
       expect(html).not.toContain('data-testid="header-display-mode-toggle"');
     });
   });
+
+  describe('Prompt 62: 期待×信頼の散布図 (Target Ranking Table integration)', () => {
+    it('詳細表示モード時 (viewMode: detailed)、台番詳細セクションに「期待×信頼の散布図」が描画される', () => {
+      const html = clean(
+        renderToString(
+          <TargetRankingTable
+            rankingType="machine"
+            rows={sampleMachineRows}
+            viewMode="detailed"
+          />
+        )
+      );
+
+      // Detailed scatter plot section is rendered
+      expect(html).toContain('data-testid="detailed-scatter-section"');
+      expect(html).toContain('data-testid="target-expectation-scatter-card"');
+      expect(html).toContain('期待×信頼の散布図');
+      expect(html).toContain('data-testid="target-zone-rect"');
+    });
+
+    it('表示モード切替で「散布図」(displayType: scatter) を指定したとき、散布図が主画面として描画される', () => {
+      const html = clean(
+        renderToString(
+          <TargetRankingTable
+            rankingType="machine"
+            rows={sampleMachineRows}
+            displayType="scatter"
+          />
+        )
+      );
+
+      // Scatter chart is rendered
+      expect(html).toContain('data-testid="target-expectation-scatter-card"');
+      expect(html).toContain('data-testid="header-display-mode-scatter-btn"');
+      // Table is not rendered
+      expect(html).not.toContain('data-testid="desktop-table-container"');
+    });
+  });
 });
+

@@ -1099,6 +1099,12 @@ export default function App() {
     });
   }, [uniqueStores, isModelFilterActive, modelPreset, selectedModelNames]);
 
+  // Current store filtered by active model selection (matching currentStore ID) (Prompt 63)
+  const currentStoreFiltered: StoreProfile | null = useMemo(() => {
+    if (!currentStore) return null;
+    return filteredStoresByModel.find((s) => s.id === currentStore.id) || currentStore;
+  }, [filteredStoresByModel, currentStore]);
+
   // Selected stores for analysis tab (undefined when scope === 'store' so single-store mode is retained)
   const analysisTargetStores = useMemo(() => {
     if (analysisScope === 'store' || uniqueStores.length <= 1) {
@@ -1620,7 +1626,7 @@ export default function App() {
             </div>
 
             {/* 機種絞り込み Segmented Control */}
-            <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 p-0.5 rounded-lg shrink-0 flex-wrap">
+            <div id="header-model-filter" className="flex items-center gap-1 bg-slate-50 border border-slate-200 p-0.5 rounded-lg shrink-0 flex-wrap">
               <div className="flex items-center gap-1 px-1.5 text-xs text-slate-600 font-bold whitespace-nowrap">
                 <Cpu className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                 <span>機種:</span>
@@ -2033,6 +2039,7 @@ export default function App() {
             scope={targetScope}
             onScopeChange={setTargetScope}
             currentStore={currentStore}
+            currentStoreFiltered={currentStoreFiltered}
             stores={uniqueStores}
             latestDataDate={latestDataDate}
             perspective={perspective}
@@ -2042,6 +2049,8 @@ export default function App() {
             filteredStoresByModel={filteredStoresByModel}
             activeFilterLabel={activeFilterLabel}
             isModelFilterActive={isModelFilterActive}
+            modelPreset={modelPreset}
+            selectedModelNames={selectedModelNames}
             onSelectStore={(id) => handleSelectStore(id)}
             onNavigateToValidation={() => handleNavigatePurpose('validation')}
             onOpenStoreManager={() => handleOpenStoreManager('list')}
@@ -2212,7 +2221,7 @@ export default function App() {
         {!isHome && activeTab === 'validation' && (
           <div className="space-y-6 animate-in fade-in duration-150">
             <AccuracyValidation
-              dailyRecords={currentStore.dailyRecords || []}
+              dailyRecords={currentStoreFiltered?.dailyRecords || currentStore.dailyRecords || []}
               specialDayRules={currentStore.specialDayRules}
               oldEventDays={currentStore.oldEventDays}
               storeName={currentStore.name}

@@ -72,6 +72,10 @@ interface CrossStoreTargetProps {
   onSelectStore?: (storeId: string) => void;
   activeFilterLabel?: string;
   isModelFilterActive?: boolean;
+  modelPreset?: string;
+  selectedModelNames?: string[];
+  isSingleModelSelected?: boolean;
+  singleSelectedModelName?: string | null;
   targetSection?: string;
   funnelStoreId?: string | null;
   onSelectFunnelStore?: (storeId: string | null) => void;
@@ -86,12 +90,29 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
   onTargetDateChange,
   activeFilterLabel,
   isModelFilterActive,
+  modelPreset,
+  selectedModelNames,
+  isSingleModelSelected: propIsSingleModelSelected,
+  singleSelectedModelName: propSingleSelectedModelName,
   targetSection,
   funnelStoreId,
   onSelectFunnelStore,
   funnelModelName,
   onSelectFunnelModel,
 }) => {
+  const isSingleModelSelected =
+    propIsSingleModelSelected !== undefined
+      ? propIsSingleModelSelected
+      : (modelPreset === 'custom' || !['smart_slot', 'a_type', 'juggler', 'all'].includes(modelPreset || '')) &&
+        Array.isArray(selectedModelNames) &&
+        selectedModelNames.length === 1;
+
+  const singleSelectedModelName =
+    propSingleSelectedModelName !== undefined
+      ? propSingleSelectedModelName
+      : isSingleModelSelected && selectedModelNames
+      ? selectedModelNames[0]
+      : null;
   // Read initial values from URL hash if available (e.g. #cross?crossDate=2026-05-17&crossStores=store1,store2)
   const getHashParams = () => {
     try {
@@ -734,7 +755,10 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
   // Post stores to worker only when data signature changes
   const sendStoresIfNeeded = useCallback(() => {
     if (!workerRef.current || workerUnavailable) return;
-    const currentSig = computeStoresSignature(stores);
+    const currentSig = computeStoresSignature(stores, {
+      preset: modelPreset,
+      selectedModelNames,
+    });
     if (lastSentSignatureRef.current !== currentSig) {
       workerRef.current.postMessage({
         type: 'SET_STORES',
@@ -743,7 +767,7 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
       } satisfies CrossRankingWorkerRequest);
       lastSentSignatureRef.current = currentSig;
     }
-  }, [stores, workerUnavailable]);
+  }, [stores, workerUnavailable, modelPreset, selectedModelNames]);
 
   // Candidate Date Scan state (Prompt 32: 今後14日間・日数は設定可・Worker計算と進捗・キャッシュ)
   const [scanStartDate, setScanStartDate] = useState<string>(() => targetDate);
@@ -2457,6 +2481,9 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                     machineNum: mach.machineNum,
                     islandName: mach.islandName || undefined,
                     confidence: mach.confidence,
+                    reliability: mach.reliability ?? null,
+                    reliabilityRate: mach.reliabilityRate,
+                    avgGames: mach.avgGames,
                     evidenceDays: mach.evidenceDays,
                     expectedDiff: mach.shrunkDiff,
                     expectedYen: mach.expectedYenProfit,

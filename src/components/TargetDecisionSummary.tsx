@@ -85,6 +85,11 @@ export interface TargetDecisionSummaryProps {
   islandConfig?: string;
   islandDefinitions?: IslandDefinition[];
   storeId?: string;
+  // Prompt 64: 機種フィルター情報
+  isModelFilterActive?: boolean;
+  activeFilterLabel?: string;
+  onFocusModelFilter?: () => void;
+  selectedModelDaysCount?: number;
 }
 
 const getTagBadgeClass = (color: TagColor): string => {
@@ -247,6 +252,10 @@ export const TargetDecisionSummary: React.FC<TargetDecisionSummaryProps> = ({
   islandConfig,
   islandDefinitions: propIslandDefinitions,
   storeId,
+  isModelFilterActive,
+  activeFilterLabel,
+  onFocusModelFilter,
+  selectedModelDaysCount,
 }) => {
   // Relax condition state (Prompt 61 Requirement 3: 信頼度の低い台も含めて表示)
   const [includeLowConfidence, setIncludeLowConfidence] = useState<boolean>(false);
@@ -373,6 +382,28 @@ export const TargetDecisionSummary: React.FC<TargetDecisionSummaryProps> = ({
                   {unavailableCount}台除外中
                 </span>
               )}
+              {isModelFilterActive && activeFilterLabel && activeFilterLabel !== '全機種' && (
+                <button
+                  type="button"
+                  onClick={
+                    onFocusModelFilter ||
+                    (() => {
+                      const el = document.getElementById('header-model-filter');
+                      if (el) {
+                        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        const btn = el.querySelector('button');
+                        if (btn) (btn as HTMLButtonElement).focus();
+                      }
+                    })
+                  }
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-2xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 transition-colors cursor-pointer shadow-2xs"
+                  data-testid="decision-model-filter-chip"
+                  title="クリックでヘッダーの機種選択に移動"
+                >
+                  <Cpu className="w-3 h-3 text-amber-600 shrink-0" />
+                  <span>対象機種: {activeFilterLabel}（絞り込み中）</span>
+                </button>
+              )}
             </div>
             <p className="text-2xs text-slate-500 mt-0.5">
               過去の同条件実績・縮小推定モデルに基づく第1〜第3候補台（各数値は50枚単位の<strong className="text-slate-700 font-bold">目安</strong>です）
@@ -406,6 +437,17 @@ export const TargetDecisionSummary: React.FC<TargetDecisionSummaryProps> = ({
           )}
         </div>
       </div>
+
+      {/* 選択機種のデータが少ない（30日未満）ときの警告 (Prompt 64 Requirement 4) */}
+      {isModelFilterActive && selectedModelDaysCount !== undefined && selectedModelDaysCount < 30 && (
+        <div
+          className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-bold flex items-center gap-2"
+          data-testid="decision-low-data-warning"
+        >
+          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+          <span>選択機種のデータが少ないため、参考値です</span>
+        </div>
+      )}
 
       {/* 見送り判定バナー (目立つ色で表示) */}
       {!allFilled && isSkipVerdict && (

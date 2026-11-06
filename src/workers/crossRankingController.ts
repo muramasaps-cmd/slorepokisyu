@@ -1,4 +1,5 @@
 import { StoreProfile } from '../data/types';
+import { hashDailyRecordForScan } from '../utils/crossStoreScanCache';
 import {
   calculateCrossStoreRanking,
   CrossStoreRankingOptions,
@@ -6,6 +7,11 @@ import {
   CandidateDateScanResult,
   scanCandidateDates,
 } from '../utils/crossStoreRanking';
+
+export interface ModelFilterSignatureParams {
+  preset?: string;
+  selectedModelNames?: string[];
+}
 
 export type CrossRankingWorkerRequest =
   | {
@@ -44,25 +50,50 @@ export type CrossRankingWorkerResponse =
   | { type: 'ERROR'; requestId?: number; error: string };
 
 /**
- * Computes a lightweight deterministic signature representing stores data state.
- * Captures store IDs, record counts, date boundaries, machine counts, custom ranking weights, and special day rules.
+ * Computes a deterministic signature representing stores data state and active model filters.
+ * Captures store IDs, record counts, date boundaries, content hash across daily records
+ * (including machine numbers, model names, games, diffs), custom ranking weights, special day rules,
+ * and active model filter preset/names.
  */
-export function computeStoresSignature(stores: StoreProfile[]): string {
+export function computeStoresSignature(
+  stores: StoreProfile[],
+  modelFilter?: ModelFilterSignatureParams
+): string {
   if (!stores || stores.length === 0) return 'empty';
-  return stores
+
+  let filterSig = '';
+  if (modelFilter) {
+    const preset = modelFilter.preset || 'all';
+    const models = (modelFilter.selectedModelNames || []).slice().sort().join(',');
+    filterSig = `__filter:${preset}:${models}`;
+  }
+
+  const storesSig = stores
     .map((s) => {
       const records = s.dailyRecords || [];
       const count = records.length;
       const firstDate = count > 0 ? records[0].date : '';
       const lastDate = count > 0 ? records[count - 1].date : '';
-      const machCount = count > 0 ? (records[count - 1].machines?.length ?? 0) : 0;
+
+      // Hash content of all daily records using hashDailyRecordForScan
+      let dataHash1 = 0x811c9dc5;
+      let dataHash2 = 0x9dc5811c;
+      for (let i = 0; i < records.length; i++) {
+        const { h1, h2 } = hashDailyRecordForScan(records[i]);
+        dataHash1 = ((dataHash1 ^ h1) * 0x01000193) >>> 0;
+        dataHash2 = ((dataHash2 ^ h2) * 0x01000193) >>> 0;
+      }
+      const dataHash = `${dataHash1.toString(16)}_${dataHash2.toString(16)}`;
+
       const customWeightsSig = s.customMachineRankingWeights
         ? JSON.stringify(s.customMachineRankingWeights)
         : '';
       const specialDaysSig = s.specialDayRules ? JSON.stringify(s.specialDayRules) : '';
-      return `${s.id}:${count}:${firstDate}:${lastDate}:${machCount}:${customWeightsSig}:${specialDaysSig}`;
+      return `${s.id}:${count}:${firstDate}:${lastDate}:${dataHash}:${customWeightsSig}:${specialDaysSig}`;
     })
     .join('|');
+
+  return `${storesSig}${filterSig}`;
 }
 
 /**

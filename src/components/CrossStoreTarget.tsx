@@ -2440,6 +2440,8 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
               <TargetRankingTable
                 rankingType="machine"
                 showStoreColumn={true}
+                stores={stores.map((s) => ({ id: s.id, name: s.name, islandConfig: s.islandConfig }))}
+                targetDate={targetDate}
                 rows={step4Machines.map((mach) => {
                   const edge = edgeCache[mach.storeId];
                   const isTesting = testingStoreId === mach.storeId;

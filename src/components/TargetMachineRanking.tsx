@@ -630,6 +630,10 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
       <TargetRankingTable
         rankingType="machine"
         showStoreColumn={false}
+        islandConfig={islandConfig}
+        islandDefinitions={islandDefinitions}
+        storeId={storeId}
+        targetDate={targetDate}
         rows={filteredRankings.map((mach) => {
           const islName = getMachineIsland(mach.machineNum, islandDefinitions);
           const expectedDiff =

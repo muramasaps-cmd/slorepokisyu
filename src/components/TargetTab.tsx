@@ -7,6 +7,10 @@ import { Target, Building2, Sparkles, Calendar, Flame, X, Cpu } from 'lucide-rea
 import { isDateSpecialDay } from '../utils/dataEngine';
 import { isJapaneseHoliday } from '../utils/holidayUtils';
 import { calculateTargetMachineRanking } from '../utils/targetMachineRanking';
+import { TargetDecisionSummary, TargetDecisionCandidate } from './TargetDecisionSummary';
+import { calculateCrossStoreRanking, loadTargetCheckStatus, saveTargetCheckStatus, MachineCheckStatus } from '../utils/crossStoreRanking';
+import { parseIslandConfig, getMachineIsland } from '../utils/islandUtils';
+import { formatMachineReasons } from './TargetMachineRanking';
 
 export type TargetScope = 'store' | 'all';
 
@@ -183,6 +187,136 @@ export const TargetTab: React.FC<TargetTabProps> = ({
     effectiveTargetDate,
   ]);
 
+  // All candidates for TargetDecisionSummary with alternatives & roll-up support (Prompt 61)
+  const storeTopCandidates = useMemo<TargetDecisionCandidate[]>(() => {
+    if (!singleStoreMachineRanking?.rankings) return [];
+    const islandDefs = parseIslandConfig(currentStore?.islandConfig);
+
+    return singleStoreMachineRanking.rankings.map((m) => {
+      const islName = getMachineIsland(m.machineNum, islandDefs);
+      return {
+        rank: m.rank,
+        originalRank: m.rank,
+        machineNum: m.machineNum,
+        modelName: m.modelName,
+        storeName: currentStore?.name,
+        storeId: currentStore?.id,
+        confidence: m.confidence,
+        expectedDiff: m.stats.expectedDiffStd ?? m.stats.shrunkDiff,
+        islandName: islName || undefined,
+        interval80: m.interval80,
+        uncertainty80: m.stats.standardError
+          ? {
+              min: Math.round((m.stats.expectedDiffStd ?? m.stats.shrunkDiff) - 1.28 * m.stats.standardError),
+              max: Math.round((m.stats.expectedDiffStd ?? m.stats.shrunkDiff) + 1.28 * m.stats.standardError),
+            }
+          : undefined,
+        evidenceDays: m.evidenceDays,
+        contributions: m.contributions,
+        isTailMatch: m.stats.isTailMatch,
+        isZoro: m.stats.isZoro,
+        stats: m.stats,
+        reasons: formatMachineReasons(m),
+      };
+    });
+  }, [singleStoreMachineRanking, currentStore]);
+
+  const crossStoreTopCandidates = useMemo<TargetDecisionCandidate[]>(() => {
+    if (scope !== 'all' || !filteredStoresByModel || filteredStoresByModel.length === 0 || !effectiveTargetDate) {
+      return [];
+    }
+    try {
+      const res = calculateCrossStoreRanking(filteredStoresByModel, effectiveTargetDate, {
+        includeLowConfidence: true,
+      });
+      if (!res || !res.machineRankings) return [];
+      return res.machineRankings.map((m) => ({
+        rank: m.rank,
+        originalRank: m.rank,
+        machineNum: m.machineNum,
+        modelName: m.modelName,
+        storeName: m.storeName,
+        storeId: m.storeId,
+        confidence: m.confidence,
+        expectedDiff: m.expectedDiffCoins ?? m.shrunkDiff ?? 0,
+        interval80: m.interval80,
+        uncertainty80: m.uncertainty80,
+        evidenceDays: m.evidenceDays,
+        islandName: m.islandName || undefined,
+        reasons: m.reasons,
+      }));
+    } catch (err) {
+      console.warn('Failed to calculate cross store ranking for summary:', err);
+      return [];
+    }
+  }, [scope, filteredStoresByModel, effectiveTargetDate]);
+
+  const decisionCandidates = scope === 'store' ? storeTopCandidates : crossStoreTopCandidates;
+  const decisionDayMean = useMemo(() => {
+    if (scope === 'store') {
+      if (!singleStoreMachineRanking?.rankings || singleStoreMachineRanking.rankings.length === 0) return 0;
+      const sum = singleStoreMachineRanking.rankings.reduce(
+        (acc, m) => acc + (m.stats.expectedDiffStd ?? m.stats.shrunkDiff ?? 0),
+        0
+      );
+      return sum / singleStoreMachineRanking.rankings.length;
+    } else {
+      if (crossStoreTopCandidates.length === 0) return 0;
+      const sum = crossStoreTopCandidates.reduce((acc, m) => acc + (m.expectedDiff ?? 0), 0);
+      return sum / crossStoreTopCandidates.length;
+    }
+  }, [scope, singleStoreMachineRanking, crossStoreTopCandidates]);
+
+  const decisionSigma2 = scope === 'store' ? (singleStoreMachineRanking?.shrinkageDiagnostics?.sigma2 ?? 640000) : 640000;
+  const decisionRecommendedModel = decisionCandidates.length > 0 ? decisionCandidates[0].modelName : undefined;
+
+  // Track checked machines and checkStatus for Today's Conclusion checklist & roll-up
+  const [checkedState, setCheckedState] = useState<Record<number, MachineCheckStatus>>(() => {
+    const sId = currentStore?.id || 'single-store';
+    return loadTargetCheckStatus(effectiveTargetDate, sId);
+  });
+
+  const [checkedMachineNums, setCheckedMachineNums] = useState<Set<number>>(() => {
+    const sId = currentStore?.id || 'single-store';
+    const checked = loadTargetCheckStatus(effectiveTargetDate, sId);
+    return new Set(Object.keys(checked).map(Number));
+  });
+
+  useEffect(() => {
+    const sId = currentStore?.id || 'single-store';
+    const checked = loadTargetCheckStatus(effectiveTargetDate, sId);
+    setCheckedState(checked);
+    setCheckedMachineNums(new Set(Object.keys(checked).map(Number)));
+  }, [effectiveTargetDate, currentStore?.id]);
+
+  const handleToggleDecisionChecklist = (candidate: TargetDecisionCandidate) => {
+    const sId = candidate.storeId || currentStore?.id || 'single-store';
+    const curr = loadTargetCheckStatus(effectiveTargetDate, sId);
+    const next = { ...curr };
+    if (next[candidate.machineNum]) {
+      delete next[candidate.machineNum];
+    } else {
+      next[candidate.machineNum] = 'played';
+    }
+    saveTargetCheckStatus(effectiveTargetDate, sId, next);
+    setCheckedState(next);
+    setCheckedMachineNums(new Set(Object.keys(next).map(Number)));
+  };
+
+  const handleToggleCheckStatus = (machineNum: number, status: MachineCheckStatus) => {
+    const sId = currentStore?.id || 'single-store';
+    const curr = loadTargetCheckStatus(effectiveTargetDate, sId);
+    const next = { ...curr };
+    if (next[machineNum] === status) {
+      delete next[machineNum];
+    } else {
+      next[machineNum] = status;
+    }
+    saveTargetCheckStatus(effectiveTargetDate, sId, next);
+    setCheckedState(next);
+    setCheckedMachineNums(new Set(Object.keys(next).map(Number)));
+  };
+
   return (
     <div className="space-y-4 animate-in fade-in duration-150" data-testid="target-tab">
       {/* Sticky Step Navigation Bar (①〜⑤) & Funnel Chips (Prompt 47) */}
@@ -358,6 +492,24 @@ export const TargetTab: React.FC<TargetTabProps> = ({
           </div>
         )}
       </div>
+
+      {/* 「今日の結論」カード (Prompt 58 & 61: 狙い画面の最上部、代替候補・繰り上がり対応) */}
+      <TargetDecisionSummary
+        targetDate={effectiveTargetDate}
+        scope={scope}
+        storeName={currentStore?.name}
+        candidates={decisionCandidates}
+        dayMeanExpectedDiff={decisionDayMean}
+        sigma2={decisionSigma2}
+        recommendedModel={decisionRecommendedModel}
+        onAddToChecklist={handleToggleDecisionChecklist}
+        checkedMachineNums={checkedMachineNums}
+        checkedState={checkedState}
+        onToggleCheck={handleToggleCheckStatus}
+        islandConfig={currentStore?.islandConfig}
+        storeId={currentStore?.id}
+        onNavigateToChecklist={() => scrollToStep('target-step-5')}
+      />
 
       {/* Step ①: Unified Top Control Bar: Target Date & Scope Switcher */}
       <div id="target-step-1" data-testid="target-step-1-card" className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-3.5 scroll-mt-28">

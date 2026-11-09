@@ -52,6 +52,8 @@ interface ModelDeepAnalysisProps {
   globalModelPreset?: ModelPresetMode;
   globalSelectedModelNames?: string[];
   activeFilterLabel?: string;
+  isModelFilterActive?: boolean;
+  onFocusModelFilter?: () => void;
   onSelectPreset?: (preset: ModelPresetMode) => void;
   onOpenModelModal?: () => void;
   onToggleModel?: (modelName: string) => void;
@@ -73,6 +75,8 @@ export const ModelDeepAnalysis: React.FC<ModelDeepAnalysisProps> = ({
   globalModelPreset,
   globalSelectedModelNames,
   activeFilterLabel,
+  isModelFilterActive,
+  onFocusModelFilter,
   onSelectPreset,
   onOpenModelModal,
   onToggleModel,
@@ -382,12 +386,36 @@ export const ModelDeepAnalysis: React.FC<ModelDeepAnalysisProps> = ({
               <Cpu className="w-5 h-5" />
             </div>
             <div className="min-w-0 flex-1">
-              <h2 className="text-base sm:text-lg font-black tracking-tight text-white flex items-center gap-2 min-w-0 break-normal">
-                <span>店舗分析深堀り: 機種別・台番号末尾データ</span>
-                <span className="text-xs bg-amber-400 text-slate-950 px-2 py-0.5 rounded font-extrabold shrink-0">
-                  {dailyRecords.length}日分集計
-                </span>
-              </h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-base sm:text-lg font-black tracking-tight text-white flex items-center gap-2 min-w-0 break-normal">
+                  <span>店舗分析深堀り: 機種別・台番号末尾データ</span>
+                  <span className="text-xs bg-amber-400 text-slate-950 px-2 py-0.5 rounded font-extrabold shrink-0">
+                    {dailyRecords.length}日分集計
+                  </span>
+                </h2>
+                {Boolean(isModelFilterActive || (activeFilterLabel && activeFilterLabel !== '全機種')) && activeFilterLabel && activeFilterLabel !== '全機種' && (
+                  <button
+                    type="button"
+                    onClick={
+                      onFocusModelFilter ||
+                      (() => {
+                        const el = document.getElementById('header-model-filter');
+                        if (el) {
+                          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                          const btn = el.querySelector('button');
+                          if (btn) (btn as HTMLButtonElement).focus();
+                        }
+                      })
+                    }
+                    className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-xs font-bold bg-amber-400 hover:bg-amber-300 text-slate-950 transition-colors cursor-pointer shadow-2xs shrink-0"
+                    data-testid="model-analysis-filter-chip"
+                    title="クリックでヘッダーの機種選択に移動"
+                  >
+                    <Cpu className="w-3.5 h-3.5 text-slate-950 shrink-0" />
+                    <span>対象機種: {activeFilterLabel}（絞り込み中）</span>
+                  </button>
+                )}
+              </div>
               <p className="text-xs text-slate-300 mt-0.5">
                 日別出玉レポートから全{aggregatedModels.length}機種および台番号末尾(0〜9・ゾロ目)を徹底解析
               </p>

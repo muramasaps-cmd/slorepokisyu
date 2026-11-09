@@ -48,6 +48,7 @@ import {
   RotateCcw,
   Check,
   CheckSquare,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface TargetDateRankingProps {
@@ -1158,6 +1159,9 @@ export const TargetDateRanking: React.FC<TargetDateRankingProps> = ({
               featureIndex={sharedFeatureIndex}
               funnelModelName={funnelModelName}
               precomputedRankingResult={machineRankingResult}
+              isModelFilterActive={isModelFilterActive}
+              activeFilterLabel={activeFilterLabel}
+              selectedModelNames={selectedModelNames}
             />
           </div>
         )}

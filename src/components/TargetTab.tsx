@@ -465,7 +465,7 @@ export const TargetTab: React.FC<TargetTabProps> = ({
               type="button"
               onClick={handleFocusHeaderModelFilter}
               className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 transition-colors cursor-pointer shadow-2xs"
-              data-testid="target-nav-model-filter-chip"
+              data-testid="target-model-filter-chip"
               title="クリックでヘッダーの機種選択に移動"
             >
               <Cpu className="w-3.5 h-3.5 text-amber-600 shrink-0" />

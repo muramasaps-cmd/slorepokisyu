@@ -1070,6 +1070,16 @@ export default function App() {
     modelPreset !== 'all' || selectedModelNames.length > 0
   );
 
+  // Helper to focus header model filter (Prompt 64/65)
+  const handleFocusHeaderModelFilter = () => {
+    const el = document.getElementById('header-model-filter');
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const btn = el.querySelector('button');
+      if (btn) (btn as HTMLButtonElement).focus();
+    }
+  };
+
   // Filter all unique stores and their daily records by the selected model criteria
   // When a model filter is active in the header, each store's daily records, machine counts,
   // and machine data are filtered exclusively to the selected model(s)
@@ -1906,6 +1916,22 @@ export default function App() {
         {/* TAB 1: 概要 (KPI、月別推移[グラフ/表]、総合ヒートマップ) */}
         {!isHome && activeTab === 'overview' && (
           <div className="space-y-6 animate-in fade-in duration-150">
+            {/* 対象機種チップ (Prompt 65 Requirement 4: 全機種時は非表示、クリックでヘッダーへ) */}
+            {isModelFilterActive && activeFilterLabel && activeFilterLabel !== '全機種' && (
+              <div className="flex items-center justify-between gap-2" data-testid="overview-model-filter-bar">
+                <button
+                  type="button"
+                  onClick={handleFocusHeaderModelFilter}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 transition-colors cursor-pointer shadow-2xs"
+                  data-testid="overview-model-filter-chip"
+                  title="クリックでヘッダーの機種選択に移動"
+                >
+                  <Cpu className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                  <span>対象機種: {activeFilterLabel}（絞り込み中）</span>
+                </button>
+              </div>
+            )}
+
             {/* KPI Cards: Full Width 4-Card Responsive Grid */}
             <div className="w-full">
               <KpiCards
@@ -2054,6 +2080,7 @@ export default function App() {
             onSelectStore={(id) => handleSelectStore(id)}
             onNavigateToValidation={() => handleNavigatePurpose('validation')}
             onOpenStoreManager={() => handleOpenStoreManager('list')}
+            onFocusModelFilter={handleFocusHeaderModelFilter}
             targetSection={activeSection}
           />
         )}
@@ -2076,35 +2103,51 @@ export default function App() {
               commonPeriod={analysisCommonPeriod}
             />
 
-            {/* Subtabs Switcher for 分析 */}
-            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200/80 shadow-2xs self-start text-xs sm:text-sm">
-              {[
-                { id: 'models' as const, label: '機種', icon: Cpu, desc: '機種別深掘り・台番号末尾詳細分析' },
-                { id: 'conditions' as const, label: '条件別', icon: Calendar, desc: '曜日・祝日・のつく日・ゾロ目・特日・通常日' },
-                { id: 'high_payout' as const, label: '高出率台', icon: Flame, desc: '出率が高い台の特徴・投入傾向分析' },
-                ...(uniqueStores.length > 1
-                  ? [{ id: 'compare' as const, label: '店舗比較', icon: Building2, desc: '複数ホールの出玉実績・指標の横断比較' }]
-                  : []),
-              ].map((sub) => {
-                const SubIcon = sub.icon;
-                const isSubActive = analysisSubTab === sub.id;
-                return (
-                  <button
-                    key={sub.id}
-                    type="button"
-                    onClick={() => handleNavigatePurpose('analysis', { subTab: sub.id })}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap ${
-                      isSubActive
-                        ? 'bg-white text-slate-900 shadow-2xs'
-                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-                    }`}
-                    title={sub.desc}
-                  >
-                    <SubIcon className={`w-3.5 h-3.5 shrink-0 ${isSubActive ? 'text-amber-500' : 'text-slate-400'}`} />
-                    <span>{sub.label}</span>
-                  </button>
-                );
-              })}
+            {/* Subtabs Switcher for 分析 & Model Filter Chip */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200/80 shadow-2xs self-start text-xs sm:text-sm">
+                {[
+                  { id: 'models' as const, label: '機種', icon: Cpu, desc: '機種別深掘り・台番号末尾詳細分析' },
+                  { id: 'conditions' as const, label: '条件別', icon: Calendar, desc: '曜日・祝日・のつく日・ゾロ目・特日・通常日' },
+                  { id: 'high_payout' as const, label: '高出率台', icon: Flame, desc: '出率が高い台の特徴・投入傾向分析' },
+                  ...(uniqueStores.length > 1
+                    ? [{ id: 'compare' as const, label: '店舗比較', icon: Building2, desc: '複数ホールの出玉実績・指標の横断比較' }]
+                    : []),
+                ].map((sub) => {
+                  const SubIcon = sub.icon;
+                  const isSubActive = analysisSubTab === sub.id;
+                  return (
+                    <button
+                      key={sub.id}
+                      type="button"
+                      onClick={() => handleNavigatePurpose('analysis', { subTab: sub.id })}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer whitespace-nowrap ${
+                        isSubActive
+                          ? 'bg-white text-slate-900 shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                      }`}
+                      title={sub.desc}
+                    >
+                      <SubIcon className={`w-3.5 h-3.5 shrink-0 ${isSubActive ? 'text-amber-500' : 'text-slate-400'}`} />
+                      <span>{sub.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* 対象機種チップ (Prompt 65 Requirement 4: 分析画面) */}
+              {isModelFilterActive && activeFilterLabel && activeFilterLabel !== '全機種' && (
+                <button
+                  type="button"
+                  onClick={handleFocusHeaderModelFilter}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 transition-colors cursor-pointer shadow-2xs self-start"
+                  data-testid="analysis-model-filter-chip"
+                  title="クリックでヘッダーの機種選択に移動"
+                >
+                  <Cpu className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                  <span>対象機種: {activeFilterLabel}（絞り込み中）</span>
+                </button>
+              )}
             </div>
 
             {/* Subtab 1: 機種 */}
@@ -2143,6 +2186,8 @@ export default function App() {
                   globalModelPreset={modelPreset}
                   globalSelectedModelNames={selectedModelNames}
                   activeFilterLabel={activeFilterLabel}
+                  isModelFilterActive={isModelFilterActive}
+                  onFocusModelFilter={handleFocusHeaderModelFilter}
                   onSelectPreset={handleSelectModelPreset}
                   onOpenModelModal={() => setIsMultiSelectModalOpen(true)}
                   onToggleModel={handleToggleModelInSelection}
@@ -2172,6 +2217,7 @@ export default function App() {
                 }
                 activeFilterLabel={activeFilterLabel}
                 isModelFilterActive={isModelFilterActive}
+                onFocusModelFilter={handleFocusHeaderModelFilter}
               />
             )}
 
@@ -2200,6 +2246,9 @@ export default function App() {
                   oldEventDays={currentStore?.oldEventDays}
                   specialDayRules={currentStore?.specialDayRules}
                   onNavigateToConditions={handleNavigateToConditions}
+                  activeFilterLabel={activeFilterLabel}
+                  isModelFilterActive={isModelFilterActive}
+                  onFocusModelFilter={handleFocusHeaderModelFilter}
                 />
               )
             )}
@@ -2210,6 +2259,7 @@ export default function App() {
                 stores={filteredStoresByModel}
                 activeFilterLabel={activeFilterLabel}
                 isModelFilterActive={isModelFilterActive}
+                onFocusModelFilter={handleFocusHeaderModelFilter}
                 onSelectStore={(id) => handleSelectStore(id)}
                 onNavigateToConditions={handleNavigateToConditions}
               />
@@ -2229,6 +2279,9 @@ export default function App() {
               onSaveStoreWeights={handleSaveStoreWeights}
               currentMachineWeights={currentStore.customMachineRankingWeights}
               onSaveStoreMachineWeights={handleSaveStoreMachineWeights}
+              isModelFilterActive={isModelFilterActive}
+              activeFilterLabel={activeFilterLabel}
+              onFocusModelFilter={handleFocusHeaderModelFilter}
             />
           </div>
         )}

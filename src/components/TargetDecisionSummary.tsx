@@ -445,7 +445,7 @@ export const TargetDecisionSummary: React.FC<TargetDecisionSummaryProps> = ({
           data-testid="decision-low-data-warning"
         >
           <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-          <span>選択機種のデータが少ないため、参考値です</span>
+          <span>選択機種のデータが少ないため、参考値です（実績日数: {selectedModelDaysCount}日分 &lt; 30日）</span>
         </div>
       )}
 

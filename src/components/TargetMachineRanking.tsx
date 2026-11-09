@@ -56,6 +56,9 @@ interface TargetMachineRankingProps {
   featureIndex?: FeatureIndex;
   funnelModelName?: string | null;
   precomputedRankingResult?: TargetMachineRankingResult | null;
+  isModelFilterActive?: boolean;
+  activeFilterLabel?: string;
+  selectedModelNames?: string[];
 }
 
 /**
@@ -129,6 +132,9 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
   featureIndex,
   funnelModelName,
   precomputedRankingResult,
+  isModelFilterActive,
+  activeFilterLabel,
+  selectedModelNames,
 }) => {
   const [selectedModel, setSelectedModel] = useState<string>(() => funnelModelName || 'all');
 
@@ -634,6 +640,9 @@ export const TargetMachineRanking: React.FC<TargetMachineRankingProps> = ({
         islandDefinitions={islandDefinitions}
         storeId={storeId}
         targetDate={targetDate}
+        isModelFilterActive={isModelFilterActive}
+        activeFilterLabel={activeFilterLabel}
+        selectedModelNames={selectedModelNames}
         rows={filteredRankings.map((mach) => {
           const islName = getMachineIsland(mach.machineNum, islandDefinitions);
           const expectedDiff =

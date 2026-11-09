@@ -37,6 +37,7 @@ import {
   XCircle,
   AlertTriangle,
 } from 'lucide-react';
+import { ConfirmModal } from './ConfirmModal';
 
 interface AccuracyValidationProps {
   dailyRecords: DailyRecord[];
@@ -47,6 +48,9 @@ interface AccuracyValidationProps {
   onSaveStoreWeights: (weights: RankingWeights | undefined) => void;
   currentMachineWeights?: MachineRankingWeights;
   onSaveStoreMachineWeights?: (weights: MachineRankingWeights | undefined) => void;
+  isModelFilterActive?: boolean;
+  activeFilterLabel?: string;
+  onFocusModelFilter?: () => void;
 }
 
 export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
@@ -58,6 +62,9 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
   onSaveStoreWeights,
   currentMachineWeights,
   onSaveStoreMachineWeights,
+  isModelFilterActive,
+  activeFilterLabel,
+  onFocusModelFilter,
 }) => {
   const [topK, setTopK] = useState<number>(3);
   const [minWarmupDays, setMinWarmupDays] = useState<number>(30);
@@ -327,10 +334,58 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
     setTuningProgress(0);
   };
 
+  // Confirm modal state for overwriting full-store weights (Prompt 65 Requirement 3)
+  const [confirmModalState, setConfirmModalState] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirmAction: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirmAction: () => {},
+  });
+
+  const requestSaveWeights = (action: () => void, targetDesc: string) => {
+    if (isModelFilterActive && activeFilterLabel && activeFilterLabel !== '全機種') {
+      setConfirmModalState({
+        isOpen: true,
+        title: '全機種用の重みを上書きします',
+        message: `現在「${activeFilterLabel}」に絞り込んだデータに基づいて最適化・調整された${targetDesc}です。全機種用の重みとして上書き保存しますか？`,
+        onConfirmAction: () => {
+          action();
+          setConfirmModalState((prev) => ({ ...prev, isOpen: false }));
+        },
+      });
+    } else {
+      action();
+    }
+  };
+
   // Apply candidate weights
   const handleApplyTuning = () => {
     if (!tuningResult) return;
-    onSaveStoreWeights(tuningResult.candidateWeights);
+    requestSaveWeights(
+      () => onSaveStoreWeights(tuningResult.candidateWeights),
+      '機種予測の重み'
+    );
+  };
+
+  const handleApplyZeroWeights = () => {
+    if (!suggestedZeroWeights || !onSaveStoreMachineWeights) return;
+    requestSaveWeights(
+      () => onSaveStoreMachineWeights(suggestedZeroWeights.weights),
+      '台番重み（見直し案）'
+    );
+  };
+
+  const handleApplyCohortMode = (mode: 'additive' | 'interaction') => {
+    if (!onSaveStoreMachineWeights) return;
+    requestSaveWeights(
+      () => onSaveStoreMachineWeights({ ...activeMachineWeights, cohortMode: mode }),
+      mode === 'additive' ? 'コホート設定（加法モデル）' : 'コホート設定（個別コホート）'
+    );
   };
 
   // Reset to default weights
@@ -423,10 +478,81 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
     activeMachineWeights.cohortMode,
   ]);
 
+  // Prompt 65 Requirement 2: 評価できる営業日数と台数
+  const evaluatedDaysCount = useMemo(() => {
+    if (summary.totalEvaluatedDays > 0) return summary.totalEvaluatedDays;
+    if (machineBacktestResult?.evaluatedDaysCount && machineBacktestResult.evaluatedDaysCount > 0) {
+      return machineBacktestResult.evaluatedDaysCount;
+    }
+    return dailyRecords.length;
+  }, [summary.totalEvaluatedDays, machineBacktestResult?.evaluatedDaysCount, dailyRecords.length]);
+
+  const machineCount = useMemo(() => {
+    const set = new Set<number>();
+    dailyRecords.forEach((d) => (d.machines || []).forEach((m) => set.add(m.machineNum)));
+    if (set.size > 0) return set.size;
+    let maxModelMachines = 0;
+    dailyRecords.forEach((d) => (d.models || []).forEach((m) => {
+      maxModelMachines = Math.max(maxModelMachines, m.totalMachines || 0);
+    }));
+    return maxModelMachines;
+  }, [dailyRecords]);
+
+  const isLowValidationData = Boolean(
+    isModelFilterActive &&
+    activeFilterLabel &&
+    activeFilterLabel !== '全機種' &&
+    (evaluatedDaysCount < 90 || machineCount < 5)
+  );
+
   const displayedDays = showAllDays ? filteredEvaluations : filteredEvaluations.slice(-15);
 
   return (
     <div className="space-y-6">
+      {/* 対象機種チップ (Prompt 65 Requirement 1: 全機種時は非表示、クリックでヘッダーへ) */}
+      {isModelFilterActive && activeFilterLabel && activeFilterLabel !== '全機種' && (
+        <div className="flex items-center justify-between gap-2" data-testid="validation-model-filter-bar">
+          <button
+            type="button"
+            onClick={
+              onFocusModelFilter ||
+              (() => {
+                const el = document.getElementById('header-model-filter');
+                if (el) {
+                  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  const btn = el.querySelector('button');
+                  if (btn) (btn as HTMLButtonElement).focus();
+                }
+              })
+            }
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 transition-colors cursor-pointer shadow-2xs"
+            data-testid="validation-model-filter-chip"
+            title="クリックでヘッダーの機種選択に移動"
+          >
+            <Cpu className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+            <span>対象機種: {activeFilterLabel}（絞り込み中）</span>
+          </button>
+        </div>
+      )}
+
+      {/* 選択機種のデータ僅少警告 (Prompt 65 Requirement 2: 90日未満または5台未満) */}
+      {isLowValidationData && (
+        <div
+          className="p-3.5 sm:p-4 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 flex items-start gap-2.5 shadow-2xs"
+          data-testid="validation-low-data-warning"
+        >
+          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+          <div className="space-y-0.5 min-w-0">
+            <div className="text-xs sm:text-sm font-bold text-amber-900">
+              選択機種のデータが少なく、検証の信頼性が低いです
+            </div>
+            <p className="text-2xs text-amber-800">
+              評価対象営業日が90日未満（{evaluatedDaysCount}営業日）、または設置台数が5台未満（{machineCount}台）のため、統計的な有意差やバックテストの判定精度が低下している可能性があります。
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* 画面最上部: 検証結論（3行） & 台番未取り込みメッセージ集約 (Prompt 37 Requirement 1 & 3) */}
       <div className="bg-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-2xs border border-slate-800 space-y-3">
         <div className="flex items-center justify-between">
@@ -1757,7 +1883,7 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
                                   <div className="pt-1.5 flex justify-end">
                                     <button
                                       type="button"
-                                      onClick={() => onSaveStoreMachineWeights(suggestedZeroWeights.weights)}
+                                      onClick={handleApplyZeroWeights}
                                       className="text-xs px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer"
                                     >
                                       <Check className="w-3.5 h-3.5" />
@@ -1873,7 +1999,7 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
                           {(additiveResult?.withFilter.avgLift ?? 0) > (interactionResult?.withFilter.avgLift ?? 0) && activeMachineWeights.cohortMode !== 'additive' ? (
                             <button
                               type="button"
-                              onClick={() => onSaveStoreMachineWeights({ ...activeMachineWeights, cohortMode: 'additive' })}
+                              onClick={() => handleApplyCohortMode('additive')}
                               className="text-xs px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-2xs flex items-center gap-1.5 shrink-0 cursor-pointer"
                             >
                               <Check className="w-3.5 h-3.5" />
@@ -1882,7 +2008,7 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
                           ) : activeMachineWeights.cohortMode === 'additive' ? (
                             <button
                               type="button"
-                              onClick={() => onSaveStoreMachineWeights({ ...activeMachineWeights, cohortMode: 'interaction' })}
+                              onClick={() => handleApplyCohortMode('interaction')}
                               className="text-xs px-2.5 py-1 text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg border border-slate-200 cursor-pointer"
                             >
                               既定の個別コホート（interaction）に戻す
@@ -2376,6 +2502,17 @@ export const AccuracyValidation: React.FC<AccuracyValidationProps> = ({
           </div>
         )}
       </details>
+
+      <ConfirmModal
+        isOpen={confirmModalState.isOpen}
+        title={confirmModalState.title}
+        message={confirmModalState.message}
+        confirmText="上書き保存する"
+        cancelText="キャンセル"
+        isDestructive={true}
+        onConfirm={confirmModalState.onConfirmAction}
+        onCancel={() => setConfirmModalState((prev) => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 };

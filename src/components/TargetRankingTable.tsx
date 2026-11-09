@@ -928,6 +928,9 @@ export interface TargetRankingTableProps {
   formatProfitValue?: (coins: number) => string;
   onSelectModel?: (modelName: string) => void;
   selectedModelName?: string | null;
+  isModelFilterActive?: boolean;
+  activeFilterLabel?: string;
+  selectedModelNames?: string[];
 }
 
 export const TargetRankingTable: React.FC<TargetRankingTableProps> = ({
@@ -957,6 +960,9 @@ export const TargetRankingTable: React.FC<TargetRankingTableProps> = ({
   formatProfitValue,
   onSelectModel,
   selectedModelName,
+  isModelFilterActive,
+  activeFilterLabel,
+  selectedModelNames,
 }) => {
   // Display Type state: Table vs Floor Map (Prompt 60 Requirement 1)
   const [internalDisplayType, setInternalDisplayType] = useState<TargetRankingDisplayType>(() => {
@@ -1525,6 +1531,9 @@ export const TargetRankingTable: React.FC<TargetRankingTableProps> = ({
           targetDate={targetDate || toolbar?.exportTargetDate}
           storeId={storeId || toolbar?.exportStoreName}
           storeName={toolbar?.exportStoreName}
+          isModelFilterActive={isModelFilterActive}
+          activeFilterLabel={activeFilterLabel}
+          selectedModelNames={selectedModelNames}
         />
       ) : (
         <>

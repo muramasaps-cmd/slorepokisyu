@@ -113,6 +113,7 @@ export interface ConditionAnalysisProps {
   period?: StoreCommonPeriod | null;
   activeFilterLabel?: string;
   isModelFilterActive?: boolean;
+  onFocusModelFilter?: () => void;
 }
 
 // Custom Chart Tooltip (Prompt 59: defined outside component to prevent remounting)
@@ -302,6 +303,7 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
   period,
   activeFilterLabel,
   isModelFilterActive,
+  onFocusModelFilter,
 }) => {
   // Dimension state
   const [internalDimension, setInternalDimension] = useState<ConditionDimension>(
@@ -788,10 +790,28 @@ export const ConditionAnalysis: React.FC<ConditionAnalysisProps> = ({
                 <h2 className="text-base sm:text-lg font-bold text-slate-900 min-w-0 break-normal">
                   {titleText}
                 </h2>
-                {isModelFilterActive && activeFilterLabel && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-2xs font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                    <span>{`「${activeFilterLabel}」適用中`}</span>
-                  </span>
+                {isModelFilterActive && activeFilterLabel && activeFilterLabel !== '全機種' && (
+                  <button
+                    type="button"
+                    onClick={
+                      onFocusModelFilter ||
+                      (() => {
+                        const el = document.getElementById('header-model-filter');
+                        if (el) {
+                          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                          const btn = el.querySelector('button');
+                          if (btn) (btn as HTMLButtonElement).focus();
+                        }
+                      })
+                    }
+                    className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 transition-colors cursor-pointer shadow-2xs"
+                    data-testid="condition-model-filter-chip"
+                    title="クリックでヘッダーの機種選択に移動"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                    <span>{`対象機種: ${activeFilterLabel}（絞り込み中）`}</span>
+                    <span className="text-[10px] text-amber-800 font-normal">{`「${activeFilterLabel}」適用中`}</span>
+                  </button>
                 )}
               </div>
               {!isMultiStore && (

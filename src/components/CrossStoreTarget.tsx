@@ -401,7 +401,8 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
 
   const handleCopyText = (storeName: string, items: CrossStoreMachineRank[]) => {
     try {
-      const text = generateTargetListCopyText(storeName, targetDate, items);
+      const targetModelLabel = isModelFilterActive ? activeFilterLabel : undefined;
+      const text = generateTargetListCopyText(storeName, targetDate, items, targetModelLabel);
       if (navigator?.clipboard?.writeText) {
         navigator.clipboard.writeText(text);
       } else {
@@ -423,7 +424,8 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
 
   const handleDownloadCsv = (storeName: string, items: CrossStoreMachineRank[]) => {
     try {
-      const csv = generateTargetListCsv(storeName, targetDate, items);
+      const targetModelLabel = isModelFilterActive ? activeFilterLabel : undefined;
+      const csv = generateTargetListCsv(storeName, targetDate, items, targetModelLabel);
       const blob = new Blob([new Uint8Array([0xef, 0xbb, 0xbf]), csv], {
         type: 'text/csv;charset=utf-8;',
       });
@@ -834,6 +836,8 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
         diffMetric,
         baseGames,
         backtestResults: edgeCache,
+        activeFilterLabel,
+        isModelFilterActive,
       },
     };
     workerRef.current.postMessage(req);
@@ -848,6 +852,8 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
     diffMetric,
     baseGames,
     edgeCache,
+    activeFilterLabel,
+    isModelFilterActive,
   ]);
 
   // Synchronous fallback (ONLY evaluated when Worker is unavailable / throws)
@@ -863,6 +869,8 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
       diffMetric,
       baseGames,
       backtestResults: edgeCache,
+      activeFilterLabel,
+      isModelFilterActive,
     });
   }, [
     workerUnavailable,
@@ -875,6 +883,8 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
     diffMetric,
     baseGames,
     edgeCache,
+    activeFilterLabel,
+    isModelFilterActive,
   ]);
 
   const syncScanResult: CandidateDateScanResult | null = useMemo(() => {
@@ -1329,6 +1339,20 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
           </div>
         )}
 
+        {/* All stores lack selected model notice (Prompt 64 Requirement 3) */}
+        {isModelFilterActive &&
+          rankingResult &&
+          ((rankingResult.storeRankings?.length === 0 && rankingResult.machineRankings?.length === 0) ||
+            (stores.length > 0 && rankingResult.excludedStores.length >= stores.length)) && (
+            <div
+              className="p-4 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 text-sm font-bold flex items-center gap-2"
+              data-testid="all-stores-no-model-alert"
+            >
+              <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+              <span>選択した機種の台が、どの店にもありません</span>
+            </div>
+          )}
+
         {/* Excluded Stores Notice (if any) */}
         {rankingResult && rankingResult.excludedStores.length > 0 && (
           <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600 space-y-1">
@@ -1337,11 +1361,14 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
               <span>自動除外された店舗 ({rankingResult.excludedStores.length}店):</span>
             </div>
             <ul className="list-disc list-inside text-[11px] text-slate-500 space-y-0.5 pl-1">
-              {rankingResult.excludedStores.map((ex) => (
-                <li key={ex.storeId}>
-                  <strong className="text-slate-700">{ex.storeName}:</strong> {ex.reason}
-                </li>
-              ))}
+              {rankingResult.excludedStores.map((ex) => {
+                const storeLabel = ex.storeName.endsWith('店') ? ex.storeName : `${ex.storeName}店`;
+                return (
+                  <li key={ex.storeId}>
+                    <strong className="text-slate-700">{storeLabel}:</strong> {ex.reason}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         )}
@@ -1820,6 +1847,11 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                             </span>
                           )}
                         </div>
+                        {isModelFilterActive && st.evaluationDays < 30 && (
+                          <div className="text-[10px] text-amber-700 font-semibold bg-amber-50 px-1 py-0.5 rounded border border-amber-200 flex items-center gap-1 mt-1">
+                            <span>⚠ 選択機種のデータが少ないため、参考値です</span>
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -1964,7 +1996,12 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                             </td>
 
                             <td className="px-3 py-3 text-center font-mono text-slate-700 font-medium">
-                              {st.evaluationDays}日分
+                              <div>{st.evaluationDays}日分</div>
+                              {isModelFilterActive && st.evaluationDays < 30 && (
+                                <div className="text-[9px] font-sans font-semibold text-amber-700 bg-amber-50 px-1 py-0.5 rounded border border-amber-200 mt-0.5">
+                                  選択機種のデータが少ないため、参考値です
+                                </div>
+                              )}
                             </td>
 
                             <td className="px-4 py-3 text-center">
@@ -2091,7 +2128,35 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
       {/* 3. Step ③: どの機種を狙うか (Prompt 47) */}
       <div id="target-step-3" className="space-y-3 scroll-mt-28">
         <div id="target-model-ranking" className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+          {isSingleModelSelected ? (
+            <div className="p-4 bg-indigo-50/70 rounded-xl border border-indigo-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="w-7 h-7 rounded-lg bg-indigo-600 text-white font-black text-sm flex items-center justify-center shrink-0">
+                  ③
+                </span>
+                <div>
+                  <h3 className="text-base sm:text-lg font-black text-slate-900">
+                    機種は「{singleSelectedModelName || '選択機種'}」に絞られています
+                  </h3>
+                  <p className="text-2xs text-indigo-700">
+                    ヘッダーで機種が1つだけ選択されているため、機種ランキングを省略して台番ランキングを表示します。
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const el = document.getElementById('target-step-4');
+                  if (el) el.scrollIntoView({ behavior: 'smooth' });
+                }}
+                className="px-3.5 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs cursor-pointer self-start sm:self-auto"
+              >
+                台番ランキングに進む ↓
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
             <div className="flex items-center gap-2.5">
               <span className="w-7 h-7 rounded-lg bg-indigo-600 text-white font-black text-sm flex items-center justify-center shrink-0">
                 ③
@@ -2328,6 +2393,8 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
               />
             </div>
           )}
+            </>
+          )}
         </div>
       </div>
 
@@ -2466,6 +2533,9 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                 showStoreColumn={true}
                 stores={stores.map((s) => ({ id: s.id, name: s.name, islandConfig: s.islandConfig }))}
                 targetDate={targetDate}
+                isModelFilterActive={isModelFilterActive}
+                activeFilterLabel={activeFilterLabel}
+                selectedModelNames={selectedModelNames}
                 rows={step4Machines.map((mach) => {
                   const edge = edgeCache[mach.storeId];
                   const isTesting = testingStoreId === mach.storeId;

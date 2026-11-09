@@ -343,6 +343,7 @@ export const TargetFloorMap: React.FC<TargetFloorMapProps> = ({
 
   // Helper to render individual machine block
   const renderMachineCell = (mach: TargetRankingRow) => {
+    const isUnavailable = mach.machineNum !== undefined && currentCheckedMap[mach.machineNum] === 'unavailable';
     const isEvaluated = mach.expectedDiff !== undefined && !isNaN(mach.expectedDiff);
     const color = getMachineColor(mach);
     const lift = isEvaluated ? computeLift(mach.expectedDiff, dayMean) : 0;

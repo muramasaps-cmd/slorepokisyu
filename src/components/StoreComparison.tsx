@@ -39,6 +39,7 @@ interface StoreComparisonProps {
   onNavigateToConditions?: () => void;
   activeFilterLabel?: string;
   isModelFilterActive?: boolean;
+  onFocusModelFilter?: () => void;
 }
 
 import { STORE_COLORS, getStoreColor } from '../utils/storeColors';
@@ -62,6 +63,7 @@ export const StoreComparison: React.FC<StoreComparisonProps> = ({
   onNavigateToConditions,
   activeFilterLabel,
   isModelFilterActive,
+  onFocusModelFilter,
 }) => {
   // Store selection state (2 to 6 stores, default first min(6, stores.length) stores)
   const [selectedStoreIds, setSelectedStoreIds] = useState<string[]>(() => {
@@ -136,6 +138,28 @@ export const StoreComparison: React.FC<StoreComparisonProps> = ({
               <h2 className="text-base sm:text-lg font-black text-slate-900 tracking-tight">
                 店舗間 総合比較（台あたり指標）
               </h2>
+              {isModelFilterActive && activeFilterLabel && activeFilterLabel !== '全機種' && (
+                <button
+                  type="button"
+                  onClick={
+                    onFocusModelFilter ||
+                    (() => {
+                      const el = document.getElementById('header-model-filter');
+                      if (el) {
+                        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        const btn = el.querySelector('button');
+                        if (btn) (btn as HTMLButtonElement).focus();
+                      }
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 transition-colors cursor-pointer shadow-2xs"
+                  data-testid="compare-model-filter-chip"
+                  title="クリックでヘッダーの機種選択に移動"
+                >
+                  <Cpu className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                  <span>対象機種: {activeFilterLabel}（絞り込み中）</span>
+                </button>
+              )}
             </div>
             <p className="text-xs text-slate-500">
               各店の設置台数差を標準化し、1台あたりの平均差枚・機械割・勝率・特日リフトを直接比較

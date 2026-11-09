@@ -170,6 +170,8 @@ export interface DailyModelRecord {
   winRate: number | null;
   winMachines: number;
   totalMachines: number;
+  machineCount?: number;
+  payoutRate?: number;
   isSmallCount?: boolean;
 }
 

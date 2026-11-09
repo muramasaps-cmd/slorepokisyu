@@ -37,6 +37,7 @@ import {
 } from '../utils/machineBacktestCache';
 import type { CrossRankingWorkerRequest, CrossRankingWorkerResponse } from '../workers/crossRankingWorker';
 import { computeStoresSignature } from '../workers/crossRankingController';
+import { ensureModelRows } from '../utils/modelRowsFromMachines';
 import { TargetRankingTable } from './TargetRankingTable';
 import {
   Building2,
@@ -762,10 +763,14 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
       selectedModelNames,
     });
     if (lastSentSignatureRef.current !== currentSig) {
+      const storesWithModels = stores.map((s) => ({
+        ...s,
+        dailyRecords: s.dailyRecords ? ensureModelRows(s.dailyRecords) : [],
+      }));
       workerRef.current.postMessage({
         type: 'SET_STORES',
         signature: currentSig,
-        stores,
+        stores: storesWithModels,
       } satisfies CrossRankingWorkerRequest);
       lastSentSignatureRef.current = currentSig;
     }
@@ -1012,6 +1017,17 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
     if (!funnelStoreId) return filteredModelRankings;
     return filteredModelRankings.filter((m) => m.storeId === funnelStoreId);
   }, [filteredModelRankings, funnelStoreId]);
+
+  // Prompt 67: 「計算できない」と「有利な機種がない」の区別
+  const isNoFavorableModel = useMemo(() => {
+    if (step3Models.length === 0) return false;
+    const topModel = step3Models[0];
+    return (
+      topModel.expectedDiffCoins <= 0 ||
+      topModel.sampleDays < 3 ||
+      topModel.tacticalReason?.includes('参考表示')
+    );
+  }, [step3Models]);
 
   // Step ④ machines filtered by funnelStoreId and funnelModelName (Prompt 47)
   const step4Machines = useMemo(() => {
@@ -1792,10 +1808,36 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3" data-testid="step2-top3-cards">
-              {(rankingResult.storeRankings || []).slice(0, 3).map((st, idx) => {
-                const isSelected = funnelStoreId === st.storeId;
-                const edgeInfo = edgeCache[st.storeId];
-                return (
+              {(!rankingResult.storeRankings || rankingResult.storeRankings.length === 0) ? (
+                <div
+                  className="col-span-full p-5 rounded-xl bg-slate-50 border border-slate-200 text-center space-y-2"
+                  data-testid="step2-empty-notice"
+                >
+                  <div className="text-xs font-bold text-slate-600 flex items-center justify-center gap-1.5">
+                    <AlertTriangle className="w-4 h-4 text-amber-500" />
+                    <span>評価可能な店舗データがありません</span>
+                  </div>
+                  {rankingResult.excludedStores.length > 0 && (
+                    <div className="text-left max-w-lg mx-auto bg-white p-3 rounded-lg border border-slate-200 text-2xs space-y-1 shadow-2xs">
+                      <span className="font-bold text-slate-700 block">店舗ごとの理由:</span>
+                      <ul className="list-disc list-inside space-y-0.5 text-slate-600">
+                        {rankingResult.excludedStores.map((ex) => {
+                          const storeLabel = ex.storeName.endsWith('店') ? ex.storeName : `${ex.storeName}店`;
+                          return (
+                            <li key={ex.storeId}>
+                              <strong className="text-slate-800">{storeLabel}:</strong> {ex.reason}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                rankingResult.storeRankings.slice(0, 3).map((st, idx) => {
+                  const isSelected = funnelStoreId === st.storeId;
+                  const edgeInfo = edgeCache[st.storeId];
+                  return (
                   <div
                     key={`top-store-${st.storeId}`}
                     className={`p-3.5 rounded-xl border transition-all flex flex-col justify-between ${
@@ -1920,8 +1962,23 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
                   <tbody className="divide-y divide-slate-100">
                     {(!rankingResult.storeRankings || rankingResult.storeRankings.length === 0) ? (
                       <tr>
-                        <td colSpan={8} className="p-6 text-center text-slate-400">
-                          評価可能な店舗データがありません。
+                        <td colSpan={8} className="p-6 text-center text-slate-500">
+                          <div className="font-bold mb-2">評価可能な店舗データがありません。</div>
+                          {rankingResult.excludedStores.length > 0 && (
+                            <div className="text-left max-w-lg mx-auto bg-slate-50 p-3 rounded-lg border border-slate-200 text-2xs space-y-1">
+                              <span className="font-bold text-slate-700 block">店舗ごとの理由:</span>
+                              <ul className="list-disc list-inside space-y-0.5 text-slate-600">
+                                {rankingResult.excludedStores.map((ex) => {
+                                  const storeLabel = ex.storeName.endsWith('店') ? ex.storeName : `${ex.storeName}店`;
+                                  return (
+                                    <li key={ex.storeId}>
+                                      <strong className="text-slate-800">{storeLabel}:</strong> {ex.reason}
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     ) : (
@@ -2189,6 +2246,17 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
             </button>
           </div>
 
+          {/* Prompt 67: 有利な機種がない場合の参考表示通知 */}
+          {isNoFavorableModel && (
+            <div
+              className="p-3 bg-amber-50 rounded-xl border border-amber-300 text-amber-900 text-xs font-bold flex items-center gap-2"
+              data-testid="no-favorable-model-notice"
+            >
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>有利な機種は見当たりません（参考順位を表示します）</span>
+            </div>
+          )}
+
           {/* Top 3 Summary Cards */}
           <div className="space-y-1.5">
             <div className="text-[11px] font-bold text-slate-500 flex items-center gap-1">
@@ -2196,8 +2264,29 @@ export const CrossStoreTarget: React.FC<CrossStoreTargetProps> = ({
               <span>上位3機種の要約</span>
             </div>
             {step3Models.length === 0 ? (
-              <div className="p-4 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                対象となる機種データがありません。
+              <div
+                className="p-6 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-center space-y-2"
+                data-testid="step3-empty-notice"
+              >
+                <div className="text-xs font-bold text-slate-600 flex items-center justify-center gap-1.5">
+                  <AlertTriangle className="w-4 h-4 text-amber-500" />
+                  <span>評価可能な機種データがありません</span>
+                </div>
+                {rankingResult.excludedStores.length > 0 && (
+                  <div className="text-left max-w-lg mx-auto bg-white p-3 rounded-lg border border-slate-200 text-2xs space-y-1 shadow-2xs">
+                    <span className="font-bold text-slate-700 block">店舗ごとの理由:</span>
+                    <ul className="list-disc list-inside space-y-0.5 text-slate-600">
+                      {rankingResult.excludedStores.map((ex) => {
+                        const storeLabel = ex.storeName.endsWith('店') ? ex.storeName : `${ex.storeName}店`;
+                        return (
+                          <li key={ex.storeId}>
+                            <strong className="text-slate-800">{storeLabel}:</strong> {ex.reason}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">

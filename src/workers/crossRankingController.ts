@@ -7,6 +7,7 @@ import {
   CandidateDateScanResult,
   scanCandidateDates,
 } from '../utils/crossStoreRanking';
+import { ensureModelRows } from '../utils/modelRowsFromMachines';
 
 export interface ModelFilterSignatureParams {
   preset?: string;
@@ -127,7 +128,10 @@ export class CrossRankingController {
   }
 
   public setStores(stores: StoreProfile[], signature?: string): void {
-    this.stores = stores;
+    this.stores = stores.map((s) => ({
+      ...s,
+      dailyRecords: s.dailyRecords ? ensureModelRows(s.dailyRecords) : [],
+    }));
     this.storesSignature = signature || computeStoresSignature(stores);
   }
 

@@ -1,4 +1,5 @@
 import { DailyRecord, DailyTailRecord, DailyMachineRecord } from '../data/types';
+import { ensureModelRows } from './modelRowsFromMachines';
 
 /**
  * Machine model classification & filtering utilities.
@@ -242,13 +243,15 @@ export function filterDailyRecordsByModels(
   preset: ModelPresetMode,
   selectedModelNames: string[]
 ): DailyRecord[] {
+  const safeRecords = ensureModelRows(records);
+
   if (preset === 'all' && selectedModelNames.length === 0) {
-    return records;
+    return safeRecords;
   }
 
   const result: DailyRecord[] = [];
 
-  for (const r of records) {
+  for (const r of safeRecords) {
     if (!r.models || r.models.length === 0) {
       if (r.machines && r.machines.length > 0) {
         const matchedMachines = r.machines.filter((m) =>

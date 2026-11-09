@@ -4,6 +4,7 @@ import { calculateDayOfWeek, isDateSpecialDay } from './dataEngine';
 import { isJapaneseHoliday } from './holidayUtils';
 import { isSmartSlot, isAType, isJuggler } from './modelFilterUtils';
 import { normalizeModelName } from './modelName';
+import { ensureModelRows } from './modelRowsFromMachines';
 
 export const ALL_HIGH_DIFF_THRESHOLD = 800;
 
@@ -178,11 +179,13 @@ export function buildFeatureIndex(
     return { records: [], specialDayRules, oldEventDays };
   }
 
+  const safeRecords = ensureModelRows(dailyRecords);
+
   // By default, only use days with model-level data and exclude machine-imputed days (isReusedMachines)
   const eligibleRecords = options?.includeReusedMachines
-    ? dailyRecords
-    : dailyRecords.filter((r) => !r.isReusedMachines && r.models && r.models.length > 0);
-  const sourceRecords = eligibleRecords.length > 0 ? eligibleRecords : dailyRecords;
+    ? safeRecords
+    : safeRecords.filter((r) => !r.isReusedMachines && r.models && r.models.length > 0);
+  const sourceRecords = eligibleRecords.length > 0 ? eligibleRecords : safeRecords;
 
   const records: IndexedDailyRecord[] = sourceRecords.map((r) => {
     const isSpecial = specialDayRules

@@ -3,6 +3,7 @@ import {
   calculateTargetDateRanking,
   ModelTargetScore,
 } from './targetRankingEngine';
+import { ensureModelRows } from './modelRowsFromMachines';
 import {
   calculateTargetMachineRanking,
   buildMachineFeatureIndex,
@@ -362,7 +363,7 @@ export function calculateStoreTargetMetrics(
 ): StoreDateScanCell {
   const baseGames = options?.baseGames ?? 5000;
 
-  const records = store.dailyRecords || [];
+  const records = store.dailyRecords ? ensureModelRows(store.dailyRecords) : [];
   // Strictly filter out any records on or after targetDate to prevent future leakage
   const priorRecords = records.filter((r) => r.date < targetDate);
   const storeEvalDays = priorRecords.length;
@@ -416,7 +417,7 @@ export function calculateStoreTargetMetricsForDates(
   if (!dates || dates.length === 0) return [];
 
   const baseGames = options?.baseGames ?? 5000;
-  const rawRecords = store.dailyRecords || [];
+  const rawRecords = store.dailyRecords ? ensureModelRows(store.dailyRecords) : [];
   const sortedRecords = [...rawRecords].sort((a, b) => a.date.localeCompare(b.date));
 
   // Sort dates ascending while remembering original indices
@@ -563,11 +564,16 @@ export function scanCandidateDates(
     grid[s.id] = {};
   });
 
-  const totalSteps = Math.max(1, dates.length * stores.length);
+  const safeStores = stores.map((s) => ({
+    ...s,
+    dailyRecords: s.dailyRecords ? ensureModelRows(s.dailyRecords) : [],
+  }));
+
+  const totalSteps = Math.max(1, dates.length * safeStores.length);
   let currentStep = 0;
 
-  for (let sIdx = 0; sIdx < stores.length; sIdx++) {
-    const store = stores[sIdx];
+  for (let sIdx = 0; sIdx < safeStores.length; sIdx++) {
+    const store = safeStores[sIdx];
     const prefixData = buildStoreScanPrefixData(
       store.id,
       store.dailyRecords,
@@ -648,9 +654,14 @@ export function calculateCrossStoreRanking(
   const diffMetric = options?.diffMetric || 'actual';
   const baseGames = options?.baseGames ?? 5000;
 
-  const targetStores = filterStoreIds && filterStoreIds.length > 0
+  const rawTargetStores = filterStoreIds && filterStoreIds.length > 0
     ? stores.filter((s) => filterStoreIds.includes(s.id))
     : stores;
+
+  const targetStores = rawTargetStores.map((s) => ({
+    ...s,
+    dailyRecords: s.dailyRecords ? ensureModelRows(s.dailyRecords) : [],
+  }));
 
   const excludedStores: ExcludedStoreInfo[] = [];
   const eligibleModels: CrossStoreModelRank[] = [];
@@ -673,7 +684,7 @@ export function calculateCrossStoreRanking(
       excludedStores.push({
         storeId: store.id,
         storeName: store.name,
-        reason: '出玉データが登録されていません',
+        reason: '出玉データが登録されていません（データ日数が不足しています）',
       });
       continue;
     }
@@ -682,7 +693,7 @@ export function calculateCrossStoreRanking(
       excludedStores.push({
         storeId: store.id,
         storeName: store.name,
-        reason: `対象日(${targetDate})以前の過去データが存在しません`,
+        reason: `データ日数が不足しています（対象日(${targetDate})以前の過去データが存在しません）`,
       });
       continue;
     }
@@ -693,7 +704,7 @@ export function calculateCrossStoreRanking(
     if (!hasModelData && !hasMachineData) {
       const reason = (options?.isModelFilterActive || options?.activeFilterLabel)
         ? `選択した機種（${options?.activeFilterLabel || '指定機種'}）の台がありません`
-        : '機種別・台番別の明細データがありません（日別サマリーのみ）';
+        : '機種別のデータがありません（日別サマリーのみ）';
       excludedStores.push({
         storeId: store.id,
         storeName: store.name,
@@ -724,7 +735,7 @@ export function calculateCrossStoreRanking(
         excludedStores.push({
           storeId: store.id,
           storeName: store.name,
-          reason: `機種予測の有効なデータを算出できませんでした (対象日: ${targetDate})`,
+          reason: `機種別のデータがありません（機種予測の有効なデータを算出できませんでした）`,
         });
       } else {
         for (const m of modelForecast.modelRankings) {
